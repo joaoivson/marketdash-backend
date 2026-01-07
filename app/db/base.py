@@ -27,11 +27,16 @@ def init_db():
     for attempt in range(max_retries):
         try:
             # Test connection
-            with engine.connect() as conn:
+            with engine.begin() as conn:
                 conn.execute(text("SELECT 1"))
-            # If connection successful, create tables
+                # Ensure optional new columns exist (backward compatible)
+                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS name VARCHAR(255)"))
+                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS cpf_cnpj VARCHAR(32)"))
+                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS users_cpf_cnpj_key ON users (cpf_cnpj) WHERE cpf_cnpj IS NOT NULL"))
+            # If connection successful, create tables (no-op for existing)
             Base.metadata.create_all(bind=engine)
-            logger.info("Database tables created successfully")
+            logger.info("Database tables created/updated successfully")
             return
         except Exception as e:
             if attempt < max_retries - 1:

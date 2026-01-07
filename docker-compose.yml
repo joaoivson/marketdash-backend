@@ -25,8 +25,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://dashads_user:dashads_password@db:5432/dashads_db
-      JWT_SECRET: your-secret-key-change-in-production-min-32-chars
+      # Senha contém '@', por isso está URL-encodada (%40). Ajustado para usar o Session Pooler (porta 6543).
+      DATABASE_URL: postgresql://postgres:K%40pilc%402804%40@db.rsejwvxealraianensoz.supabase.co:6543/postgres?sslmode=require
+      JWT_SECRET: marketdash-secret-dev-32chars
     depends_on:
       db:
         condition: service_healthy
