@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.routes import auth, datasets, dashboard
+from app.api.routes import auth, datasets, dashboard, ad_spends
 from app.db.base import init_db
 import logging
 
@@ -43,6 +43,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(datasets.router, prefix=settings.API_V1_STR)
 app.include_router(dashboard.router, prefix=settings.API_V1_STR)
+app.include_router(ad_spends.router, prefix=settings.API_V1_STR)
 
 
 @app.get("/")

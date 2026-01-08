@@ -16,7 +16,7 @@ def init_db():
     
     # Import all models to register them with Base.metadata
     # This must happen before create_all()
-    from app.models import User, Dataset, DatasetRow, Subscription  # noqa: F401
+    from app.models import User, Dataset, DatasetRow, Subscription, AdSpend  # noqa: F401
     
     logger = logging.getLogger(__name__)
     

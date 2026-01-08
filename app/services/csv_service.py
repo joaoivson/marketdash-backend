@@ -19,12 +19,18 @@ ALIASES = {
     "revenue": {
         "revenue", "receita", "valor", "valorvenda", "valor_receita", "valor_venda", "gross_value", "total",
         "valor_de_c", "valor_de_compra", "valor_de_compra_r", "valor_de_compra_rs", "valor_compra", "faturamento",
-        "preco_r", "preco_rs", "preco"
+        "preco_r", "preco_rs", "preco", "preco_r$", "preco_rs$", "preco$"
     },
     "cost": {"cost", "custo", "valorcusto", "custo_total", "valor_do_r", "valor_gasto", "valor_gasto_anuncios", "gasto_anuncios"},
     "commission": {
         "commission", "comissao", "comissão", "taxa", "fee", "commission_value", "taxa_de_cc", "taxa_de_cartao",
-        "comissao_liquido", "comissao_liquido_do_afiliado_rs", "comissao_liquido_do_afiliado_r"
+        "comissao_liquido", "comissao_liquido_do_afiliado_rs", "comissao_liquido_do_afiliado_r",
+        # Shopee / afiliados variações
+        "comissao_shopee_r", "comissao_shopee_rs", "comissao_shopee_r$", "comissao_shopee_rs$",
+        "comissao_total_do_item_r", "comissao_total_do_item_rs", "comissao_total_do_item_r$",
+        "comissao_total_do_pedido_r", "comissao_total_do_pedido_rs", "comissao_total_do_pedido_r$",
+        "taxa_de_comissao_shopee_do_item", "taxa_de_comissao_do_vendedor_do_item",
+        "comissao_do_item_da_shopee_r", "comissao_do_item_da_marca_r", "comissao_do_vendedor_r"
     },
     "status": {"status", "status_do_pedido", "status_pedido"},
     "category": {"categoria", "categoria_global", "categoria_global_l1"},
@@ -55,6 +61,19 @@ class CSVValidationError(Exception):
 
 class CSVService:
     """Service for processing and validating CSV files."""
+
+    @staticmethod
+    def _clean_numeric_series(series: pd.Series) -> pd.Series:
+        """
+        Limpa strings com R$, espaços, separadores de milhar e converte vírgula decimal para ponto.
+        """
+        cleaned = (
+            series.astype(str)
+            .str.replace(r"[R$\s]", "", regex=True)
+            .str.replace(".", "", regex=False)  # remove separador de milhar
+            .str.replace(",", ".", regex=False)  # vírgula -> ponto
+        )
+        return pd.to_numeric(cleaned, errors="coerce")
 
     @staticmethod
     def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
@@ -97,11 +116,11 @@ class CSVService:
 
             # Date e time
             if "date" in col_map:
-                parsed_date = pd.to_datetime(df[col_map["date"]], errors="coerce")
+                parsed_date = pd.to_datetime(df[col_map["date"]], errors="coerce", dayfirst=True)
             else:
                 parsed_date = None
                 for col in original_cols:
-                    candidate = pd.to_datetime(df[col], errors="coerce")
+                    candidate = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
                     if candidate.notna().any():
                         parsed_date = candidate
                         break
@@ -127,7 +146,8 @@ class CSVService:
             # Numéricas
             for target in ["revenue", "cost", "commission"]:
                 if target in col_map:
-                    out[target] = pd.to_numeric(df[col_map[target]], errors="coerce").fillna(0)
+                    numeric_series = CSVService._clean_numeric_series(df[col_map[target]])
+                    out[target] = numeric_series.fillna(0)
                 else:
                     out[target] = 0
                     errors.append(f"Coluna '{target}' ausente; preenchendo com 0.")

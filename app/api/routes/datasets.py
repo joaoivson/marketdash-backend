@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import date
+from datetime import date, timedelta
 
 from app.db.session import get_db
 from app.models.user import User
@@ -14,6 +14,8 @@ import datetime
 import math
 from decimal import Decimal
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.orm.attributes import flag_modified
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -46,6 +48,68 @@ def serialize_value(value):
     if isinstance(value, Decimal):
         return float(value)
     return value
+
+
+def _clean_number(value):
+    """
+    Converte strings monetárias/numéricas com vírgula/ponto/R$/% para float.
+    Respeita ponto como separador decimal quando não há vírgula (não zera decimais).
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float, Decimal)) and not (isinstance(value, float) and math.isnan(value)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = (
+            value.replace("R$", "")
+            .replace("%", "")
+            .replace(" ", "")
+            .replace("\u00a0", "")  # nbsp
+        )
+        has_comma = "," in cleaned
+        has_dot = "." in cleaned
+
+        if has_comma and has_dot:
+            # assume dot = thousand, comma = decimal
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        elif has_comma:
+            # assume comma decimal, strip thousand dots if any
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            # only dot or digits -> keep dot as decimal
+            cleaned = cleaned
+
+        try:
+            num = float(cleaned)
+            if math.isnan(num):
+                return None
+            return num
+        except Exception:
+            return None
+    try:
+        num = float(value)
+        if math.isnan(num):
+            return None
+        return num
+    except Exception:
+        return None
+
+
+def normalize_raw_data(raw: dict) -> dict:
+    """
+    Garante que campos que começam com 'valor' ou 'comiss' sejam numéricos.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    normalized = {}
+    for k, v in raw.items():
+        key_lower = k.lower()
+        if key_lower.startswith("valor") or key_lower.startswith("comiss"):
+            parsed = _clean_number(v)
+            normalized[k] = parsed if parsed is not None else serialize_value(v)
+        else:
+            normalized[k] = serialize_value(v)
+    return normalized
 
 
 def serialize_row(row: DatasetRow) -> dict:
@@ -142,7 +206,8 @@ async def upload_csv(
     # Create dataset rows
     dataset_rows = []
     for row_data in rows_data:
-        raw_data_json = {k: _sanitize(v) for k, v in row_data.items()} if isinstance(row_data, dict) else row_data
+        raw_data = row_data.get("raw_data") if isinstance(row_data, dict) else None
+        raw_data_json = normalize_raw_data(raw_data) if raw_data is not None else raw_data
         dataset_row = DatasetRow(
             dataset_id=dataset.id,
             user_id=user.id,
@@ -173,16 +238,119 @@ async def upload_csv(
     return dataset
 
 
+class AdSpendPayload(BaseModel):
+    amount: float = Field(..., gt=0, description="Valor investido em anúncios")
+    sub_id1: str | None = Field(None, description="Sub_id1 opcional para associar o gasto")
+
+
+@router.post("/latest/ad_spend")
+def set_ad_spend(
+    payload: AdSpendPayload,
+    user_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Define/atualiza a coluna de valor gasto em anúncios no dataset mais recente.
+    Se sub_id1 for informado, aplica somente às linhas com esse sub_id1; caso contrário, aplica a todas.
+    """
+    query = db.query(Dataset)
+    if user_id is not None:
+        query = query.filter(Dataset.user_id == user_id)
+    latest = query.order_by(Dataset.uploaded_at.desc()).first()
+    if not latest:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nenhum dataset encontrado para o usuário",
+        )
+
+    rows_query = db.query(DatasetRow).filter(DatasetRow.dataset_id == latest.id)
+    if payload.sub_id1:
+        rows_query = rows_query.filter(DatasetRow.sub_id1 == payload.sub_id1)
+
+    # Ordenar por ID para paginação consistente
+    rows_query = rows_query.order_by(DatasetRow.id)
+    
+    total_rows = rows_query.count()
+    if total_rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nenhuma linha encontrada para aplicar o valor de anúncio",
+        )
+
+    # Lógica de Rateio: Divide o valor total pelo número de linhas afetadas
+    amount_per_row = payload.amount / total_rows
+
+    # Processar em lotes para evitar timeout/memory overflow
+    BATCH_SIZE = 1000  # Aumentei o batch pois bulk_update é mais eficiente
+    processed = 0
+    updated = 0
+
+    while processed < total_rows:
+        batch = rows_query.limit(BATCH_SIZE).offset(processed).all()
+        if not batch:
+            break
+            
+        mappings = []
+        for row in batch:
+            raw = dict(row.raw_data) if row.raw_data else {}
+            raw["Valor gasto anuncios"] = amount_per_row
+            mappings.append({"id": row.id, "raw_data": raw})
+            updated += 1
+        
+        # bulk_update_mappings é muito mais rápido que iterar e salvar individualmente
+        db.bulk_update_mappings(DatasetRow, mappings)
+        db.commit() # Salva o lote atual
+        
+        processed += len(batch)
+
+    return {
+        "updated": updated,
+        "dataset_id": latest.id,
+        "sub_id1": payload.sub_id1,
+        "amount": payload.amount,
+    }
+
+
 @router.get("/latest/rows", response_model=List[DatasetRowResponse])
-def list_latest_rows(user_id: int | None = Query(None), db: Session = Depends(get_db)):
-    """Listar linhas do dataset mais recente do usuário (ou primeiro usuário)."""
+def list_latest_rows(
+    user_id: int | None = Query(None),
+    start_date: date = Query(..., description="Data inicial (obrigatória)"),
+    end_date: date = Query(..., description="Data final (obrigatória)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Listar linhas do dataset mais recente do usuário (ou primeiro usuário).
+    Intervalo máximo permitido: 90 dias.
+    """
     query = db.query(Dataset)
     if user_id is not None:
         query = query.filter(Dataset.user_id == user_id)
     latest = query.order_by(Dataset.uploaded_at.desc()).first()
     if not latest:
         return []
-    rows = db.query(DatasetRow).filter(DatasetRow.dataset_id == latest.id).order_by(DatasetRow.date.desc()).all()
+    resolved_end = end_date
+    resolved_start = start_date
+
+    if resolved_start > resolved_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Data inicial não pode ser maior que a data final.",
+        )
+
+    if (resolved_end - resolved_start).days > 90:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O intervalo máximo permitido é de 90 dias.",
+        )
+
+    rows = (
+        db.query(DatasetRow)
+        .filter(DatasetRow.dataset_id == latest.id)
+        .filter(DatasetRow.date >= resolved_start)
+        .filter(DatasetRow.date <= resolved_end)
+        .order_by(DatasetRow.date.desc())
+        .all()
+    )
     return JSONResponse(content=[serialize_row(r) for r in rows])
 
 
@@ -201,9 +369,43 @@ def list_datasets(
 
 
 @router.get("/{dataset_id}/rows", response_model=List[DatasetRowResponse])
-def list_dataset_rows(dataset_id: int, db: Session = Depends(get_db)):
-    """Listar linhas de um dataset específico."""
-    rows = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id).order_by(DatasetRow.date.desc()).all()
+def list_dataset_rows(
+    dataset_id: int,
+    start_date: date = Query(..., description="Data inicial (obrigatória)"),
+    end_date: date = Query(..., description="Data final (obrigatória)"),
+    db: Session = Depends(get_db),
+):
+    """Listar linhas de um dataset específico (período obrigatório, máx 90 dias)."""
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset não encontrado"
+        )
+
+    resolved_end = end_date
+    resolved_start = start_date
+
+    if resolved_start > resolved_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Data inicial não pode ser maior que a data final.",
+        )
+
+    if (resolved_end - resolved_start).days > 90:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O intervalo máximo permitido é de 90 dias.",
+        )
+
+    rows = (
+        db.query(DatasetRow)
+        .filter(DatasetRow.dataset_id == dataset_id)
+        .filter(DatasetRow.date >= resolved_start)
+        .filter(DatasetRow.date <= resolved_end)
+        .order_by(DatasetRow.date.desc())
+        .all()
+    )
     return JSONResponse(content=[serialize_row(r) for r in rows])
 
 
