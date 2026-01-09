@@ -16,6 +16,11 @@ class AdSpendCreate(BaseModel):
     amount: float = Field(..., gt=0)
     sub_id: Optional[str] = None
 
+class AdSpendUpdate(BaseModel):
+    date: Optional[date] = None
+    amount: Optional[float] = Field(None, gt=0)
+    sub_id: Optional[str] = None
+
 class AdSpendResponse(BaseModel):
     id: int
     date: date
@@ -80,3 +85,45 @@ def list_ad_spends(
     )
     
     return query.all()
+
+
+@router.patch("/{ad_spend_id}", response_model=AdSpendResponse)
+def update_ad_spend(
+    ad_spend_id: int,
+    payload: AdSpendUpdate,
+    user_id: int | None = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Atualiza um gasto de anúncio do usuário."""
+    user = get_user(db, user_id)
+    ad_spend = db.query(AdSpend).filter(AdSpend.id == ad_spend_id, AdSpend.user_id == user.id).first()
+    if not ad_spend:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado")
+
+    if payload.date is not None:
+        ad_spend.date = payload.date
+    if payload.amount is not None:
+        ad_spend.amount = payload.amount
+    if payload.sub_id is not None:
+        ad_spend.sub_id = None if payload.sub_id in ["", "__all__"] else payload.sub_id
+
+    db.commit()
+    db.refresh(ad_spend)
+    return ad_spend
+
+
+@router.delete("/{ad_spend_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_ad_spend(
+    ad_spend_id: int,
+    user_id: int | None = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Remove um gasto de anúncio do usuário."""
+    user = get_user(db, user_id)
+    ad_spend = db.query(AdSpend).filter(AdSpend.id == ad_spend_id, AdSpend.user_id == user.id).first()
+    if not ad_spend:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado")
+
+    db.delete(ad_spend)
+    db.commit()
+    return {"detail": "Deleted"}

@@ -354,6 +354,61 @@ def list_latest_rows(
     return JSONResponse(content=[serialize_row(r) for r in rows])
 
 
+@router.get("/all/rows", response_model=List[DatasetRowResponse])
+def list_all_rows(
+    user_id: int | None = Query(None),
+    start_date: date = Query(..., description="Data inicial (obrigatória)"),
+    end_date: date = Query(..., description="Data final (obrigatória)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Lista linhas de todos os datasets do usuário (ou primeiro usuário), dentro do intervalo informado.
+    Mantém a regra de intervalo máximo de 90 dias.
+    """
+    dataset_query = db.query(Dataset)
+    if user_id is not None:
+        dataset_query = dataset_query.filter(Dataset.user_id == user_id)
+    dataset_sample = dataset_query.first()
+    if not dataset_sample:
+        return []
+    resolved_user_id = user_id if user_id is not None else dataset_sample.user_id
+
+    resolved_end = end_date
+    resolved_start = start_date
+
+    if resolved_start > resolved_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Data inicial não pode ser maior que a data final.",
+        )
+
+    if (resolved_end - resolved_start).days > 90:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O intervalo máximo permitido é de 90 dias.",
+        )
+
+    rows = (
+        db.query(DatasetRow)
+        .join(Dataset, DatasetRow.dataset_id == Dataset.id)
+        .filter(Dataset.user_id == resolved_user_id)
+        .filter(DatasetRow.date >= resolved_start)
+        .filter(DatasetRow.date <= resolved_end)
+        .order_by(DatasetRow.date.desc())
+        .all()
+    )
+    # Se nada for encontrado no range solicitado, retorna todas as linhas do usuário
+    if not rows:
+        rows = (
+            db.query(DatasetRow)
+            .join(Dataset, DatasetRow.dataset_id == Dataset.id)
+            .filter(Dataset.user_id == resolved_user_id)
+            .order_by(DatasetRow.date.desc())
+            .all()
+        )
+    return JSONResponse(content=[serialize_row(r) for r in rows])
+
+
 @router.get("", response_model=List[DatasetResponse])
 def list_datasets(
     user_id: int | None = Query(None),
