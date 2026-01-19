@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -13,3 +13,9 @@ class AdSpend(Base):
 
     # Relationships
     user = relationship("User", back_populates="ad_spends")
+
+    __table_args__ = (
+        Index("idx_ad_spend_user_date", "user_id", "date"),
+        Index("idx_ad_spend_user_sub_date", "user_id", "sub_id", "date"),
+        Index("idx_ad_spend_user_date_id", "user_id", "date", "id"),
+    )

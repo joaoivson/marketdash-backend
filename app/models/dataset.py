@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -15,4 +15,8 @@ class Dataset(Base):
     # Relationships
     user = relationship("User", back_populates="datasets")
     rows = relationship("DatasetRow", back_populates="dataset", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_dataset_user_uploaded", "user_id", "uploaded_at"),
+    )
 

@@ -11,6 +11,7 @@ from app.core.security import (
     create_access_token
 )
 from app.core.config import settings
+from app.services.cakto_service import check_active_subscription, CaktoError
 
 router = APIRouter(prefix="/auth", tags=["autenticação"])
 
@@ -64,6 +65,21 @@ def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuário inativo"
         )
+
+    if settings.CAKTO_ENFORCE_SUBSCRIPTION:
+        try:
+            has_access, reason = check_active_subscription(user.email)
+        except CaktoError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Falha ao validar assinatura. Tente novamente."
+            )
+
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=reason or "Assinatura ativa não encontrada"
+            )
     
     # Create access token
     access_token_expires = timedelta(hours=settings.JWT_EXPIRATION_HOURS)

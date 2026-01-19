@@ -1,12 +1,15 @@
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.routes import auth, datasets, dashboard, ad_spends
+from app.core.logging import configure_logging
+from app.core.errors import register_exception_handlers
+from app.api.v1.routes import router as api_v1_router
 from app.db.base import init_db
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
@@ -17,6 +20,8 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+register_exception_handlers(app)
 
 
 @app.on_event("startup")
@@ -39,11 +44,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(auth.router, prefix=settings.API_V1_STR)
-app.include_router(datasets.router, prefix=settings.API_V1_STR)
-app.include_router(dashboard.router, prefix=settings.API_V1_STR)
-app.include_router(ad_spends.router, prefix=settings.API_V1_STR)
+# GZip middleware for faster large responses
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Include routers (v1 only)
+app.include_router(api_v1_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/")

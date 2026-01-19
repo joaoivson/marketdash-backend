@@ -30,6 +30,9 @@ class AdSpendResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class BulkAdSpendPayload(BaseModel):
+    items: List[AdSpendCreate]
+
 # Helper
 def get_user(db: Session, user_id: int | None = None) -> User:
     query = db.query(User)
@@ -67,6 +70,41 @@ def create_ad_spend(
     db.commit()
     db.refresh(ad_spend)
     return ad_spend
+
+@router.post("/bulk", response_model=List[AdSpendResponse], status_code=status.HTTP_201_CREATED)
+def bulk_create_ad_spend(
+    payload: BulkAdSpendPayload,
+    user_id: int | None = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Cria vários registros de gasto de anúncio em uma única chamada."""
+    user = get_user(db, user_id)
+    if not payload.items:
+        return []
+
+    created_items: List[AdSpend] = []
+    for item in payload.items:
+        sub_id_val = item.sub_id
+        if sub_id_val == "__all__" or sub_id_val == "":
+            sub_id_val = None
+        
+        ad_spend = AdSpend(
+            user_id=user.id,
+            date=item.date,
+            sub_id=sub_id_val,
+            amount=item.amount
+        )
+        db.add(ad_spend)
+        db.flush()  # Para obter o ID sem fazer commit
+        created_items.append(ad_spend)
+    
+    db.commit()
+    
+    # Refresh todos os itens para garantir dados atualizados
+    for item in created_items:
+        db.refresh(item)
+    
+    return created_items
 
 @router.get("", response_model=List[AdSpendResponse])
 def list_ad_spends(

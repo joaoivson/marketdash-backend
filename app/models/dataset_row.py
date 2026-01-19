@@ -50,5 +50,6 @@ class DatasetRow(Base):
         Index('idx_user_transaction_date', 'user_id', 'transaction_date'),
         Index('idx_user_product_platform', 'user_id', 'product', 'platform'),
         Index('idx_date_platform', 'date', 'platform'),
+        Index('idx_user_sub_id_date', 'user_id', 'sub_id1', 'date'),
     )
 
