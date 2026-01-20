@@ -137,6 +137,45 @@ uvicorn app.main:app --reload
 
 ## 📡 Endpoints da API
 
+### 🏥 Health Check
+
+#### Verificar Status da Aplicação
+```http
+GET /health
+```
+
+**Resposta (healthy):**
+```json
+{
+    "status": "healthy",
+    "environment": "production",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "database": "connected",
+    "redis": "connected"
+}
+```
+
+**Resposta (unhealthy):**
+```json
+{
+    "status": "unhealthy",
+    "environment": "production",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "database": "disconnected",
+    "redis": "not_configured"
+}
+```
+
+**Códigos de Status HTTP:**
+- `200 OK`: Aplicação saudável (database conectado)
+- `503 Service Unavailable`: Aplicação com problemas (database desconectado, etc.)
+
+**O que o Health Check verifica:**
+- Conexão com o banco de dados (PostgreSQL/Supabase)
+- Status do Redis (se configurado)
+- Ambiente atual (production/staging/development)
+- Timestamp UTC da verificação
+
 ### 🔐 Autenticação
 
 #### Registrar Usuário

@@ -1,11 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, status
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.errors import register_exception_handlers
 from app.api.v1.routes import router as api_v1_router
 from app.db.base import init_db
+from app.db.session import SessionLocal
+from datetime import datetime
 import logging
 
 # Configure logging
@@ -64,6 +68,53 @@ def root():
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+    """
+    Health check endpoint with database and service status.
+    Returns detailed information about the application health.
+    """
+    health_status = {
+        "status": "healthy",
+        "environment": settings.ENVIRONMENT,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "database": "unknown",
+        "redis": "not_configured"
+    }
+    
+    # Check database connection
+    try:
+        db = SessionLocal()
+        try:
+            # Simple query to verify database connection
+            db.execute(text("SELECT 1"))
+            health_status["database"] = "connected"
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            health_status["database"] = "disconnected"
+            health_status["status"] = "unhealthy"
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Database session creation failed: {e}")
+        health_status["database"] = "error"
+        health_status["status"] = "unhealthy"
+    
+    # Check Redis if configured
+    if settings.REDIS_URL:
+        try:
+            import redis
+            redis_client = redis.from_url(settings.REDIS_URL)
+            redis_client.ping()
+            health_status["redis"] = "connected"
+        except ImportError:
+            health_status["redis"] = "library_not_installed"
+        except Exception as e:
+            logger.warning(f"Redis health check failed: {e}")
+            health_status["redis"] = "disconnected"
+    
+    # Return appropriate status code
+    status_code = status.HTTP_200_OK if health_status["status"] == "healthy" else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(
+        content=health_status,
+        status_code=status_code
+    )
 

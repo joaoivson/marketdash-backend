@@ -35,11 +35,16 @@ class Settings(BaseSettings):
     
     # CORS (for production)
     CORS_ORIGINS: list[str] = [
+        # Development
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8080",
-        "https://app.marketdash.com.br",
-        "https://app-staging.marketdash.com.br",
+        # Production
+        "https://marketdash.com.br",
+        "https://api.marketdash.com.br",
+        # Homologation
+        "https://marketdash.hml.com.br",
+        "https://api.marketdash.hml.com.br",
     ]
     
     class Config:
