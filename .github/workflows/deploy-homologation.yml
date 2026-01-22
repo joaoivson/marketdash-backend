@@ -34,6 +34,9 @@ jobs:
           find . -type f -name "*.py" -not -path "./.git/*" -not -path "./__pycache__/*" | xargs python -m py_compile
 
       - name: Validate imports
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+          JWT_SECRET: "test-secret-key-for-validation-only-min-32-chars"
         run: |
           python -c "import app; import app.main; import app.core.config; import app.core.security"
 
