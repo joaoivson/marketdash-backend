@@ -20,11 +20,11 @@ Você precisa atualizar no Supabase Dashboard:
 Acesse: https://supabase.com/dashboard/project/rsejwvxealraianensoz
 
 **Authentication → Settings:**
-- **Site URL**: `https://app.marketdash.com.br`
+- **Site URL**: `https://marketdash.com.br`
 - **Redirect URLs**: Adicione/atualize:
   ```
-  https://app.marketdash.com.br/**
-  https://app-staging.marketdash.com.br/**
+  https://marketdash.com.br/**
+  https://marketdash.hml.com.br/**
   http://localhost:3000/**
   http://localhost:5173/**
   http://localhost:8080/**
@@ -39,14 +39,14 @@ Mesmas configurações acima, mas no projeto de staging.
 ## 🌐 Domínios Finais
 
 ### Produção:
-- **Frontend**: `https://app.marketdash.com.br`
+- **Frontend**: `https://marketdash.com.br`
 - **Backend API**: `https://api.marketdash.com.br`
 - **Documentação**: `https://api.marketdash.com.br/docs`
 
-### Staging/Homologação:
-- **Frontend**: `https://app-staging.marketdash.com.br`
-- **Backend API**: `https://api-staging.marketdash.com.br`
-- **Documentação**: `https://api-staging.marketdash.com.br/docs`
+### Homologação:
+- **Frontend**: `https://marketdash.hml.com.br`
+- **Backend API**: `https://api.marketdash.hml.com.br`
+- **Documentação**: `https://api.marketdash.hml.com.br/docs`
 
 ---
 
@@ -56,25 +56,31 @@ No painel da Hostinger, configure os registros A:
 
 ```
 Tipo: A
+Nome: @ (ou deixe em branco para o domínio raiz)
+Valor: [IP_DA_VPS]
+TTL: 3600
+Descrição: marketdash.com.br (frontend produção)
+
+Tipo: A
 Nome: api
 Valor: [IP_DA_VPS]
 TTL: 3600
+Descrição: api.marketdash.com.br (backend produção)
 
 Tipo: A
-Nome: app
+Nome: @ (ou deixe em branco)
 Valor: [IP_DA_VPS]
 TTL: 3600
+Descrição: marketdash.hml.com.br (frontend homologação)
 
 Tipo: A
-Nome: api-staging
+Nome: api
 Valor: [IP_DA_VPS]
 TTL: 3600
-
-Tipo: A
-Nome: app-staging
-Valor: [IP_DA_VPS]
-TTL: 3600
+Descrição: api.marketdash.hml.com.br (backend homologação)
 ```
+
+**Nota**: Para os domínios de homologação (`marketdash.hml.com.br` e `api.marketdash.hml.com.br`), você precisará criar um subdomínio `hml` primeiro na Hostinger, ou configurar como domínio separado se `hml.com.br` for um domínio diferente.
 
 ---
 
@@ -86,14 +92,14 @@ Após atualizar tudo, verifique:
 # Backend Produção
 curl https://api.marketdash.com.br/health
 
-# Backend Staging
-curl https://api-staging.marketdash.com.br/health
+# Backend Homologação
+curl https://api.marketdash.hml.com.br/health
 
 # Frontend Produção
-curl https://app.marketdash.com.br
+curl https://marketdash.com.br
 
-# Frontend Staging  
-curl https://app-staging.marketdash.com.br
+# Frontend Homologação
+curl https://marketdash.hml.com.br
 ```
 
 ---
