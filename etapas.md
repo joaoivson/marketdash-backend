@@ -12,11 +12,11 @@ Guia passo a passo do zero ao deploy em produção.
 
 ```
 ┌─────────────────────────────────────────┐
-│           Domínio (exemplo.com)          │
-│  ├─ app.exemplo.com (Frontend Prod)     │
-│  ├─ api.exemplo.com (Backend Prod)      │
-│  ├─ app-staging.exemplo.com (Frontend)  │
-│  └─ api-staging.exemplo.com (Backend)   │
+│           Domínio (marketdash.com.br)    │
+│  ├─ marketdash.com.br (Frontend Prod)   │
+│  ├─ api.marketdash.com.br (Backend Prod)│
+│  ├─ marketdash.hml.com.br (Frontend HML)│
+│  └─ api.marketdash.hml.com.br (Backend) │
 └──────────────┬──────────────────────────┘
                │
         ┌──────▼──────┐
@@ -99,10 +99,10 @@ Para cada projeto (prod e staging):
 
 ### 2.4. Configurar autenticação
 1. Authentication → Settings
-2. Site URL: `https://app.marketdash.com.br` (produção)
+2. Site URL: `https://marketdash.com.br` (produção)
 3. Redirect URLs: adicione:
-   - `https://app.marketdash.com.br/**`
-   - `https://app-staging.marketdash.com.br/**`
+   - `https://marketdash.com.br/**`
+   - `https://marketdash.hml.com.br/**`
    - `http://localhost:3000/**` (desenvolvimento)
 
 ---
@@ -116,30 +116,31 @@ Para cada projeto (prod e staging):
 
 ```
 Tipo: A
-Nome: @
+Nome: @ (ou deixe em branco para o domínio raiz)
 Valor: [IP_DA_VPS]
 TTL: 3600
+Descrição: marketdash.com.br (frontend produção)
 
 Tipo: A
 Nome: api
 Valor: [IP_DA_VPS]
 TTL: 3600
+Descrição: api.marketdash.com.br (backend produção)
 
 Tipo: A
-Nome: app
+Nome: @ (ou deixe em branco)
 Valor: [IP_DA_VPS]
 TTL: 3600
+Descrição: marketdash.hml.com.br (frontend homologação)
 
 Tipo: A
-Nome: api-staging
+Nome: api
 Valor: [IP_DA_VPS]
 TTL: 3600
-
-Tipo: A
-Nome: app-staging
-Valor: [IP_DA_VPS]
-TTL: 3600
+Descrição: api.marketdash.hml.com.br (backend homologação)
 ```
+
+**Nota**: Para os domínios de homologação (`marketdash.hml.com.br` e `api.marketdash.hml.com.br`), você precisará criar um subdomínio `hml` primeiro na Hostinger, ou configurar como domínio separado se `hml.com.br` for um domínio diferente.
 
 Nota: propagação pode levar até 24h (geralmente 1-2h).
 
@@ -575,10 +576,10 @@ VITE_SUPABASE_URL=https://[PROJECT_ID].supabase.co
 VITE_SUPABASE_ANON_KEY=[ANON_KEY]
 VITE_API_URL=https://api.marketdash.com.br
 
-# .env.staging
-VITE_SUPABASE_URL=https://[STAGING_PROJECT_ID].supabase.co
-VITE_SUPABASE_ANON_KEY=[STAGING_ANON_KEY]
-VITE_API_URL=https://api-staging.marketdash.com.br
+# .env.hml (homologação)
+VITE_SUPABASE_URL=https://[HML_PROJECT_ID].supabase.co
+VITE_SUPABASE_ANON_KEY=[HML_ANON_KEY]
+VITE_API_URL=https://api.marketdash.hml.com.br
 ```
 
 ---
@@ -609,14 +610,14 @@ with engine.connect() as conn:
 # Backend produção
 curl https://api.marketdash.com.br/health
 
-# Backend staging
-curl https://api-staging.marketdash.com.br/health
+# Backend homologação
+curl https://api.marketdash.hml.com.br/health
 
 # Frontend produção
-curl https://app.marketdash.com.br
+curl https://marketdash.com.br
 
-# Frontend staging
-curl https://app-staging.marketdash.com.br
+# Frontend homologação
+curl https://marketdash.hml.com.br
 
 # Ver containers rodando
 docker ps
@@ -678,14 +679,14 @@ Uso:
 ## Resumo dos endereços finais
 
 ### Produção:
-- Frontend: `https://app.marketdash.com.br`
+- Frontend: `https://marketdash.com.br`
 - API: `https://api.marketdash.com.br`
 - Docs API: `https://api.marketdash.com.br/docs`
 
-### Staging/Homologação:
-- Frontend: `https://app-staging.marketdash.com.br`
-- API: `https://api-staging.marketdash.com.br`
-- Docs API: `https://api-staging.marketdash.com.br/docs`
+### Homologação:
+- Frontend: `https://marketdash.hml.com.br`
+- API: `https://api.marketdash.hml.com.br`
+- Docs API: `https://api.marketdash.hml.com.br/docs`
 
 ---
 
