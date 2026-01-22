@@ -41,10 +41,14 @@ class Settings(BaseSettings):
         "http://localhost:8080",
         # Production
         "https://marketdash.com.br",
+        "http://marketdash.com.br",
         "https://api.marketdash.com.br",
+        "http://api.marketdash.com.br",
         # Homologation
-        "https://marketdash.hml.com.br",
-        "https://api.marketdash.hml.com.br",
+        "https://hml.marketdash.com.br",
+        "http://hml.marketdash.com.br",
+        "https://api.hml.marketdash.com.br",
+        "http://api.hml.marketdash.com.br",
     ]
     
     class Config:
