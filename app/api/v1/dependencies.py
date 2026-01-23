@@ -92,4 +92,16 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário inativo")
     
     logger.info(f"Autenticação bem-sucedida para usuário {user_id} ({user.email})")
+    
+    # Log adicional para verificar se há dados no banco para este usuário
+    from app.repositories.dataset_row_repository import DatasetRowRepository
+    from app.repositories.ad_spend_repository import AdSpendRepository
+    row_repo = DatasetRowRepository(db)
+    ad_spend_repo = AdSpendRepository(db)
+    
+    total_rows = row_repo.db.query(row_repo.model).filter(row_repo.model.user_id == user_id).count()
+    total_ad_spends = ad_spend_repo.db.query(ad_spend_repo.model).filter(ad_spend_repo.model.user_id == user_id).count()
+    
+    logger.info(f"Estatísticas do usuário {user_id}: {total_rows} dataset_rows, {total_ad_spends} ad_spends")
+    
     return user
