@@ -42,16 +42,25 @@ class AuthService:
         if settings.CAKTO_ENFORCE_SUBSCRIPTION:
             try:
                 has_access, reason = check_active_subscription(user.email)
-            except CaktoError:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Falha ao validar assinatura. Tente novamente.",
-                )
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=reason or "Assinatura ativa não encontrada",
-                )
+                if not has_access:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=reason or "Assinatura ativa não encontrada",
+                    )
+            except CaktoError as e:
+                # Em ambiente de desenvolvimento/homologação, permitir login mesmo se Cakto falhar
+                # Em produção, bloquear login se a validação falhar
+                if settings.ENVIRONMENT in ("development", "staging", "homologation"):
+                    # Log do erro mas permite login em ambientes de desenvolvimento/homologação
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Cakto validation failed for {user.email} in {settings.ENVIRONMENT}: {str(e)}")
+                else:
+                    # Em produção, bloquear login se Cakto falhar
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Falha ao validar assinatura. Tente novamente.",
+                    )
 
         access_token_expires = timedelta(hours=settings.JWT_EXPIRATION_HOURS)
         access_token = create_access_token(
