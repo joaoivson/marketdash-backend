@@ -33,23 +33,55 @@ class Settings(BaseSettings):
     CAKTO_ENFORCE_SUBSCRIPTION: bool = False
     CAKTO_WEBHOOK_SECRET: Optional[str] = None
     
-    # CORS (for production)
+    # CORS Configuration
+    # Por padrão, apenas HTTPS é permitido em produção/homologação
+    # HTTP é permitido apenas para desenvolvimento local
+    # Para emergências, use FORCE_HTTP_FALLBACK=true (não recomendado)
+    FORCE_HTTP_FALLBACK: bool = False
+    
     CORS_ORIGINS: list[str] = [
-        # Development
+        # Development (HTTP permitido apenas em localhost)
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8080",
-        # Production
+        # Production (apenas HTTPS)
         "https://marketdash.com.br",
-        "http://marketdash.com.br",
         "https://api.marketdash.com.br",
-        "http://api.marketdash.com.br",
-        # Homologation
+        # Homologation (apenas HTTPS)
         "https://hml.marketdash.com.br",
-        "http://hml.marketdash.com.br",
         "https://api.hml.marketdash.com.br",
-        "http://api.hml.marketdash.com.br",
+        # Alternativas de domínio de homologação
+        "https://marketdash.hml.com.br",
+        "https://api.marketdash.hml.com.br",
     ]
+    
+    def get_cors_origins(self) -> list[str]:
+        """
+        Retorna lista de origens CORS permitidas.
+        
+        Se FORCE_HTTP_FALLBACK estiver ativo, adiciona URLs HTTP de produção/homologação.
+        ATENÇÃO: Use apenas em emergências críticas. Deve ser removido assim que SSL for corrigido.
+        """
+        origins = self.CORS_ORIGINS.copy()
+        
+        if self.FORCE_HTTP_FALLBACK:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "⚠️ FORCE_HTTP_FALLBACK está ativo! "
+                "Isso é temporário e deve ser removido assim que SSL for corrigido."
+            )
+            # Adicionar URLs HTTP de produção/homologação temporariamente
+            origins.extend([
+                "http://marketdash.com.br",
+                "http://api.marketdash.com.br",
+                "http://hml.marketdash.com.br",
+                "http://api.hml.marketdash.com.br",
+                "http://marketdash.hml.com.br",
+                "http://api.marketdash.hml.com.br",
+            ])
+        
+        return origins
     
     class Config:
         env_file = ".env"
