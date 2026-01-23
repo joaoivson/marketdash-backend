@@ -23,12 +23,21 @@ def cache_get(key: str) -> Optional[Any]:
     client = get_client()
     if client is None:
         return None
-    data = client.get(key)
-    if data is None:
-        return None
     try:
+        data = client.get(key)
+        if data is None:
+            return None
         return json.loads(data)
     except json.JSONDecodeError:
+        return None
+    except Exception as e:
+        # Tratar erros de autenticação do Redis graciosamente
+        import logging
+        logger = logging.getLogger(__name__)
+        if "Authentication" in str(e) or "AuthenticationError" in str(type(e).__name__):
+            # Erro de autenticação - apenas retornar None (cache não disponível)
+            return None
+        logger.warning(f"Erro ao buscar cache: {e}")
         return None
 
 
@@ -36,19 +45,37 @@ def cache_set(key: str, value: Any, ttl: Optional[int] = None) -> None:
     client = get_client()
     if client is None:
         return
-    payload = json.dumps(value, ensure_ascii=False, default=str)
-    client.setex(key, ttl or settings.CACHE_TTL_SECONDS, payload)
+    try:
+        payload = json.dumps(value, ensure_ascii=False, default=str)
+        client.setex(key, ttl or settings.CACHE_TTL_SECONDS, payload)
+    except Exception as e:
+        # Tratar erros de autenticação do Redis graciosamente
+        import logging
+        logger = logging.getLogger(__name__)
+        if "Authentication" in str(e) or "AuthenticationError" in str(type(e).__name__):
+            # Erro de autenticação - apenas ignorar (cache não disponível)
+            return
+        logger.warning(f"Erro ao salvar cache: {e}")
 
 
 def cache_delete_prefix(prefix: str) -> None:
     client = get_client()
     if client is None:
         return
-    cursor = 0
-    pattern = f"{prefix}*"
-    while True:
-        cursor, keys = client.scan(cursor=cursor, match=pattern, count=500)
-        if keys:
-            client.delete(*keys)
-        if cursor == 0:
-            break
+    try:
+        cursor = 0
+        pattern = f"{prefix}*"
+        while True:
+            cursor, keys = client.scan(cursor=cursor, match=pattern, count=500)
+            if keys:
+                client.delete(*keys)
+            if cursor == 0:
+                break
+    except Exception as e:
+        # Tratar erros de autenticação do Redis graciosamente
+        import logging
+        logger = logging.getLogger(__name__)
+        if "Authentication" in str(e) or "AuthenticationError" in str(type(e).__name__):
+            # Erro de autenticação - apenas ignorar (cache não disponível)
+            return
+        logger.warning(f"Erro ao deletar cache: {e}")
