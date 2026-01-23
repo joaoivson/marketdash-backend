@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, Form, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user
 from app.db.session import get_db
+from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserUpdate, TokenWithUser
 from app.services.auth_service import AuthService
 from app.repositories.user_repository import UserRepository
@@ -33,13 +34,20 @@ def get_me(current_user=Depends(get_current_user)):
 def update_user(
     user_id: int,
     user_update: UserUpdate,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Usuário só pode atualizar seu próprio perfil
+    if current_user.id != user_id:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Você não tem permissão para atualizar este usuário"
+        )
     user_repo = UserRepository(db)
     user = user_repo.get_by_id(user_id)
     if not user:
         from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
     if user_update.name is not None:
         user.name = user_update.name
@@ -47,7 +55,6 @@ def update_user(
         existing = user_repo.get_by_email(user_update.email)
         if existing and existing.id != user_id:
             from fastapi import HTTPException
-
             raise HTTPException(status_code=400, detail="Email já cadastrado")
         user.email = user_update.email
     db.commit()
@@ -56,13 +63,21 @@ def update_user(
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(user_id: int, db: Session = Depends(get_db)):
+def delete_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Usuário só pode deletar seu próprio perfil
+    if current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Você não tem permissão para deletar este usuário"
+        )
     user_repo = UserRepository(db)
     user = user_repo.get_by_id(user_id)
     if not user:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="Usuário não encontrado")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuário não encontrado")
     db.delete(user)
     db.commit()
-    return
+    return None
