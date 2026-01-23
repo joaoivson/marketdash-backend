@@ -156,10 +156,22 @@ class CSVService:
             out["status"] = df[col_map["status"]].astype(str).str.strip() if "status" in col_map else None
             out["category"] = df[col_map["category"]].astype(str).str.strip() if "category" in col_map else None
             out["sub_id1"] = df[col_map["sub_id1"]].astype(str).str.strip() if "sub_id1" in col_map else None
-            out["mes_ano"] = out["date"].apply(lambda d: f"{d.year:04d}-{d.month:02d}" if isinstance(d, (pd.Timestamp, date_cls)) or hasattr(d, 'year') else None)
 
-            # Limpezas
+            # Limpezas - converter date para datetime primeiro
             out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
+            
+            # Calcular mes_ano após garantir que date é uma Series de dates
+            def calc_mes_ano(d):
+                if d is None or pd.isna(d):
+                    return None
+                if isinstance(d, (pd.Timestamp, date_cls)) or hasattr(d, 'year'):
+                    try:
+                        return f"{d.year:04d}-{d.month:02d}"
+                    except (AttributeError, TypeError):
+                        return None
+                return None
+            
+            out["mes_ano"] = out["date"].apply(calc_mes_ano)
             if out["time"].isnull().all():
                 out["time"] = None
             out["product"] = out["product"].replace({"": "Produto"}, regex=False)
