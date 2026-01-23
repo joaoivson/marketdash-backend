@@ -5,7 +5,6 @@ from typing import List, Optional
 
 import pandas as pd
 from fastapi import HTTPException, status
-from fastapi.responses import JSONResponse
 
 from app.models.dataset import Dataset
 from app.models.dataset_row import DatasetRow
@@ -101,7 +100,7 @@ class DatasetService:
         cache_key = f"dataset_rows:{user_id}:latest:{start_date}:{end_date}:{include_raw_data}:{limit}:{offset}"
         cached = cache_get(cache_key)
         if cached is not None:
-            return JSONResponse(content=cached)
+            return cached
         latest = self.dataset_repo.get_latest_by_user(user_id)
         if not latest:
             return []
@@ -110,7 +109,7 @@ class DatasetService:
         rows = self.row_repo.list_by_dataset(latest.id, start_date, end_date, limit, offset)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
         cache_set(cache_key, payload)
-        return JSONResponse(content=payload)
+        return payload
 
     def list_all_rows(
         self,
@@ -124,13 +123,13 @@ class DatasetService:
         cache_key = f"dataset_rows:{user_id}:all:{start_date}:{end_date}:{include_raw_data}:{limit}:{offset}"
         cached = cache_get(cache_key)
         if cached is not None:
-            return JSONResponse(content=cached)
+            return cached
         if start_date and end_date and start_date > end_date:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         rows = self.row_repo.list_by_user(user_id, start_date, end_date, limit, offset)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
         cache_set(cache_key, payload)
-        return JSONResponse(content=payload)
+        return payload
 
     def list_datasets(self, user_id: int):
         return self.dataset_repo.list_by_user(user_id)
@@ -155,23 +154,24 @@ class DatasetService:
         cache_key = f"dataset_rows:dataset:{dataset_id}:{start_date}:{end_date}:{include_raw_data}"
         cached = cache_get(cache_key)
         if cached is not None:
-            return JSONResponse(content=cached)
+            return cached
         rows = self.row_repo.list_by_dataset(dataset_id, start_date, end_date, None, 0)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
         cache_set(cache_key, payload)
-        return JSONResponse(content=payload)
+        return payload
 
     def serialize_row(self, row: DatasetRow, include_raw_data: bool = True) -> dict:
         raw_data = row.raw_data if include_raw_data else None
         if include_raw_data and isinstance(raw_data, dict):
             raw_data = self._compact_raw_data(raw_data)
+        # Manter date e time como objetos nativos para o Pydantic validar corretamente
         return {
             "id": row.id,
             "dataset_id": row.dataset_id,
             "user_id": row.user_id,
-            "date": serialize_value(row.date),
-            "transaction_date": serialize_value(row.transaction_date),
-            "time": serialize_value(row.time),
+            "date": row.date,  # Manter como date object, não serializar
+            "transaction_date": row.transaction_date if row.transaction_date else None,
+            "time": row.time,  # Manter como time object, não serializar
             "product": row.product,
             "product_name": row.product_name,
             "platform": row.platform,
