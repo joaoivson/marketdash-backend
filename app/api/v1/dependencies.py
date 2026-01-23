@@ -17,7 +17,7 @@ def get_current_user(
     db: Session = Depends(get_db),
 ):
     if credentials is None:
-        logger.warning("Token de autenticação não fornecido")
+        logger.warning("Token de autenticação não fornecido - credentials é None")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token de autenticação não fornecido",
@@ -25,7 +25,7 @@ def get_current_user(
         )
     token = credentials.credentials
     if not token or not token.strip():
-        logger.warning("Token vazio ou inválido")
+        logger.warning(f"Token vazio ou inválido - token: '{token}', type: {type(token)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido ou expirado",
@@ -36,9 +36,23 @@ def get_current_user(
     token_preview = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else token
     logger.info(f"Validando token: {token_preview} (length: {len(token)})")
     
+    # Verificar se o token começa com "Bearer " e remover se necessário
+    if token.startswith("Bearer "):
+        logger.warning("Token contém prefixo 'Bearer ' - removendo")
+        token = token[7:].strip()
+    
     payload = decode_access_token(token)
     if payload is None:
         logger.error(f"Falha ao decodificar token (token length: {len(token)}, preview: {token_preview})")
+        # Tentar decodificar sem verificação para ver o erro específico
+        try:
+            from jose import jwt
+            from app.core.config import settings
+            # Tentar decodificar sem verificar para ver o erro
+            unverified = jwt.decode(token, options={"verify_signature": False})
+            logger.error(f"Token decodificado sem verificação: {unverified}")
+        except Exception as e:
+            logger.error(f"Erro ao decodificar token sem verificação: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido ou expirado",
@@ -49,7 +63,7 @@ def get_current_user(
     
     user_id_raw = payload.get("sub")
     if user_id_raw is None:
-        logger.error(f"Token não contém 'sub' (user_id). Payload keys: {list(payload.keys())}")
+        logger.error(f"Token não contém 'sub' (user_id). Payload keys: {list(payload.keys())}, payload: {payload}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido",
