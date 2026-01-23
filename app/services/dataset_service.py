@@ -84,11 +84,11 @@ class DatasetService:
                 )
             )
 
+        # bulk_create faz commit, então o dataset também será commitado
         self.row_repo.bulk_create(dataset_rows)
         # Refresh dataset para garantir que uploaded_at esteja disponível após commit
         # (uploaded_at é gerado pelo banco com server_default=func.now())
-        if hasattr(self.dataset_repo, 'db'):
-            self.dataset_repo.db.refresh(dataset)
+        self.dataset_repo.db.refresh(dataset)
         # Cache removido - frontend gerencia via localStorage
         return dataset
 
