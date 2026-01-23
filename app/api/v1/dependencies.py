@@ -1,4 +1,5 @@
 from typing import Optional
+import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -7,6 +8,7 @@ from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
 
+logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
@@ -15,14 +17,23 @@ def get_current_user(
     db: Session = Depends(get_db),
 ):
     if credentials is None:
+        logger.warning("Token de autenticação não fornecido")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token de autenticação não fornecido",
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = credentials.credentials
+    if not token or not token.strip():
+        logger.warning("Token vazio ou inválido")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido ou expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     payload = decode_access_token(token)
     if payload is None:
+        logger.warning(f"Falha ao decodificar token (token length: {len(token)})")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido ou expirado",
