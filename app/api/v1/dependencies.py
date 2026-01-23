@@ -94,14 +94,17 @@ def get_current_user(
     logger.info(f"Autenticação bem-sucedida para usuário {user_id} ({user.email})")
     
     # Log adicional para verificar se há dados no banco para este usuário
-    from app.repositories.dataset_row_repository import DatasetRowRepository
-    from app.repositories.ad_spend_repository import AdSpendRepository
-    row_repo = DatasetRowRepository(db)
-    ad_spend_repo = AdSpendRepository(db)
+    from app.models.dataset_row import DatasetRow
+    from app.models.ad_spend import AdSpend
     
-    total_rows = row_repo.db.query(row_repo.model).filter(row_repo.model.user_id == user_id).count()
-    total_ad_spends = ad_spend_repo.db.query(ad_spend_repo.model).filter(ad_spend_repo.model.user_id == user_id).count()
+    total_rows = db.query(DatasetRow).filter(DatasetRow.user_id == user_id).count()
+    total_ad_spends = db.query(AdSpend).filter(AdSpend.user_id == user_id).count()
     
     logger.info(f"Estatísticas do usuário {user_id}: {total_rows} dataset_rows, {total_ad_spends} ad_spends")
+    
+    # Verificar todos os user_ids únicos no banco (para debug)
+    all_row_user_ids = [uid[0] for uid in db.query(DatasetRow.user_id).distinct().all()]
+    all_ad_spend_user_ids = [uid[0] for uid in db.query(AdSpend.user_id).distinct().all()]
+    logger.info(f"User IDs únicos no banco - dataset_rows: {all_row_user_ids}, ad_spends: {all_ad_spend_user_ids}")
     
     return user
