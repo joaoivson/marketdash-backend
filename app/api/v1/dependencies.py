@@ -48,11 +48,14 @@ def get_current_user(
         try:
             from jose import jwt
             from app.core.config import settings
-            # Tentar decodificar sem verificar para ver o erro
-            unverified = jwt.decode(token, options={"verify_signature": False})
+            # Tentar decodificar sem verificar para ver o erro (precisa passar key mesmo sem verificar)
+            unverified = jwt.decode(token, key="", options={"verify_signature": False})
             logger.error(f"Token decodificado sem verificação: {unverified}")
+            logger.error(f"Token expirado? exp={unverified.get('exp')}, agora={__import__('time').time()}")
         except Exception as e:
             logger.error(f"Erro ao decodificar token sem verificação: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token inválido ou expirado",
