@@ -13,4 +13,5 @@ alembic>=1.13.0
 gunicorn[gevent]>=21.2.0
 requests>=2.32.3
 redis>=5.0.8
+openpyxl>=3.1.0
 

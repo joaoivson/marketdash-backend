@@ -1,9 +1,14 @@
 from datetime import date
 from typing import List, Optional
+import io
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+import openpyxl
+from openpyxl import Workbook
 
 from app.api.v1.dependencies import get_current_user
 from app.db.session import get_db
@@ -95,3 +100,54 @@ def delete_ad_spend(
     # O service já valida se o ad_spend pertence ao usuário
     service.delete(current_user.id, ad_spend_id)
     return None
+
+
+@router.get("/template")
+def download_template(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Download do template Excel para importação de investimentos em ads.
+    Retorna um arquivo .xlsx com as colunas: Data, SubId, ValorGasto
+    """
+    try:
+        # Criar workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Modelo"
+        
+        # Adicionar cabeçalhos
+        ws.append(["Data", "SubId", "ValorGasto"])
+        
+        # Adicionar dados de exemplo
+        today = datetime.now().strftime("%Y-%m-%d")
+        ws.append([today, "ASPRADOR02", "120,50"])
+        ws.append([today, "", "300,00"])
+        
+        # Ajustar largura das colunas
+        ws.column_dimensions['A'].width = 12  # Data
+        ws.column_dimensions['B'].width = 15  # SubId
+        ws.column_dimensions['C'].width = 12  # ValorGasto
+        
+        # Salvar em buffer
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        
+        # Retornar arquivo com Content-Disposition header
+        # Usar filename* com encoding UTF-8 para garantir compatibilidade
+        filename = "modelo-investimentos.xlsx"
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{filename}',
+                "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "Access-Control-Expose-Headers": "Content-Disposition, Content-Type",
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao gerar template: {str(e)}"
+        )
