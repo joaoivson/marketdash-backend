@@ -47,7 +47,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Type", "*"],  # Garantir que Content-Disposition seja exposto
     max_age=3600,  # Cache preflight por 1 hora
 )
 
