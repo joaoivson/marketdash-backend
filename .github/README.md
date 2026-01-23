@@ -38,8 +38,16 @@ Configure os seguintes secrets no GitHub:
 
 1. Acesse: `https://github.com/joaoivson/marketdash-backend/settings/secrets/actions`
 2. Adicione:
-   - **Name**: `COOLIFY_WEBHOOK_URL`
-   - **Value**: `http://31.97.22.173:8000/webhooks/source/github/events/manual`
+   - **Name**: `COOLIFY_API_TOKEN`
+     - **Value**: Token de API do Coolify (criar em Settings → Keys & Tokens)
+   - **Name**: `COOLIFY_DEPLOY_URL_BACKEND_HML`
+     - **Value**: `http://31.97.22.173:8000/api/v1/deploy?uuid={UUID_BACKEND_HML}&force=false`
+     - Substitua `{UUID_BACKEND_HML}` pelo UUID da aplicação de homologação (encontre em Webhooks)
+   - **Name**: `COOLIFY_DEPLOY_URL_BACKEND_PROD`
+     - **Value**: `http://31.97.22.173:8000/api/v1/deploy?uuid={UUID_BACKEND_PROD}&force=false`
+     - Substitua `{UUID_BACKEND_PROD}` pelo UUID da aplicação de produção (encontre em Webhooks)
+
+**Documentação completa**: Veja `GUIA_CONFIGURACAO_DEPLOY_WEBHOOK_AUTENTICADO.md` na raiz do projeto.
 
 ## Validações Implementadas
 
@@ -68,9 +76,11 @@ Configure os seguintes secrets no GitHub:
 
 ### Deploy não é acionado
 
-- Verifique se o secret `COOLIFY_WEBHOOK_URL` está configurado corretamente
+- Verifique se os secrets `COOLIFY_API_TOKEN` e `COOLIFY_DEPLOY_URL_BACKEND_{ENV}` estão configurados corretamente
+- Verifique se o UUID na URL do webhook corresponde ao UUID da aplicação no Coolify
+- Verifique se o token de API tem permissões de deploy
 - Verifique se o Coolify está acessível e funcionando
-- Verifique os logs do job `deploy` para identificar erros
+- Verifique os logs do job `deploy` para identificar erros (status HTTP do curl)
 
 ## Referências
 

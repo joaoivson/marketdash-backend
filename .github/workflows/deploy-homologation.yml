@@ -56,43 +56,10 @@ jobs:
 
       - name: Trigger Coolify deployment
         run: |
-          # Get commit message safely, handling multi-line messages
-          COMMIT_MESSAGE="${{ github.event.head_commit.message }}"
-          if [ -z "$COMMIT_MESSAGE" ]; then
-            COMMIT_MESSAGE="Deploy triggered by GitHub Actions"
-          fi
-          # Sanitize commit message for JSON (escape backslashes first, then quotes, then convert newlines to spaces)
-          COMMIT_MESSAGE=$(printf '%s' "$COMMIT_MESSAGE" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ' | sed 's/  */ /g' | sed 's/^ *//;s/ *$//')
-          # Build JSON payload using jq if available, otherwise use printf
-          if command -v jq &> /dev/null; then
-            PAYLOAD=$(jq -n \
-              --arg ref "${{ github.ref }}" \
-              --arg repo "${{ github.repository }}" \
-              --arg name "${{ github.event.repository.name }}" \
-              --arg owner "${{ github.repository_owner }}" \
-              --arg sha "${{ github.sha }}" \
-              --arg msg "$COMMIT_MESSAGE" \
-              '{
-                ref: $ref,
-                repository: {
-                  full_name: $repo,
-                  name: $name,
-                  owner: { name: $owner }
-                },
-                head_commit: {
-                  id: $sha,
-                  message: $msg
-                }
-              }')
-          else
-            # Fallback: build JSON manually with proper escaping
-            PAYLOAD="{\"ref\":\"${{ github.ref }}\",\"repository\":{\"full_name\":\"${{ github.repository }}\",\"name\":\"${{ github.event.repository.name }}\",\"owner\":{\"name\":\"${{ github.repository_owner }}\"}},\"head_commit\":{\"id\":\"${{ github.sha }}\",\"message\":\"$COMMIT_MESSAGE\"}}"
-          fi
-          # Send webhook
-          curl -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}" \
+          curl -X POST "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_HML }}" \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_API_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -H "X-GitHub-Event: push" \
-            -d "$PAYLOAD" || echo "Webhook trigger completed"
+            || echo "Deployment triggered"
 
       - name: Deployment status
         run: |
