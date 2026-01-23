@@ -5,7 +5,6 @@ from typing import List, Optional
 
 import pandas as pd
 from fastapi import HTTPException, status
-from fastapi.responses import JSONResponse
 
 from app.models.dataset import Dataset
 from app.models.dataset_row import DatasetRow
@@ -13,7 +12,7 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.services.csv_service import CSVService
 from app.utils.serialization import normalize_raw_data, serialize_value, clean_number
-from app.core.cache import cache_get, cache_set, cache_delete_prefix
+# Cache removido - agora é gerenciado pelo frontend via localStorage
 
 
 class DatasetService:
@@ -66,6 +65,30 @@ class DatasetService:
         for row_data in rows_data:
             raw_data = row_data.get("raw_data") if isinstance(row_data, dict) else None
             raw_data_json = normalize_raw_data(raw_data) if raw_data is not None else raw_data
+            
+            # Garantir que campos numéricos sejam None ou numéricos válidos
+            def safe_numeric(value, default=None):
+                if value is None or pd.isna(value):
+                    return default
+                try:
+                    if isinstance(value, (int, float)):
+                        return float(value) if value is not None else default
+                    # Tentar converter string para número
+                    if isinstance(value, str):
+                        cleaned = value.replace("R$", "").replace(" ", "").replace(",", ".")
+                        return float(cleaned) if cleaned else default
+                    return float(value) if value is not None else default
+                except (ValueError, TypeError):
+                    return default
+            
+            def safe_int(value, default=None):
+                if value is None or pd.isna(value):
+                    return default
+                try:
+                    return int(float(value)) if value is not None else default
+                except (ValueError, TypeError):
+                    return default
+            
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
@@ -73,20 +96,29 @@ class DatasetService:
                     date=row_data["date"],
                     time=row_data.get("time"),
                     product=row_data["product"],
-                    revenue=row_data["revenue"],
-                    cost=row_data["cost"],
-                    commission=row_data["commission"],
-                    profit=row_data["profit"],
+                    revenue=safe_numeric(row_data.get("revenue"), 0),
+                    cost=safe_numeric(row_data.get("cost"), 0),
+                    commission=safe_numeric(row_data.get("commission"), 0),
+                    profit=safe_numeric(row_data.get("profit"), 0),
                     status=row_data.get("status"),
                     category=row_data.get("category"),
-                    sub_id1=row_data.get("sub_id1"),
+                    sub_id1=row_data.get("sub_id1"),  # String - manter como está
                     mes_ano=row_data.get("mes_ano"),
+                    # Campos numéricos opcionais - garantir None se não existirem
+                    gross_value=safe_numeric(row_data.get("gross_value")),
+                    commission_value=safe_numeric(row_data.get("commission_value")),
+                    net_value=safe_numeric(row_data.get("net_value")),
+                    quantity=safe_int(row_data.get("quantity"), 1),  # Default 1 se não existir
                     raw_data=raw_data_json,
                 )
             )
 
+        # bulk_create faz commit, então o dataset também será commitado
         self.row_repo.bulk_create(dataset_rows)
-        cache_delete_prefix(f"dataset_rows:{user_id}:")
+        # Refresh dataset para garantir que uploaded_at esteja disponível após commit
+        # (uploaded_at é gerado pelo banco com server_default=func.now())
+        self.dataset_repo.db.refresh(dataset)
+        # Cache removido - frontend gerencia via localStorage
         return dataset
 
     def list_latest_rows(
@@ -98,10 +130,7 @@ class DatasetService:
         limit: Optional[int],
         offset: int,
     ):
-        cache_key = f"dataset_rows:{user_id}:latest:{start_date}:{end_date}:{include_raw_data}:{limit}:{offset}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return JSONResponse(content=cached)
+        # Cache removido - frontend gerencia via localStorage
         latest = self.dataset_repo.get_latest_by_user(user_id)
         if not latest:
             return []
@@ -109,8 +138,7 @@ class DatasetService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         rows = self.row_repo.list_by_dataset(latest.id, start_date, end_date, limit, offset)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
-        cache_set(cache_key, payload)
-        return JSONResponse(content=payload)
+        return payload
 
     def list_all_rows(
         self,
@@ -121,16 +149,12 @@ class DatasetService:
         limit: Optional[int],
         offset: int,
     ):
-        cache_key = f"dataset_rows:{user_id}:all:{start_date}:{end_date}:{include_raw_data}:{limit}:{offset}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return JSONResponse(content=cached)
+        # Cache removido - frontend gerencia via localStorage
         if start_date and end_date and start_date > end_date:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         rows = self.row_repo.list_by_user(user_id, start_date, end_date, limit, offset)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
-        cache_set(cache_key, payload)
-        return JSONResponse(content=payload)
+        return payload
 
     def list_datasets(self, user_id: int):
         return self.dataset_repo.list_by_user(user_id)
@@ -152,26 +176,26 @@ class DatasetService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         if (end_date - start_date).days > 90:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="O intervalo máximo permitido é de 90 dias.")
-        cache_key = f"dataset_rows:dataset:{dataset_id}:{start_date}:{end_date}:{include_raw_data}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return JSONResponse(content=cached)
+        # Cache removido - frontend gerencia via localStorage
         rows = self.row_repo.list_by_dataset(dataset_id, start_date, end_date, None, 0)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
-        cache_set(cache_key, payload)
-        return JSONResponse(content=payload)
+        return payload
 
     def serialize_row(self, row: DatasetRow, include_raw_data: bool = True) -> dict:
         raw_data = row.raw_data if include_raw_data else None
         if include_raw_data and isinstance(raw_data, dict):
             raw_data = self._compact_raw_data(raw_data)
+        # Converter time para string ISO ou None para evitar problemas de validação do Pydantic
+        time_str = None
+        if row.time is not None:
+            time_str = row.time.isoformat()
         return {
             "id": row.id,
             "dataset_id": row.dataset_id,
             "user_id": row.user_id,
-            "date": serialize_value(row.date),
-            "transaction_date": serialize_value(row.transaction_date),
-            "time": serialize_value(row.time),
+            "date": row.date,  # Manter como date object - Pydantic aceita
+            "transaction_date": row.transaction_date if row.transaction_date else None,
+            "time": time_str,  # Converter para string ISO ou None
             "product": row.product,
             "product_name": row.product_name,
             "platform": row.platform,
@@ -254,7 +278,7 @@ class DatasetService:
             db_session.commit()
             processed += len(batch)
 
-        cache_delete_prefix(f"dataset_rows:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
         return {
             "updated": updated,
             "dataset_id": latest.id,

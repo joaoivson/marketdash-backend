@@ -40,12 +40,15 @@ async def startup_event():
         raise
 
 # CORS middleware (using settings)
+# max_age=3600 cacheia respostas de preflight por 1 hora, reduzindo chamadas duplicadas
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight por 1 hora
 )
 
 # GZip middleware for faster large responses

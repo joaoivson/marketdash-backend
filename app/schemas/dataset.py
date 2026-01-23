@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, date, time
 from typing import Optional, Any
 
@@ -22,7 +22,7 @@ class DatasetResponse(DatasetBase):
 
 class DatasetRowBase(BaseModel):
     date: date
-    time: Optional[time] = None
+    time: Optional[str] = None  # Aceita string ISO format (HH:MM:SS) ou None
     transaction_date: Optional[date] = None
     product: str
     product_name: Optional[str] = None
@@ -54,3 +54,9 @@ class DatasetRowResponse(DatasetRowBase):
     class Config:
         from_attributes = True
 
+
+class AdSpendResponse(BaseModel):
+    updated: int = Field(..., description="Número de linhas atualizadas")
+    dataset_id: int = Field(..., description="ID do dataset atualizado")
+    sub_id1: Optional[str] = Field(None, description="Sub_id1 usado para filtrar (se aplicável)")
+    amount: float = Field(..., description="Valor total aplicado em anúncios")

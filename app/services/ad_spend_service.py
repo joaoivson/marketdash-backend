@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import HTTPException, status
 
 from app.models.ad_spend import AdSpend
-from app.core.cache import cache_delete_prefix, cache_get, cache_set
+# Cache removido - agora é gerenciado pelo frontend via localStorage
 from app.repositories.ad_spend_repository import AdSpendRepository
 
 
@@ -24,7 +24,7 @@ class AdSpendService:
         sub_id_val = None if sub_id in ["", "__all__"] else sub_id
         ad_spend = AdSpend(user_id=user_id, date=date, sub_id=sub_id_val, amount=amount)
         created = self.repo.create(ad_spend)
-        cache_delete_prefix(f"ad_spends:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
         return created
 
     def bulk_create(self, user_id: int, items) -> List[AdSpend]:
@@ -37,7 +37,7 @@ class AdSpendService:
                 AdSpend(user_id=user_id, date=item.date, sub_id=sub_id_val, amount=item.amount)
             )
         created = self.repo.bulk_create(ad_spends)
-        cache_delete_prefix(f"ad_spends:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
         return created
 
     def list(
@@ -48,13 +48,9 @@ class AdSpendService:
         limit: Optional[int],
         offset: int,
     ) -> List[AdSpend]:
-        cache_key = f"ad_spends:{user_id}:{start_date}:{end_date}:{limit}:{offset}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
+        # Cache removido - frontend gerencia via localStorage
         data = self.repo.list_by_user(user_id, start_date, end_date, limit, offset)
         payload = [self._serialize(item) for item in data]
-        cache_set(cache_key, payload)
         return payload
 
     def update(self, user_id: int, ad_spend_id: int, payload) -> AdSpend:
@@ -69,7 +65,7 @@ class AdSpendService:
             ad_spend.sub_id = None if payload.sub_id in ["", "__all__"] else payload.sub_id
         self.repo.db.commit()
         self.repo.db.refresh(ad_spend)
-        cache_delete_prefix(f"ad_spends:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
         return ad_spend
 
     def delete(self, user_id: int, ad_spend_id: int) -> None:
@@ -77,4 +73,4 @@ class AdSpendService:
         if not ad_spend:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado")
         self.repo.delete(ad_spend)
-        cache_delete_prefix(f"ad_spends:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
