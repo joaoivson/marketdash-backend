@@ -41,9 +41,10 @@ async def startup_event():
 
 # CORS middleware (using settings)
 # max_age=3600 cacheia respostas de preflight por 1 hora, reduzindo chamadas duplicadas
+# Usa get_cors_origins() para suportar FORCE_HTTP_FALLBACK em emergências
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
