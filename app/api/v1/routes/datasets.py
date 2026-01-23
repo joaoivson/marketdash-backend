@@ -10,7 +10,7 @@ from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.dataset import DatasetResponse, DatasetRowResponse
+from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse
 from app.services.dataset_service import DatasetService
 
 router = APIRouter(tags=["datasets"])
@@ -41,7 +41,7 @@ async def upload_csv(
     return service.upload_csv(file_content, file.filename, user.id)
 
 
-@router.post("/latest/ad_spend")
+@router.post("/latest/ad_spend", response_model=AdSpendResponse)
 def set_ad_spend(
     payload: AdSpendPayload,
     user_id: int | None = Query(None),

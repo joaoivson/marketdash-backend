@@ -54,3 +54,9 @@ class DatasetRowResponse(DatasetRowBase):
     class Config:
         from_attributes = True
 
+
+class AdSpendResponse(BaseModel):
+    updated: int = Field(..., description="Número de linhas atualizadas")
+    dataset_id: int = Field(..., description="ID do dataset atualizado")
+    sub_id1: Optional[str] = Field(None, description="Sub_id1 usado para filtrar (se aplicável)")
+    amount: float = Field(..., description="Valor total aplicado em anúncios")
