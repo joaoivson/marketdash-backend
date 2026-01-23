@@ -12,7 +12,7 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.services.csv_service import CSVService
 from app.utils.serialization import normalize_raw_data, serialize_value, clean_number
-from app.core.cache import cache_get, cache_set, cache_delete_prefix
+# Cache removido - agora é gerenciado pelo frontend via localStorage
 
 
 class DatasetService:
@@ -89,7 +89,7 @@ class DatasetService:
         # (uploaded_at é gerado pelo banco com server_default=func.now())
         if hasattr(self.dataset_repo, 'db'):
             self.dataset_repo.db.refresh(dataset)
-        cache_delete_prefix(f"dataset_rows:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
         return dataset
 
     def list_latest_rows(
@@ -101,10 +101,7 @@ class DatasetService:
         limit: Optional[int],
         offset: int,
     ):
-        cache_key = f"dataset_rows:{user_id}:latest:{start_date}:{end_date}:{include_raw_data}:{limit}:{offset}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
+        # Cache removido - frontend gerencia via localStorage
         latest = self.dataset_repo.get_latest_by_user(user_id)
         if not latest:
             return []
@@ -112,7 +109,6 @@ class DatasetService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         rows = self.row_repo.list_by_dataset(latest.id, start_date, end_date, limit, offset)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
-        cache_set(cache_key, payload)
         return payload
 
     def list_all_rows(
@@ -124,15 +120,11 @@ class DatasetService:
         limit: Optional[int],
         offset: int,
     ):
-        cache_key = f"dataset_rows:{user_id}:all:{start_date}:{end_date}:{include_raw_data}:{limit}:{offset}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
+        # Cache removido - frontend gerencia via localStorage
         if start_date and end_date and start_date > end_date:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         rows = self.row_repo.list_by_user(user_id, start_date, end_date, limit, offset)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
-        cache_set(cache_key, payload)
         return payload
 
     def list_datasets(self, user_id: int):
@@ -155,13 +147,9 @@ class DatasetService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Data inicial não pode ser maior que a data final.")
         if (end_date - start_date).days > 90:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="O intervalo máximo permitido é de 90 dias.")
-        cache_key = f"dataset_rows:dataset:{dataset_id}:{start_date}:{end_date}:{include_raw_data}"
-        cached = cache_get(cache_key)
-        if cached is not None:
-            return cached
+        # Cache removido - frontend gerencia via localStorage
         rows = self.row_repo.list_by_dataset(dataset_id, start_date, end_date, None, 0)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
-        cache_set(cache_key, payload)
         return payload
 
     def serialize_row(self, row: DatasetRow, include_raw_data: bool = True) -> dict:
@@ -258,7 +246,7 @@ class DatasetService:
             db_session.commit()
             processed += len(batch)
 
-        cache_delete_prefix(f"dataset_rows:{user_id}:")
+        # Cache removido - frontend gerencia via localStorage
         return {
             "updated": updated,
             "dataset_id": latest.id,
