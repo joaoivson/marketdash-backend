@@ -11,7 +11,44 @@ class DatasetRowRepository:
         self.db = db
 
     def bulk_create(self, rows: Iterable[DatasetRow]) -> None:
-        self.db.add_all(list(rows))
+        """
+        Bulk insert usando bulk_insert_mappings para melhor controle de tipos e performance.
+        """
+        rows_list = list(rows)
+        if not rows_list:
+            return
+        
+        # Converter objetos DatasetRow para dicionários com apenas os campos necessários
+        # Isso garante que os tipos sejam corretos e a ordem seja respeitada
+        mappings = []
+        for row in rows_list:
+            mapping = {
+                'dataset_id': row.dataset_id,
+                'user_id': row.user_id,
+                'date': row.date,
+                'transaction_date': row.transaction_date,
+                'time': row.time,
+                'product': row.product,
+                'product_name': row.product_name,
+                'platform': row.platform,
+                'status': row.status,
+                'category': row.category,
+                'sub_id1': row.sub_id1,  # String - garantir que não seja convertido
+                'mes_ano': row.mes_ano,
+                'raw_data': row.raw_data,
+                'revenue': row.revenue,
+                'cost': row.cost,
+                'commission': row.commission,
+                'profit': row.profit,
+                'gross_value': row.gross_value,
+                'commission_value': row.commission_value,
+                'net_value': row.net_value,
+                'quantity': row.quantity,
+            }
+            mappings.append(mapping)
+        
+        # Usar bulk_insert_mappings para inserção em lote com controle explícito de tipos
+        self.db.bulk_insert_mappings(DatasetRow, mappings)
         self.db.commit()
 
     def list_by_dataset(
