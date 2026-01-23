@@ -63,8 +63,9 @@ class AuthService:
                     )
 
         access_token_expires = timedelta(hours=settings.JWT_EXPIRATION_HOURS)
+        # JWT requer que 'sub' seja uma string, não um número
         access_token = create_access_token(
-            data={"sub": user.id},
+            data={"sub": str(user.id)},
             expires_delta=access_token_expires,
         )
         return {"access_token": access_token, "token_type": "bearer", "user": user}
