@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Por padrão, apenas HTTPS é permitido em produção/homologação
     # HTTP é permitido apenas para desenvolvimento local
     # Para emergências, use FORCE_HTTP_FALLBACK=true (não recomendado)
-    FORCE_HTTP_FALLBACK: bool = False
+    FORCE_HTTP_FALLBACK: bool = True
     
     CORS_ORIGINS: list[str] = [
         # Development (HTTP permitido apenas em localhost)
