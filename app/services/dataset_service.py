@@ -65,6 +65,30 @@ class DatasetService:
         for row_data in rows_data:
             raw_data = row_data.get("raw_data") if isinstance(row_data, dict) else None
             raw_data_json = normalize_raw_data(raw_data) if raw_data is not None else raw_data
+            
+            # Garantir que campos numéricos sejam None ou numéricos válidos
+            def safe_numeric(value, default=None):
+                if value is None or pd.isna(value):
+                    return default
+                try:
+                    if isinstance(value, (int, float)):
+                        return float(value) if value is not None else default
+                    # Tentar converter string para número
+                    if isinstance(value, str):
+                        cleaned = value.replace("R$", "").replace(" ", "").replace(",", ".")
+                        return float(cleaned) if cleaned else default
+                    return float(value) if value is not None else default
+                except (ValueError, TypeError):
+                    return default
+            
+            def safe_int(value, default=None):
+                if value is None or pd.isna(value):
+                    return default
+                try:
+                    return int(float(value)) if value is not None else default
+                except (ValueError, TypeError):
+                    return default
+            
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
@@ -72,14 +96,19 @@ class DatasetService:
                     date=row_data["date"],
                     time=row_data.get("time"),
                     product=row_data["product"],
-                    revenue=row_data["revenue"],
-                    cost=row_data["cost"],
-                    commission=row_data["commission"],
-                    profit=row_data["profit"],
+                    revenue=safe_numeric(row_data.get("revenue"), 0),
+                    cost=safe_numeric(row_data.get("cost"), 0),
+                    commission=safe_numeric(row_data.get("commission"), 0),
+                    profit=safe_numeric(row_data.get("profit"), 0),
                     status=row_data.get("status"),
                     category=row_data.get("category"),
-                    sub_id1=row_data.get("sub_id1"),
+                    sub_id1=row_data.get("sub_id1"),  # String - manter como está
                     mes_ano=row_data.get("mes_ano"),
+                    # Campos numéricos opcionais - garantir None se não existirem
+                    gross_value=safe_numeric(row_data.get("gross_value")),
+                    commission_value=safe_numeric(row_data.get("commission_value")),
+                    net_value=safe_numeric(row_data.get("net_value")),
+                    quantity=safe_int(row_data.get("quantity"), 1),  # Default 1 se não existir
                     raw_data=raw_data_json,
                 )
             )
