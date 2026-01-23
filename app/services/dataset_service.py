@@ -156,14 +156,17 @@ class DatasetService:
         raw_data = row.raw_data if include_raw_data else None
         if include_raw_data and isinstance(raw_data, dict):
             raw_data = self._compact_raw_data(raw_data)
-        # Manter date e time como objetos nativos para o Pydantic validar corretamente
+        # Converter time para string ISO ou None para evitar problemas de validação do Pydantic
+        time_str = None
+        if row.time is not None:
+            time_str = row.time.isoformat()
         return {
             "id": row.id,
             "dataset_id": row.dataset_id,
             "user_id": row.user_id,
-            "date": row.date,  # Manter como date object, não serializar
+            "date": row.date,  # Manter como date object - Pydantic aceita
             "transaction_date": row.transaction_date if row.transaction_date else None,
-            "time": row.time,  # Manter como time object, não serializar
+            "time": time_str,  # Converter para string ISO ou None
             "product": row.product,
             "product_name": row.product_name,
             "platform": row.platform,

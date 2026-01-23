@@ -22,7 +22,7 @@ class DatasetResponse(DatasetBase):
 
 class DatasetRowBase(BaseModel):
     date: date
-    time: Optional[time] = None
+    time: Optional[str] = None  # Aceita string ISO format (HH:MM:SS) ou None
     transaction_date: Optional[date] = None
     product: str
     product_name: Optional[str] = None
