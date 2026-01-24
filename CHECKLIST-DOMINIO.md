@@ -86,33 +86,96 @@ Descrição: api.marketdash.hml.com.br (backend homologação)
 
 ## ✅ Verificação
 
-Após atualizar tudo, verifique:
+### 1. Verificar DNS
+
+```bash
+# Verificar resolução DNS
+dig api.marketdash.com.br
+dig marketdash.com.br
+dig api.hml.marketdash.com.br
+dig marketdash.hml.com.br
+
+# Verificar se apontam para IP correto da VPS
+dig +short api.marketdash.com.br
+```
+
+### 2. Verificar SSL/HTTPS
 
 ```bash
 # Backend Produção
-curl https://api.marketdash.com.br/health
+curl -I https://api.marketdash.com.br/health
+# Deve retornar: HTTP/2 200 ou HTTP/1.1 200 OK
 
 # Backend Homologação
-curl https://api.marketdash.hml.com.br/health
+curl -I https://api.hml.marketdash.com.br/health
 
 # Frontend Produção
-curl https://marketdash.com.br
+curl -I https://marketdash.com.br
+# Deve retornar: HTTP/2 200 ou HTTP/1.1 200 OK
 
 # Frontend Homologação
-curl https://marketdash.hml.com.br
+curl -I https://marketdash.hml.com.br
+
+# Verificar detalhes do certificado
+echo | openssl s_client -connect api.marketdash.com.br:443 -servername api.marketdash.com.br 2>/dev/null | openssl x509 -noout -dates
 ```
+
+### 3. Verificar Redirecionamento HTTP → HTTPS
+
+```bash
+# Deve redirecionar para HTTPS
+curl -I http://api.marketdash.com.br/health
+# Deve retornar: HTTP/1.1 301 Moved Permanently ou 308 Permanent Redirect
+# Location header deve apontar para https://
+```
+
+### 4. Verificar no Coolify Dashboard
+
+- [ ] Acessar Coolify Dashboard
+- [ ] Para cada aplicação (Backend/Frontend, Produção/Homologação):
+  - [ ] Ir em **Settings** → **Domains**
+  - [ ] Verificar se domínio está configurado
+  - [ ] Verificar se **SSL está habilitado** (toggle ON)
+  - [ ] Verificar status do certificado (Válido, não expirado)
+  - [ ] Verificar logs se houver erros de SSL
 
 ---
 
 ## 📋 Checklist Completo
 
+### Código
 - [x] Arquivos do backend atualizados
-- [ ] Site URL atualizado no Supabase
-- [ ] Redirect URLs atualizados no Supabase
-- [ ] DNS configurado na Hostinger
+- [x] CORS configurado para HTTPS apenas (exceto localhost)
+- [x] Fallbacks HTTP removidos do código
+
+### Infraestrutura
+- [ ] DNS configurado na Hostinger (registros A)
+- [ ] DNS propagado (verificar com `dig`)
 - [ ] Domínios configurados no Coolify
-- [ ] SSL gerado automaticamente
-- [ ] Testes de acesso funcionando
+- [ ] **SSL habilitado no Coolify para todos os domínios** ⚠️ **CRÍTICO**
+- [ ] Certificados SSL gerados com sucesso
+- [ ] Status dos certificados: Válido (não expirado)
+
+### Configurações Externas
+- [ ] Site URL atualizado no Supabase
+- [ ] Redirect URLs atualizados no Supabase (apenas HTTPS)
+
+### Testes
+- [ ] HTTPS funciona para backend produção
+- [ ] HTTPS funciona para frontend produção
+- [ ] HTTPS funciona para backend homologação
+- [ ] HTTPS funciona para frontend homologação
+- [ ] Redirecionamento HTTP → HTTPS funciona
+- [ ] Certificados são válidos (não auto-assinados)
+- [ ] Certificados não estão expirados
+
+### Troubleshooting
+
+Se SSL não estiver funcionando:
+1. Consulte [TROUBLESHOOTING-SSL.md](./TROUBLESHOOTING-SSL.md) para diagnóstico completo
+2. Verifique logs no Coolify Dashboard
+3. Verifique se DNS está propagado corretamente
+4. Verifique se porta 80 e 443 estão abertas no firewall
 
 ---
 

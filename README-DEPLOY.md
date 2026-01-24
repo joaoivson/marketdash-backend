@@ -39,7 +39,9 @@ ENVIRONMENT=production
 3. **Port**: `8000`
 
 4. **Domain**: `api.marketdash.com.br` (produção)
-   - SSL: Enabled (Let's Encrypt)
+   - **SSL: Enabled (Let's Encrypt)** - ⚠️ **IMPORTANTE**: Certifique-se de que SSL está habilitado
+   - Coolify gerencia certificados SSL automaticamente via Let's Encrypt
+   - Certificados são renovados automaticamente a cada 90 dias
 
 ### Repositórios
 
@@ -92,9 +94,66 @@ curl https://api.marketdash.com.br/health
 # Deve retornar: {"status": "healthy"}
 ```
 
+### Configuração de SSL/HTTPS
+
+#### Habilitar SSL no Coolify
+
+1. **Acesse o Coolify Dashboard**
+2. **Para cada aplicação (Backend e Frontend, Produção e Homologação)**:
+   - Vá em **Settings** → **Domains**
+   - Adicione o domínio se ainda não estiver configurado
+   - **Ative o toggle de SSL** (Let's Encrypt)
+   - Aguarde alguns minutos para geração do certificado
+
+3. **Domínios a configurar**:
+   - **Backend Produção**: `api.marketdash.com.br`
+   - **Frontend Produção**: `marketdash.com.br`
+   - **Backend Homologação**: `api.hml.marketdash.com.br` (ou variante)
+   - **Frontend Homologação**: `marketdash.hml.com.br` ou `hml.marketdash.com.br`
+
+4. **Verificar SSL**:
+   ```bash
+   # Testar Backend Produção
+   curl -I https://api.marketdash.com.br/health
+   
+   # Testar Frontend Produção
+   curl -I https://marketdash.com.br
+   ```
+
+5. **Se SSL não funcionar**:
+   - Verifique logs no Coolify
+   - Verifique se DNS está propagado corretamente
+   - Consulte [TROUBLESHOOTING-SSL.md](./TROUBLESHOOTING-SSL.md) para diagnóstico completo
+
+#### Mecanismo de Rollback de Emergência
+
+Em caso de problemas críticos com SSL, é possível usar HTTP temporariamente:
+
+**Backend** (variável de ambiente no Coolify):
+```env
+FORCE_HTTP_FALLBACK=true
+```
+
+**Frontend** (variável de ambiente no build):
+```env
+VITE_FORCE_HTTP_FALLBACK=true
+```
+
+⚠️ **ATENÇÃO**: 
+- Use apenas em emergências críticas
+- Remova assim que SSL for corrigido
+- Logs mostrarão warnings quando ativo
+- Não é recomendado para produção
+
 ### Documentação da API
 
 Após o deploy, a documentação interativa estará disponível em:
 - Swagger UI: `https://api.marketdash.com.br/docs`
 - ReDoc: `https://api.marketdash.com.br/redoc`
+
+### Troubleshooting
+
+- **Problemas com SSL/HTTPS**: Consulte [TROUBLESHOOTING-SSL.md](./TROUBLESHOOTING-SSL.md)
+- **Problemas com deploy**: Verifique logs no Coolify Dashboard
+- **Problemas com banco de dados**: Verifique variável `DATABASE_URL` e conexão com Supabase
 
