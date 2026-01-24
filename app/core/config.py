@@ -37,22 +37,28 @@ class Settings(BaseSettings):
     # Por padrão, apenas HTTPS é permitido em produção/homologação
     # HTTP é permitido apenas para desenvolvimento local
     # Para emergências, use FORCE_HTTP_FALLBACK=true (não recomendado)
-    FORCE_HTTP_FALLBACK: bool = True
+    FORCE_HTTP_FALLBACK: bool = False
     
     CORS_ORIGINS: list[str] = [
         # Development (HTTP permitido apenas em localhost)
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8080",
-        # Production (apenas HTTPS)
+        # Production (HTTPS)
         "https://marketdash.com.br",
         "https://api.marketdash.com.br",
-        # Homologation (apenas HTTPS)
+        "http://marketdash.com.br",
+        "http://api.marketdash.com.br",
+        # Homologation (HTTPS + HTTP para redirect/SSL temporário)
         "https://hml.marketdash.com.br",
         "https://api.hml.marketdash.com.br",
+        "http://hml.marketdash.com.br",
+        "http://api.hml.marketdash.com.br",
         # Alternativas de domínio de homologação
         "https://marketdash.hml.com.br",
         "https://api.marketdash.hml.com.br",
+        "http://marketdash.hml.com.br",
+        "http://api.marketdash.hml.com.br",
     ]
     
     def get_cors_origins(self) -> list[str]:
