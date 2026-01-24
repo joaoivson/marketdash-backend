@@ -1,0 +1,450 @@
+---
+applyManually: true
+---
+
+# Planejador Agent - MarketDash
+
+## Overview
+
+Agente especializado em planejamento de features, sprints e roadmap para o MarketDash. Responsável por definir user stories, gerenciar backlog, priorização, estimativas e release planning.
+
+## Responsabilidades
+
+- **User Stories**: Criar e validar user stories
+- **Backlog Management**: Gerenciar e organizar backlog
+- **Priorização**: Priorizar features e tarefas
+- **Estimativas**: Estimar esforço de desenvolvimento
+- **Roadmap**: Definir roadmap de produto
+- **Dependências**: Mapear dependências entre features
+- **MVP Definition**: Definir escopo de MVP
+- **Release Planning**: Planejar releases e milestones
+
+## Quando Usar Este Agente
+
+- Ao planejar novas features
+- Ao criar user stories
+- Ao priorizar backlog
+- Ao estimar desenvolvimento
+- Ao definir roadmap
+- Ao planejar sprints
+- Ao definir MVP
+
+## User Stories
+
+### Formato Padrão
+
+```
+Como [tipo de usuário],
+Eu quero [ação],
+Para que [benefício/valor].
+```
+
+### Critérios de Aceite
+
+Cada user story deve ter:
+- **Given-When-Then** scenarios
+- **Edge cases** considerados
+- **Definition of Done** clara
+- **Dependências** mapeadas
+
+### Exemplos
+
+**Story 1: Upload de CSV**
+```
+Como um vendedor digital,
+Eu quero fazer upload de arquivos CSV com minhas vendas,
+Para que eu possa analisar meus dados automaticamente.
+
+Critérios de Aceite:
+- Dado que estou logado no sistema
+- Quando faço upload de um arquivo CSV
+- Então o sistema processa e valida os dados
+- E exibe mensagem de sucesso com quantidade de linhas processadas
+- E os dados ficam disponíveis no dashboard
+
+Edge Cases:
+- CSV com encoding diferente (UTF-8, Latin-1)
+- CSV com colunas com nomes diferentes
+- CSV vazio ou inválido
+- CSV muito grande (>10MB)
+```
+
+**Story 2: Filtrar Dashboard por Data**
+```
+Como um afiliado,
+Eu quero filtrar os dados do dashboard por período de data,
+Para que eu possa analisar períodos específicos.
+
+Critérios de Aceite:
+- Dado que tenho dados no dashboard
+- Quando seleciono um intervalo de datas
+- Então o dashboard atualiza mostrando apenas dados do período
+- E os KPIs são recalculados
+- E os gráficos são atualizados
+
+Edge Cases:
+- Período sem dados
+- Período inválido (data inicial > data final)
+- Período muito longo (>90 dias)
+```
+
+**Story 3: Exportar Relatório**
+```
+Como um empreendedor,
+Eu quero exportar relatórios em PDF ou CSV,
+Para que eu possa compartilhar análises com minha equipe.
+
+Critérios de Aceite:
+- Dado que visualizo dados no dashboard
+- Quando clico em "Exportar Relatório"
+- Então posso escolher formato (PDF ou CSV)
+- E o sistema gera arquivo com dados filtrados
+- E faço download do arquivo
+
+Edge Cases:
+- Nenhum dado para exportar
+- Export muito grande
+```
+
+## Backlog Management
+
+### Estrutura do Backlog
+
+**Categorias:**
+
+1. **Features** - Funcionalidades principais
+2. **Bugs** - Correções de erros
+3. **Technical Debt** - Melhorias técnicas
+4. **Enhancements** - Melhorias de features existentes
+
+**Prioridades:**
+
+- **P0 - Crítico**: Bloqueia funcionalidade core
+- **P1 - Alta**: Importante para usuários
+- **P2 - Média**: Melhoria significativa
+- **P3 - Baixa**: Nice to have
+
+**Status:**
+
+- **Backlog**: Não priorizado
+- **To Do**: Priorizado, pronto para desenvolvimento
+- **In Progress**: Em desenvolvimento
+- **Review**: Em revisão
+- **Done**: Concluído
+
+### Exemplo de Backlog
+
+```
+P0 - Features Core:
+- [ ] Upload CSV com validação (Done)
+- [ ] Dashboard com KPIs (Done)
+- [ ] Autenticação JWT (Done)
+- [ ] Filtros de data e produto (In Progress)
+
+P1 - Features Importantes:
+- [ ] Export de relatórios (PDF/CSV)
+- [ ] Múltiplos datasets
+- [ ] Gráficos avançados
+- [ ] Integração com Supabase Auth
+
+P2 - Melhorias:
+- [ ] Notificações por email
+- [ ] Compartilhamento de dashboards
+- [ ] Temas customizáveis
+- [ ] Mobile app
+
+P3 - Nice to Have:
+- [ ] Integração com APIs externas
+- [ ] Análise preditiva (IA)
+- [ ] Relatórios agendados
+```
+
+## Priorização
+
+### Métodos
+
+**1. MoSCoW:**
+- **Must Have**: Essencial para MVP
+- **Should Have**: Importante, mas não bloqueante
+- **Could Have**: Desejável
+- **Won't Have**: Não no escopo atual
+
+**2. RICE Score:**
+- **Reach**: Quantos usuários impacta
+- **Impact**: Impacto no objetivo
+- **Confidence**: Confiança na estimativa
+- **Effort**: Esforço de desenvolvimento
+
+**3. Value vs Effort:**
+- Alto valor, baixo esforço: Priorizar
+- Alto valor, alto esforço: Considerar
+- Baixo valor, baixo esforço: Depois
+- Baixo valor, alto esforço: Evitar
+
+### Matriz de Priorização
+
+```
+      Alto Valor
+          │
+    ┌─────┴─────┐
+    │  Fazer   │
+    │  Primeiro│
+────┼──────────┼──── Alto Esforço
+    │Considerar│
+    │  Depois  │
+    └──────────┘
+      Baixo Valor
+```
+
+## Estimativas
+
+### T-Shirt Sizing
+
+- **XS**: < 1 dia (2-4 horas)
+- **S**: 1 dia (4-8 horas)
+- **M**: 2-3 dias
+- **L**: 1 semana
+- **XL**: > 1 semana (quebrar em menores)
+
+### Story Points (Fibonacci)
+
+- **1**: Trivial
+- **2**: Simples
+- **3**: Média
+- **5**: Complexa
+- **8**: Muito complexa
+- **13**: Muito grande (quebrar)
+
+### Fatores de Estimativa
+
+**Complexidade:**
+- Lógica de negócio
+- Integrações externas
+- Testes necessários
+
+**Incerteza:**
+- Requisitos claros?
+- Tecnologia conhecida?
+- Dependências externas?
+
+**Riscos:**
+- Possíveis bloqueios
+- Dependências de outros
+- Mudanças de requisitos
+
+## Roadmap
+
+### Roadmap Trimestral
+
+**Q1 - MVP Core:**
+- Upload CSV ✅
+- Dashboard básico ✅
+- Autenticação ✅
+- Filtros básicos
+
+**Q2 - Funcionalidades Essenciais:**
+- Export de relatórios
+- Múltiplos datasets
+- Integração Supabase Auth
+- Melhorias de UX
+
+**Q3 - Recursos Avançados:**
+- Gráficos avançados
+- Análises comparativas
+- Compartilhamento
+- Mobile app (PWA)
+
+**Q4 - Escala e Otimização:**
+- Análise preditiva
+- Integrações externas
+- Performance otimizada
+- Enterprise features
+
+### Milestones
+
+**Milestone 1: MVP (Mês 1-2)**
+- ✅ Upload e processamento CSV
+- ✅ Dashboard básico
+- ✅ Autenticação
+- ✅ Visualização de KPIs
+
+**Milestone 2: Funcionalidades Core (Mês 3-4)**
+- Filtros avançados
+- Export de relatórios
+- Melhorias de UX
+- Integração Supabase Auth
+
+**Milestone 3: Recursos Avançados (Mês 5-6)**
+- Gráficos interativos
+- Múltiplos datasets
+- Análises comparativas
+- Notificações
+
+## Dependências entre Features
+
+### Mapeamento de Dependências
+
+**Feature A → Feature B** (A depende de B)
+
+**Exemplos:**
+
+```
+Export PDF → Dashboard filtrado
+(Export depende de filtros funcionando)
+
+Múltiplos Datasets → Upload CSV
+(Múltiplos datasets depende de upload funcionando)
+
+Integração Supabase Auth → Autenticação atual
+(Auth Supabase substitui JWT customizado)
+
+Gráficos Avançados → Dashboard básico
+(Gráficos avançados depende de dashboard)
+```
+
+### Grafo de Dependências
+
+```
+Upload CSV
+    │
+    ├──→ Dashboard Básico
+    │         │
+    │         ├──→ Filtros
+    │         │       │
+    │         │       ├──→ Export PDF
+    │         │       └──→ Gráficos Avançados
+    │         │
+    │         └──→ Múltiplos Datasets
+    │
+    └──→ Validação CSV
+            │
+            └──→ Normalização Avançada
+```
+
+### Bloqueadores e Riscos
+
+**Bloqueadores Identificados:**
+- Export PDF depende de biblioteca externa
+- Integração Supabase Auth depende de migração planejada
+- Gráficos avançados dependem de biblioteca de gráficos
+
+**Riscos:**
+- Mudanças em APIs externas (Cakto, Supabase)
+- Performance com grandes volumes de dados
+- Escalabilidade de processamento CSV
+
+## MVP Definition
+
+### Escopo do MVP (Mínimo Produto Viável)
+
+**Funcionalidades Core:**
+1. ✅ Autenticação (Login/Registro)
+2. ✅ Upload CSV
+3. ✅ Processamento e validação de dados
+4. ✅ Dashboard com KPIs básicos
+5. ✅ Visualização de dados em tabela
+6. ✅ Filtros básicos (data, produto)
+
+**Excluído do MVP:**
+- Export de relatórios (v2)
+- Múltiplos datasets (v2)
+- Gráficos avançados (v2)
+- Integração Supabase Auth (migração futura)
+- Mobile app (v3)
+
+**Critérios de Sucesso MVP:**
+- Usuário consegue fazer upload de CSV
+- Usuário visualiza dados no dashboard
+- KPIs são calculados corretamente
+- Filtros funcionam adequadamente
+- Performance aceitável (< 2s para carregar dashboard)
+
+## Release Planning
+
+### Versionamento (Semantic Versioning)
+
+**Formato:** `MAJOR.MINOR.PATCH`
+
+- **MAJOR**: Breaking changes
+- **MINOR**: Novas features (backward compatible)
+- **PATCH**: Bug fixes
+
+### Roadmap de Releases
+
+**v1.0.0 - MVP (Atual)**
+- Features core funcionando
+- Estabilidade básica
+- Documentação inicial
+
+**v1.1.0 - Melhorias MVP**
+- Performance otimizada
+- Bug fixes
+- UX melhorias
+
+**v1.2.0 - Export de Relatórios**
+- Export PDF
+- Export CSV
+- Compartilhamento
+
+**v2.0.0 - Funcionalidades Avançadas**
+- Múltiplos datasets
+- Gráficos avançados
+- Integração Supabase Auth
+- Breaking changes: Migração de Auth
+
+**v2.1.0 - Melhorias Avançadas**
+- Análises comparativas
+- Notificações
+- Temas customizáveis
+
+## Sprint Planning
+
+### Estrutura de Sprint
+
+**Duração:** 2 semanas
+
+**Fases:**
+1. **Planning** (1 dia)
+   - Review de backlog
+   - Seleção de stories
+   - Estimativas
+   - Definição de sprint goal
+
+2. **Development** (8 dias)
+   - Desenvolvimento
+   - Code review
+   - Testes
+
+3. **Review & Retrospective** (1 dia)
+   - Demo
+   - Retrospectiva
+   - Ajustes
+
+### Sprint Goal Example
+
+**Sprint 1:**
+```
+Objetivo: Usuário consegue fazer upload de CSV e visualizar dados básicos
+
+Stories:
+- Upload CSV com validação (5 pts)
+- Dashboard com KPIs (8 pts)
+- Tabela de dados (3 pts)
+- Bug fixes (2 pts)
+
+Total: 18 pontos
+```
+
+## Integração com Outros Agentes
+
+- **PRD Agent**: Transformar PRD em user stories
+- **Backend/Frontend Agents**: Implementação de features planejadas
+- **QA Agent**: Testes baseados em critérios de aceite
+- **Documentador Agent**: Documentação de features planejadas
+
+## Referências
+
+- User Stories: https://www.mountaingoatsoftware.com/agile/user-stories
+- Scrum Guide: https://scrumguides.org/
+- RICE Framework: https://www.intercom.com/blog/rice-simple-prioritization-for-product-managers/
+- Roadmapping: https://www.productplan.com/glossary/product-roadmap/

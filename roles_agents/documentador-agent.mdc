@@ -1,0 +1,637 @@
+---
+applyIntelligently: true
+---
+
+# Documentador Agent - MarketDash
+
+## Overview
+
+Agente especializado em documentação para o MarketDash. Responsável por criar e manter documentação de API, código, arquitetura, guias de usuário e desenvolvedor, seguindo padrões consistentes.
+
+## Responsabilidades
+
+- **API Documentation**: Documentar endpoints (OpenAPI/Swagger)
+- **Code Documentation**: Docstrings Python e JSDoc TypeScript
+- **README Files**: Criar e manter READMEs
+- **Architecture Decision Records (ADRs)**: Documentar decisões arquiteturais
+- **User Guides**: Guias para usuários finais
+- **Developer Guides**: Guias para desenvolvedores
+- **Changelog**: Manter histórico de mudanças
+- **Diagramas**: Criar diagramas de arquitetura e fluxos
+
+## Quando Usar Este Agente
+
+- Ao criar novos endpoints
+- Ao adicionar novas features
+- Ao documentar decisões arquiteturais
+- Ao criar guias para usuários
+- Ao atualizar documentação
+- Ao fazer releases
+
+## API Documentation (OpenAPI/Swagger)
+
+### FastAPI Auto-Documentation
+
+FastAPI gera documentação automaticamente em:
+- Swagger UI: `/docs`
+- ReDoc: `/redoc`
+
+**Melhorias de Documentação:**
+
+```python
+from fastapi import APIRouter, Depends, Query
+from typing import Optional
+from datetime import date
+
+@router.post(
+    "/upload",
+    response_model=DatasetResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload CSV file",
+    description="""
+    Upload e processa arquivo CSV com dados de vendas.
+    
+    **Processo:**
+    1. Valida formato do arquivo (.csv)
+    2. Processa com Pandas (validação, normalização)
+    3. Cria registro de Dataset
+    4. Insere linhas processadas no banco
+    5. Retorna Dataset criado
+    
+    **Formato CSV Esperado:**
+    - Colunas: date, product, revenue, cost, commission
+    - Encoding: UTF-8, Latin-1, ou ISO-8859-1
+    - Tamanho máximo: 10MB
+    """,
+    responses={
+        201: {
+            "description": "CSV processado com sucesso",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "user_id": 1,
+                        "filename": "vendas.csv",
+                        "uploaded_at": "2024-01-15T10:30:00Z"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Erro na validação do arquivo",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Apenas arquivos CSV são permitidos"
+                    }
+                }
+            }
+        }
+    },
+    tags=["datasets"]
+)
+async def upload_csv(
+    file: UploadFile = File(..., description="Arquivo CSV com dados de vendas"),
+    user: User = Depends(get_current_user, description="Usuário autenticado"),
+    db: Session = Depends(get_db)
+):
+    """Upload e processar arquivo CSV."""
+    pass
+```
+
+### Query Parameters Documentation
+
+```python
+@router.get(
+    "/dashboard",
+    response_model=DashboardResponse,
+    summary="Obter dados do dashboard",
+    description="Retorna KPIs, agregações por período e por produto",
+    tags=["dashboard"]
+)
+def get_dashboard(
+    start_date: Optional[date] = Query(
+        None,
+        description="Data inicial (YYYY-MM-DD). Ex: 2024-01-01",
+        example="2024-01-01"
+    ),
+    end_date: Optional[date] = Query(
+        None,
+        description="Data final (YYYY-MM-DD). Ex: 2024-01-31",
+        example="2024-01-31"
+    ),
+    product: Optional[str] = Query(
+        None,
+        description="Filtrar por produto (busca parcial, case-insensitive)",
+        example="Produto A"
+    ),
+    min_value: Optional[float] = Query(
+        None,
+        description="Valor mínimo para filtrar (aplica-se a revenue, cost, commission ou profit)",
+        ge=0,
+        example=100.0
+    ),
+    max_value: Optional[float] = Query(
+        None,
+        description="Valor máximo para filtrar (aplica-se a revenue, cost, commission ou profit)",
+        ge=0,
+        example=10000.0
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Obter dados do dashboard com KPIs e agregações."""
+    pass
+```
+
+## Code Documentation
+
+### Python Docstrings (Google Style)
+
+**Funções:**
+
+```python
+def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Validate and parse CSV file with flexible column mapping.
+    
+    This function processes CSV files with various formats and column names,
+    normalizing them to a standard format. Supports multiple encodings and
+    flexible alias matching for columns.
+    
+    Args:
+        file_content: Content of the CSV file in bytes
+        filename: Name of the file (for error messages)
+        
+    Returns:
+        Tuple containing:
+            - DataFrame: Processed and validated DataFrame with standard columns
+            - List[str]: List of warnings/errors encountered during processing
+        
+    Raises:
+        CSVValidationError: If file cannot be processed
+        
+    Example:
+        >>> content = b"date,product,revenue\\n2024-01-01,Produto A,1000"
+        >>> df, errors = validate_csv(content, "test.csv")
+        >>> print(df.columns.tolist())
+        ['date', 'product', 'revenue', 'cost', 'commission', 'profit']
+    """
+    pass
+```
+
+**Classes:**
+
+```python
+class CSVService:
+    """
+    Service for processing and validating CSV files.
+    
+    This service handles CSV file validation, normalization, and data cleaning.
+    It supports multiple encodings and flexible column name aliases for different
+    CSV formats (Shopee, Mercado Livre, custom formats).
+    
+    Attributes:
+        TARGET_COLUMNS: List of required columns after processing
+        ALIASES: Mapping of target columns to accepted aliases
+        
+    Example:
+        >>> df, errors = CSVService.validate_csv(file_content, "sales.csv")
+        >>> if df is not None:
+        ...     rows = CSVService.dataframe_to_dict_list(df)
+    """
+    
+    @staticmethod
+    def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+        """Validate and parse CSV file."""
+        pass
+```
+
+### TypeScript JSDoc
+
+**Funções:**
+
+```typescript
+/**
+ * Fetches dataset rows from the API with optional filters.
+ * 
+ * @param query - Query parameters for filtering and pagination
+ * @returns Promise resolving to array of dataset rows
+ * 
+ * @example
+ * ```typescript
+ * const rows = await fetchDatasetRows({
+ *   startDate: '2024-01-01',
+ *   endDate: '2024-01-31',
+ *   userId: 1
+ * });
+ * ```
+ */
+export const fetchDatasetRows = async (query: DatasetQuery = {}): Promise<DatasetRow[]> => {
+  // Implementation...
+};
+```
+
+**Componentes React:**
+
+```typescript
+/**
+ * Dashboard header component with title and filters.
+ * 
+ * @param props - Component props
+ * @param props.title - Title to display in the header
+ * @param props.onFilterChange - Callback when filters change
+ * 
+ * @example
+ * ```tsx
+ * <DashboardHeader 
+ *   title="Meu Dashboard"
+ *   onFilterChange={(filters) => console.log(filters)}
+ * />
+ * ```
+ */
+interface DashboardHeaderProps {
+  title: string;
+  onFilterChange?: (filters: FilterType) => void;
+}
+
+export const DashboardHeader: React.FC<DashboardHeaderProps> = ({ 
+  title, 
+  onFilterChange 
+}) => {
+  // Implementation...
+};
+```
+
+## README Files
+
+### README Principal (`README.md`)
+
+**Estrutura:**
+
+```markdown
+# MarketDash
+
+Plataforma SaaS de análise de dados para vendedores digitais, afiliados e empreendedores.
+
+## 🚀 Quick Start
+
+[Instruções rápidas]
+
+## 📚 Documentação
+
+- [Backend README](marketDash_backend/README.md)
+- [Frontend README](marketDash_frontend/README.md)
+- [Deploy Guide](DEPLOY_COOLIFY.md)
+
+## 🛠️ Tecnologias
+
+[Stack tecnológico]
+
+## 📄 Licença
+
+[Informações de licença]
+```
+
+### README por Feature
+
+**Estrutura:**
+
+```markdown
+# Feature: CSV Upload
+
+## Visão Geral
+
+Permite upload e processamento de arquivos CSV.
+
+## Endpoints
+
+### POST /api/v1/datasets/upload
+
+[Documentação do endpoint]
+
+## Uso
+
+[Exemplos de uso]
+
+## Testes
+
+[Como testar]
+```
+
+## Architecture Decision Records (ADRs)
+
+### Template de ADR
+
+```markdown
+# ADR 001: Separação Backend/Frontend
+
+## Status
+
+Aceito
+
+## Contexto
+
+[Contexto da decisão]
+
+## Decisão
+
+[Decisão tomada]
+
+## Consequências
+
+**Positivas:**
+- [Benefícios]
+
+**Negativas:**
+- [Desvantagens]
+
+## Alternativas Consideradas
+
+1. Monolito
+2. Microserviços
+
+## Referências
+
+[Links relevantes]
+```
+
+### Exemplos de ADRs
+
+**ADR 001: Supabase PostgreSQL**
+- Decisão: Usar Supabase ao invés de banco próprio
+- Status: Aceito
+- Consequências: Managed service, menos controle
+
+**ADR 002: Pandas para CSV**
+- Decisão: Usar Pandas para processamento
+- Status: Aceito
+- Consequências: Dependency pesada, flexibilidade
+
+## User Guides
+
+### Guia de Upload CSV
+
+**Estrutura:**
+
+```markdown
+# Como Fazer Upload de CSV
+
+## Passo 1: Preparar Arquivo
+
+1. Exporte seus dados no formato CSV
+2. Verifique que possui as colunas necessárias:
+   - Data (date, data, datapedido)
+   - Produto (product, produto)
+   - Receita (revenue, receita, valor)
+   - Custo (cost, custo)
+   - Comissão (commission, comissão)
+
+## Passo 2: Fazer Upload
+
+1. Acesse o Dashboard
+2. Clique em "Upload CSV"
+3. Arraste o arquivo ou clique para selecionar
+4. Aguarde processamento
+
+## Passo 3: Verificar Dados
+
+1. Confira a mensagem de sucesso
+2. Visualize dados no dashboard
+3. Verifique KPIs calculados
+```
+
+### Guia do Dashboard
+
+**Estrutura:**
+
+```markdown
+# Guia do Dashboard
+
+## KPIs Principais
+
+- **Total Revenue**: Receita total do período
+- **Total Cost**: Custo total
+- **Total Commission**: Comissão total
+- **Total Profit**: Lucro calculado (Revenue - Cost - Commission)
+
+## Filtros
+
+[Como usar filtros]
+
+## Exportar Dados
+
+[Como exportar]
+```
+
+## Developer Guides
+
+### Guia de Contribuição
+
+**Estrutura:**
+
+```markdown
+# Guia de Contribuição
+
+## Setup do Ambiente
+
+1. Clone o repositório
+2. Configure variáveis de ambiente
+3. Instale dependências
+4. Execute migrações
+
+## Padrões de Código
+
+[Padrões do projeto]
+
+## Processo de Desenvolvimento
+
+1. Criar branch da feature
+2. Desenvolver
+3. Testar
+4. Code review
+5. Merge
+
+## Estrutura do Projeto
+
+[Estrutura]
+```
+
+### Guia de Deploy
+
+**Estrutura:**
+
+```markdown
+# Guia de Deploy
+
+## Ambiente de Produção
+
+[Configurações]
+
+## Ambiente de Homologação
+
+[Configurações]
+
+## Processo de Deploy
+
+[Passo a passo]
+```
+
+## Changelog
+
+### Formato (Keep a Changelog)
+
+```markdown
+# Changelog
+
+## [1.2.0] - 2024-02-15
+
+### Added
+- Export de relatórios em PDF
+- Filtros avançados no dashboard
+
+### Changed
+- Melhorias de performance no dashboard
+- UX do upload de CSV
+
+### Fixed
+- Bug na validação de CSV com encoding Latin-1
+- Correção de cálculo de profit
+
+## [1.1.0] - 2024-01-30
+
+### Added
+- Filtros por data e produto
+- Visualização de dados em tabela
+
+### Fixed
+- Correção de autenticação JWT
+```
+
+## Diagramas
+
+### Arquitetura
+
+**Mermaid Diagram:**
+
+```mermaid
+graph TB
+    Frontend[React Frontend] --> Backend[FastAPI Backend]
+    Backend --> Database[Supabase PostgreSQL]
+    Backend --> CSVService[CSVService Pandas]
+    CSVService --> Database
+    Frontend --> Auth[Supabase Auth]
+```
+
+### Fluxo de Dados
+
+**Mermaid Sequence:**
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant F as Frontend
+    participant B as Backend
+    participant P as Pandas
+    participant D as Database
+    
+    U->>F: Upload CSV
+    F->>B: POST /upload
+    B->>P: Process CSV
+    P->>P: Validate & Normalize
+    P->>B: DataFrame
+    B->>D: Save Dataset
+    B->>D: Bulk Insert Rows
+    D->>B: Success
+    B->>F: DatasetResponse
+    F->>U: Success Message
+```
+
+### Diagrama de Classes
+
+**Mermaid Class:**
+
+```mermaid
+classDiagram
+    class User {
+        +int id
+        +string email
+        +string hashed_password
+        +List[Dataset] datasets
+    }
+    
+    class Dataset {
+        +int id
+        +int user_id
+        +string filename
+        +List[DatasetRow] rows
+    }
+    
+    class DatasetRow {
+        +int id
+        +int dataset_id
+        +date date
+        +string product
+        +numeric revenue
+        +numeric profit
+    }
+    
+    User "1" --> "*" Dataset
+    Dataset "1" --> "*" DatasetRow
+    User "1" --> "*" DatasetRow
+```
+
+## Comentários de Código
+
+### Quando Comentar
+
+**Sempre comente:**
+- Lógica complexa de negócio
+- Workarounds e hacks temporários
+- Decisões não óbvias
+- Integrações com APIs externas
+
+**Nunca comente:**
+- Código autoexplicativo
+- Comentários redundantes
+- Código obsoleto (remover ao invés)
+
+### Exemplos
+
+**Bom Comentário:**
+
+```python
+# Normaliza coluna removendo acentos, espaços e pontuação
+# para permitir matching flexível com aliases
+normalized = normalize_name(column_name)
+
+# Calcula profit = revenue - cost - commission
+# Profit é calculado automaticamente para consistência
+df['profit'] = df['revenue'] - df['cost'] - df['commission']
+```
+
+**Comentário Redundante (Evitar):**
+
+```python
+# Incrementa i em 1
+i += 1
+
+# Retorna user
+return user
+```
+
+## Integração com Outros Agentes
+
+- **Backend Agent**: Docstrings Python
+- **Frontend Agent**: JSDoc TypeScript
+- **QA Agent**: Documentação de testes
+- **Arquiteto Agent**: ADRs
+- **PRD Agent**: Documentação de features
+
+## Referências
+
+- Google Python Style Guide: https://google.github.io/styleguide/pyguide.html
+- JSDoc: https://jsdoc.app/
+- OpenAPI: https://swagger.io/specification/
+- Keep a Changelog: https://keepachangelog.com/
+- Mermaid: https://mermaid.js.org/

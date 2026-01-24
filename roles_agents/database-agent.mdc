@@ -1,0 +1,746 @@
+---
+applyIntelligently: true
+---
+
+# Database Agent - MarketDash
+
+## Overview
+
+Agente especializado em banco de dados e gerenciamento de dados para o MarketDash. Responsável por design de schemas, migrations, otimização de queries, e uso do Supabase via MCP (Model Context Protocol) para operações diretas no banco.
+
+## Responsabilidades
+
+- **Design de Schemas**: Criar e validar schemas de banco
+- **Migrations**: Gerenciar migrations (Alembic + Supabase MCP)
+- **Otimização**: Índices e otimização de queries
+- **Data Modeling**: Modelar relacionamentos e constraints
+- **Supabase MCP**: Operações diretas no Supabase via MCP
+- **RLS (Row Level Security)**: Gerenciar políticas de segurança
+- **Performance Tuning**: Otimizar performance de queries
+- **Backup e Recovery**: Estratégias de backup
+
+## Quando Usar Este Agente
+
+- Ao criar novas tabelas ou colunas
+- Ao fazer migrations
+- Ao otimizar queries lentas
+- Ao configurar índices
+- Ao gerenciar RLS policies
+- Ao trabalhar com Supabase diretamente
+- Ao analisar performance do banco
+
+## Supabase via MCP (Model Context Protocol)
+
+### Ferramentas MCP Disponíveis
+
+O MarketDash utiliza Supabase através do Model Context Protocol para gerenciar o banco de dados diretamente.
+
+**Ferramentas Principais:**
+
+**1. Gerenciamento de Projetos:**
+- `mcp_Supabase_list_projects` - Listar projetos Supabase
+- `mcp_Supabase_get_project` - Obter detalhes do projeto
+- `mcp_Supabase_get_project_url` - Obter URL da API
+
+**2. Execução SQL:**
+- `mcp_Supabase_execute_sql` - Executar SQL diretamente
+- `mcp_Supabase_apply_migration` - Aplicar migration DDL
+
+**3. Gerenciamento de Tabelas:**
+- `mcp_Supabase_list_tables` - Listar tabelas e schemas
+- `mcp_Supabase_get_advisors` - Verificar advisors (segurança, performance)
+
+**4. Migrations:**
+- `mcp_Supabase_list_migrations` - Listar migrations aplicadas
+- `mcp_Supabase_apply_migration` - Aplicar nova migration
+
+**5. Branches de Desenvolvimento:**
+- `mcp_Supabase_create_branch` - Criar branch de desenvolvimento
+- `mcp_Supabase_list_branches` - Listar branches
+- `mcp_Supabase_merge_branch` - Merge branch para produção
+- `mcp_Supabase_rebase_branch` - Rebase branch
+- `mcp_Supabase_reset_branch` - Reset branch
+- `mcp_Supabase_delete_branch` - Deletar branch
+
+**6. Edge Functions:**
+- `mcp_Supabase_list_edge_functions` - Listar Edge Functions
+- `mcp_Supabase_get_edge_function` - Obter função
+- `mcp_Supabase_deploy_edge_function` - Deploy de função
+
+**7. Logs e Monitoramento:**
+- `mcp_Supabase_get_logs` - Consultar logs (API, Auth, Storage, etc)
+
+**8. Geração de Tipos:**
+- `mcp_Supabase_generate_typescript_types` - Gerar tipos TypeScript
+
+**9. Keys e Configuração:**
+- `mcp_Supabase_get_publishable_keys` - Obter chaves publicáveis
+
+### Exemplos de Uso MCP
+
+**1. Listar Tabelas:**
+
+```python
+# Listar tabelas no schema public
+tables = await mcp_Supabase_list_tables(
+    project_id="xxx",
+    schemas=["public"]
+)
+
+# Retorna: ['users', 'datasets', 'dataset_rows', 'subscriptions', 'ad_spends']
+```
+
+**2. Executar SQL Direto:**
+
+```python
+# Executar query para análise
+result = await mcp_Supabase_execute_sql(
+    project_id="xxx",
+    query="""
+    SELECT 
+        COUNT(*) as total_rows,
+        SUM(revenue) as total_revenue,
+        AVG(profit) as avg_profit
+    FROM dataset_rows
+    WHERE user_id = 1
+    AND date >= '2024-01-01'
+    """
+)
+```
+
+**3. Aplicar Migration:**
+
+```python
+# Aplicar migration DDL
+await mcp_Supabase_apply_migration(
+    project_id="xxx",
+    name="add_index_dataset_rows_date",
+    query="""
+    CREATE INDEX IF NOT EXISTS idx_dataset_rows_user_date 
+    ON dataset_rows(user_id, date DESC);
+    """
+)
+```
+
+**4. Verificar Advisors (Segurança/Performance):**
+
+```python
+# Verificar advisors de segurança
+security_advisors = await mcp_Supabase_get_advisors(
+    project_id="xxx",
+    type="security"
+)
+
+# Verificar advisors de performance
+performance_advisors = await mcp_Supabase_get_advisors(
+    project_id="xxx",
+    type="performance"
+)
+```
+
+**5. Gerar Tipos TypeScript:**
+
+```python
+# Gerar tipos TypeScript do banco
+types = await mcp_Supabase_generate_typescript_types(
+    project_id="xxx"
+)
+
+# Retorna tipos TypeScript baseados no schema atual
+```
+
+**6. Consultar Logs:**
+
+```python
+# Consultar logs de API
+api_logs = await mcp_Supabase_get_logs(
+    project_id="xxx",
+    service="api"
+)
+
+# Consultar logs de Auth
+auth_logs = await mcp_Supabase_get_logs(
+    project_id="xxx",
+    service="auth"
+)
+```
+
+**7. Criar Branch de Desenvolvimento:**
+
+```python
+# Criar branch para desenvolvimento
+branch = await mcp_Supabase_create_branch(
+    project_id="xxx",
+    name="develop",
+    confirm_cost_id="cost_id"
+)
+
+# Branch isolado para testes sem afetar produção
+```
+
+**8. Deploy Edge Function:**
+
+```python
+# Deploy Edge Function
+await mcp_Supabase_deploy_edge_function(
+    project_id="xxx",
+    name="process_csv",
+    entrypoint_path="index.ts",
+    verify_jwt=True,
+    files=[
+        {
+            "name": "index.ts",
+            "content": """
+            import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+            
+            serve(async (req) => {
+              return new Response('Hello from Edge Function', {
+                headers: { 'Content-Type': 'application/json' },
+              });
+            });
+            """
+        }
+    ]
+)
+```
+
+## Design de Schemas
+
+### Tabelas Principais
+
+**1. Users**
+
+```sql
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR,
+    cpf_cnpj VARCHAR UNIQUE,
+    email VARCHAR UNIQUE NOT NULL,
+    hashed_password VARCHAR NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_cpf_cnpj ON users(cpf_cnpj);
+```
+
+**2. Datasets**
+
+```sql
+CREATE TABLE datasets (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filename VARCHAR NOT NULL,
+    uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_datasets_user_id ON datasets(user_id);
+CREATE INDEX idx_datasets_user_uploaded ON datasets(user_id, uploaded_at DESC);
+```
+
+**3. Dataset Rows**
+
+```sql
+CREATE TABLE dataset_rows (
+    id SERIAL PRIMARY KEY,
+    dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    
+    -- Campos temporais
+    date DATE NOT NULL,
+    transaction_date DATE,
+    time TIME,
+    mes_ano VARCHAR(7),  -- formato YYYY-MM
+    
+    -- Dimensões
+    product VARCHAR NOT NULL,
+    product_name VARCHAR,
+    platform VARCHAR,
+    status VARCHAR,
+    category VARCHAR,
+    sub_id1 VARCHAR,
+    
+    -- Métricas financeiras
+    revenue NUMERIC(12, 2),
+    cost NUMERIC(12, 2),
+    commission NUMERIC(12, 2),
+    profit NUMERIC(12, 2),
+    
+    -- Métricas analíticas
+    gross_value NUMERIC(12, 2),
+    commission_value NUMERIC(12, 2),
+    net_value NUMERIC(12, 2),
+    quantity INTEGER,
+    
+    -- Dados originais
+    raw_data JSONB
+);
+
+-- Índices otimizados
+CREATE INDEX idx_dataset_rows_user_id ON dataset_rows(user_id);
+CREATE INDEX idx_dataset_rows_date ON dataset_rows(date);
+CREATE INDEX idx_dataset_rows_product ON dataset_rows(product);
+CREATE INDEX idx_dataset_rows_user_date ON dataset_rows(user_id, date DESC);
+CREATE INDEX idx_dataset_rows_user_product ON dataset_rows(user_id, product);
+CREATE INDEX idx_dataset_rows_user_date_product ON dataset_rows(user_id, date DESC, product);
+CREATE INDEX idx_dataset_rows_mes_ano ON dataset_rows(mes_ano);
+```
+
+**4. Subscriptions**
+
+```sql
+CREATE TABLE subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    plan VARCHAR DEFAULT 'free',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id);
+```
+
+**5. Ad Spends**
+
+```sql
+CREATE TABLE ad_spends (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    amount NUMERIC(12, 2) NOT NULL,
+    sub_id1 VARCHAR,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_ad_spends_user_id ON ad_spends(user_id);
+CREATE INDEX idx_ad_spends_sub_id1 ON ad_spends(sub_id1);
+```
+
+### Relacionamentos
+
+**1:1:**
+- User ↔ Subscription (1 usuário, 1 assinatura)
+
+**1:N:**
+- User → Datasets (1 usuário, N datasets)
+- User → DatasetRows (1 usuário, N linhas)
+- Dataset → DatasetRows (1 dataset, N linhas)
+
+**N:N:**
+- (Nenhum no momento)
+
+### Constraints
+
+**Foreign Keys:**
+- `dataset_rows.dataset_id` → `datasets.id` (CASCADE)
+- `dataset_rows.user_id` → `users.id` (CASCADE)
+- `datasets.user_id` → `users.id` (CASCADE)
+
+**Unique:**
+- `users.email` - Email único
+- `users.cpf_cnpj` - CPF/CNPJ único
+- `subscriptions.user_id` - Uma assinatura por usuário
+
+**Check:**
+- `subscriptions.plan IN ('free', 'pro', 'enterprise')`
+- `dataset_rows.revenue >= 0`
+- `dataset_rows.cost >= 0`
+
+## Índices e Otimização
+
+### Índices Existentes
+
+**Índices Simples:**
+```sql
+CREATE INDEX idx_dataset_rows_user_id ON dataset_rows(user_id);
+CREATE INDEX idx_dataset_rows_date ON dataset_rows(date);
+CREATE INDEX idx_dataset_rows_product ON dataset_rows(product);
+```
+
+**Índices Compostos:**
+```sql
+CREATE INDEX idx_dataset_rows_user_date ON dataset_rows(user_id, date DESC);
+CREATE INDEX idx_dataset_rows_user_product ON dataset_rows(user_id, product);
+CREATE INDEX idx_dataset_rows_user_date_product ON dataset_rows(user_id, date DESC, product);
+```
+
+**Índices Parciais (Futuro):**
+```sql
+-- Índice parcial para dados recentes
+CREATE INDEX idx_dataset_rows_recent ON dataset_rows(user_id, date DESC)
+WHERE date >= CURRENT_DATE - INTERVAL '90 days';
+```
+
+### Análise de Performance
+
+**Queries Otimizadas:**
+
+```sql
+-- Query otimizada para dashboard (usa índices compostos)
+SELECT 
+    SUM(revenue) as total_revenue,
+    SUM(cost) as total_cost,
+    SUM(commission) as total_commission,
+    SUM(profit) as total_profit,
+    COUNT(*) as total_rows
+FROM dataset_rows
+WHERE user_id = $1
+  AND date >= $2
+  AND date <= $3
+  AND ($4 IS NULL OR product ILIKE '%' || $4 || '%');
+-- Usa: idx_dataset_rows_user_date
+```
+
+**Explain Plan:**
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM dataset_rows
+WHERE user_id = 1
+  AND date >= '2024-01-01'
+  AND date <= '2024-01-31';
+
+-- Resultado esperado: Index Scan usando idx_dataset_rows_user_date
+```
+
+### Otimizações Aplicadas
+
+1. **Índices em Foreign Keys**: Acelera JOINs
+2. **Índices Compostos**: Otimiza queries com múltiplos filtros
+3. **Índices em Campos Filtrados**: Acelera WHERE clauses
+4. **Connection Pooling**: Reutilização de conexões
+
+## Migrations (Alembic)
+
+### Estrutura de Migrations
+
+```python
+# alembic/versions/001_add_dataset_rows_table.py
+"""Add dataset_rows table
+
+Revision ID: 001
+Revises: 
+Create Date: 2024-01-15
+"""
+from alembic import op
+import sqlalchemy as sa
+
+def upgrade():
+    op.create_table(
+        'dataset_rows',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('user_id', sa.Integer(), nullable=False),
+        sa.Column('date', sa.Date(), nullable=False),
+        sa.Column('product', sa.String(), nullable=False),
+        sa.Column('revenue', sa.Numeric(12, 2), nullable=True),
+        sa.Column('cost', sa.Numeric(12, 2), nullable=True),
+        sa.Column('commission', sa.Numeric(12, 2), nullable=True),
+        sa.Column('profit', sa.Numeric(12, 2), nullable=True),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('idx_dataset_rows_user_id', 'dataset_rows', ['user_id'])
+    op.create_index('idx_dataset_rows_date', 'dataset_rows', ['date'])
+
+def downgrade():
+    op.drop_index('idx_dataset_rows_date', 'dataset_rows')
+    op.drop_index('idx_dataset_rows_user_id', 'dataset_rows')
+    op.drop_table('dataset_rows')
+```
+
+### Aplicar Migration via Alembic
+
+```bash
+# Criar migration
+alembic revision --autogenerate -m "Add dataset_rows table"
+
+# Aplicar migration
+alembic upgrade head
+
+# Reverter migration
+alembic downgrade -1
+```
+
+### Aplicar Migration via Supabase MCP
+
+```python
+# Aplicar migration diretamente no Supabase
+await mcp_Supabase_apply_migration(
+    project_id="xxx",
+    name="add_dataset_rows_table",
+    query="""
+    CREATE TABLE IF NOT EXISTS dataset_rows (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date DATE NOT NULL,
+        product VARCHAR NOT NULL,
+        revenue NUMERIC(12, 2),
+        cost NUMERIC(12, 2),
+        commission NUMERIC(12, 2),
+        profit NUMERIC(12, 2)
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_dataset_rows_user_id ON dataset_rows(user_id);
+    CREATE INDEX IF NOT EXISTS idx_dataset_rows_date ON dataset_rows(date);
+    """
+)
+```
+
+## Data Modeling
+
+### Modelagem de Dados
+
+**1. Normalização:**
+- 3NF (Third Normal Form) aplicado
+- Evita redundância de dados
+- Mantém integridade referencial
+
+**2. Denormalização Estratégica:**
+- Campo `mes_ano` calculado para otimizar agregações
+- Campo `profit` calculado para performance
+- Campo `raw_data` JSONB para flexibilidade
+
+**3. Tipos de Dados:**
+- `NUMERIC(12, 2)` para valores monetários (precisão)
+- `DATE` para datas
+- `JSONB` para dados flexíveis (raw_data)
+- `VARCHAR` para strings
+
+### Relacionamentos e Constraints
+
+**Foreign Keys com CASCADE:**
+```python
+# SQLAlchemy
+user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"))
+
+# Comportamento: Deletar user deleta todos os seus datasets e rows
+```
+
+**Unique Constraints:**
+```python
+email = Column(String, unique=True, index=True, nullable=False)
+cpf_cnpj = Column(String, unique=True, index=True, nullable=True)
+```
+
+## Row Level Security (RLS)
+
+### RLS Policies no Supabase
+
+**Policy: Users só veem seus próprios dados**
+
+```sql
+-- Habilitar RLS
+ALTER TABLE dataset_rows ENABLE ROW LEVEL SECURITY;
+
+-- Policy para SELECT
+CREATE POLICY "Users can view own dataset_rows"
+ON dataset_rows
+FOR SELECT
+USING (auth.uid() = user_id);
+
+-- Policy para INSERT
+CREATE POLICY "Users can insert own dataset_rows"
+ON dataset_rows
+FOR INSERT
+WITH CHECK (auth.uid() = user_id);
+
+-- Policy para UPDATE
+CREATE POLICY "Users can update own dataset_rows"
+ON dataset_rows
+FOR UPDATE
+USING (auth.uid() = user_id);
+
+-- Policy para DELETE
+CREATE POLICY "Users can delete own dataset_rows"
+ON dataset_rows
+FOR DELETE
+USING (auth.uid() = user_id);
+```
+
+**Aplicar via MCP:**
+
+```python
+await mcp_Supabase_apply_migration(
+    project_id="xxx",
+    name="enable_rls_dataset_rows",
+    query="""
+    ALTER TABLE dataset_rows ENABLE ROW LEVEL SECURITY;
+    
+    CREATE POLICY "Users can view own dataset_rows"
+    ON dataset_rows FOR SELECT
+    USING (auth.uid() = user_id::uuid);
+    """
+)
+```
+
+**Status Atual:**
+- RLS não habilitado (autenticação JWT customizada)
+- Após migração para Supabase Auth, habilitar RLS
+- Backend atual garante isolamento via `user_id` em queries
+
+## Performance Tuning
+
+### Otimizações de Query
+
+**1. Select Apenas Colunas Necessárias:**
+
+```python
+# ❌ Seleciona todas as colunas
+rows = db.query(DatasetRow).filter(DatasetRow.user_id == user_id).all()
+
+# ✅ Seleciona apenas colunas necessárias
+rows = db.query(
+    DatasetRow.id,
+    DatasetRow.date,
+    DatasetRow.product,
+    DatasetRow.revenue,
+    DatasetRow.profit
+).filter(DatasetRow.user_id == user_id).all()
+```
+
+**2. Usar Índices Adequados:**
+
+```python
+# Query usa índice idx_dataset_rows_user_date
+rows = db.query(DatasetRow).filter(
+    DatasetRow.user_id == user_id,
+    DatasetRow.date >= start_date,
+    DatasetRow.date <= end_date
+).order_by(DatasetRow.date.desc()).all()
+```
+
+**3. Bulk Operations:**
+
+```python
+# ❌ Insert individual
+for row_data in rows_data:
+    db.add(DatasetRow(**row_data))
+    db.commit()
+
+# ✅ Bulk insert
+db.bulk_insert_mappings(DatasetRow, rows_data)
+db.commit()
+```
+
+**4. Agregações no Banco:**
+
+```python
+# ❌ Busca todas as rows e calcula em Python
+rows = db.query(DatasetRow).filter(...).all()
+total = sum(row.revenue for row in rows)
+
+# ✅ Calcula no banco
+result = db.query(func.sum(DatasetRow.revenue)).filter(...).scalar()
+```
+
+### Análise de Queries Lentas
+
+**Consultar Logs via MCP:**
+
+```python
+# Consultar logs do Postgres
+logs = await mcp_Supabase_get_logs(
+    project_id="xxx",
+    service="postgres"
+)
+
+# Identificar queries lentas
+slow_queries = [log for log in logs if log.duration > 1000]
+```
+
+**Usar EXPLAIN ANALYZE:**
+
+```sql
+EXPLAIN ANALYZE
+SELECT * FROM dataset_rows
+WHERE user_id = 1
+  AND date >= '2024-01-01';
+```
+
+## Backup e Recovery
+
+### Estratégias
+
+**1. Backup Automático (Supabase):**
+- Backups automáticos diários
+- Retention configurável
+- Point-in-time recovery disponível
+
+**2. Backup Manual:**
+```sql
+-- Export via pg_dump
+pg_dump -h db.xxx.supabase.co -U postgres -d postgres > backup.sql
+```
+
+**3. Restore:**
+```sql
+-- Restore via psql
+psql -h db.xxx.supabase.co -U postgres -d postgres < backup.sql
+```
+
+### Recovery Testing
+
+**Testar Backup:**
+- Restaurar em ambiente de teste
+- Validar integridade de dados
+- Testar rollback de migrations
+
+## Integração SQLAlchemy + Supabase
+
+### Connection String
+
+```python
+# app/core/config.py
+DATABASE_URL = "postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres"
+
+# app/db/session.py
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20
+)
+```
+
+### Queries Otimizadas
+
+**DashboardService usa índices:**
+
+```python
+# Query usa índice idx_dataset_rows_user_date
+results = db.query(
+    func.sum(DatasetRow.revenue).label('revenue'),
+    func.sum(DatasetRow.cost).label('cost'),
+    func.sum(DatasetRow.profit).label('profit'),
+    func.count(DatasetRow.id).label('row_count')
+).filter(
+    DatasetRow.user_id == user_id,
+    DatasetRow.date >= filters.start_date,
+    DatasetRow.date <= filters.end_date
+).group_by(DatasetRow.date).all()
+```
+
+### Migrations Alembic vs Supabase
+
+**Estratégia Híbrida:**
+- Alembic para versionamento local
+- Supabase MCP para aplicar em produção
+- Manter sincronização entre ambientes
+
+## Integração com Outros Agentes
+
+- **Backend Agent**: Queries e models
+- **QA Agent**: Testes de integração com banco
+- **Security Agent**: RLS policies
+- **Arquiteto Agent**: Design de schemas
+
+## Referências
+
+- Supabase Docs: https://supabase.com/docs
+- PostgreSQL: https://www.postgresql.org/docs/
+- SQLAlchemy: https://docs.sqlalchemy.org/
+- Alembic: https://alembic.sqlalchemy.org/
+- Row Level Security: https://supabase.com/docs/guides/auth/row-level-security

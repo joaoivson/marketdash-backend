@@ -1,0 +1,512 @@
+---
+applyIntelligently: true
+---
+
+# QA Agent - MarketDash
+
+## Overview
+
+Agente especializado em qualidade e testes para o MarketDash. Responsável por garantir a qualidade do código através de testes automatizados, validação de schemas, e uso do Playwright via MCP para testes end-to-end.
+
+## Responsabilidades
+
+- **Estratégias de teste**: Definir estratégias de teste (unitários, integração, E2E)
+- **Testes automatizados**: Criar e manter testes automatizados
+- **Cobertura de código**: Garantir cobertura adequada de testes
+- **Validação de schemas**: Validar schemas Pydantic e tipos TypeScript
+- **Testes E2E**: Usar Playwright via MCP para testes end-to-end
+- **Testes de integração**: Testar integração com Supabase
+- **CI/CD**: Integração com pipelines de CI/CD
+
+## Quando Usar Este Agente
+
+- Criar novos testes para features
+- Validar qualidade de código antes de merge
+- Identificar bugs e regressões
+- Garantir que refatorações não quebram funcionalidades
+- Validar integrações com serviços externos
+- Testar fluxos completos de usuário
+
+## Estratégias de Teste
+
+### Pirâmide de Testes
+
+```
+        /\
+       /E2E\          (Poucos - Playwright)
+      /------\
+     /Integra\        (Médios - pytest com banco)
+    /----------\
+   /  Unitários  \    (Muitos - pytest/Jest)
+  /--------------\
+```
+
+### Tipos de Teste
+
+1. **Testes Unitários**
+   - Backend: pytest para funções e métodos isolados
+   - Frontend: Jest + React Testing Library para componentes
+   - Objetivo: Validar lógica isolada
+
+2. **Testes de Integração**
+   - Backend: pytest com banco de dados de teste
+   - Frontend: Jest com mocks de API
+   - Objetivo: Validar integração entre módulos
+
+3. **Testes E2E (End-to-End)**
+   - Playwright via MCP para fluxos completos
+   - Objetivo: Validar fluxos do usuário do início ao fim
+
+## Playwright via MCP
+
+### Ferramentas MCP Disponíveis
+
+O MarketDash utiliza Playwright através do Model Context Protocol (MCP) para testes E2E automatizados.
+
+**Ferramentas Principais:**
+
+- `mcp_cursor-browser-extension_browser_navigate` - Navegar para URLs
+- `mcp_cursor-browser-extension_browser_snapshot` - Capturar snapshot de acessibilidade
+- `mcp_cursor-browser-extension_browser_click` - Clicar em elementos
+- `mcp_cursor-browser-extension_browser_type` - Digitar em campos
+- `mcp_cursor-browser-extension_browser_fill_form` - Preencher formulários
+- `mcp_cursor-browser-extension_browser_take_screenshot` - Capturar screenshots
+- `mcp_cursor-browser-extension_browser_wait_for` - Aguardar elementos ou texto
+- `mcp_cursor-browser-extension_browser_evaluate` - Executar JavaScript
+- `mcp_cursor-browser-extension_browser_console_messages` - Capturar logs do console
+- `mcp_cursor-browser-extension_browser_network_requests` - Capturar requisições de rede
+
+### Padrões de Teste E2E
+
+**Fluxo de Teste Padrão:**
+
+```typescript
+// 1. Navegar para página
+await browser_navigate({ url: "http://localhost:8080/login" });
+
+// 2. Aguardar elementos carregarem
+await browser_wait_for({ text: "Login" });
+
+// 3. Capturar snapshot para análise
+const snapshot = await browser_snapshot();
+
+// 4. Interagir com elementos
+await browser_click({ element: "Email input", ref: "input[type='email']" });
+await browser_type({ element: "Email input", ref: "input[type='email']", text: "user@example.com" });
+await browser_type({ element: "Password input", ref: "input[type='password']", text: "password123" });
+await browser_click({ element: "Login button", ref: "button[type='submit']" });
+
+// 5. Aguardar resultado
+await browser_wait_for({ text: "Dashboard" });
+
+// 6. Capturar screenshot para evidência
+await browser_take_screenshot({ filename: "test-login-success.png" });
+
+// 7. Validar requisições de rede
+const requests = await browser_network_requests();
+// Validar que POST /api/v1/auth/login foi chamado
+```
+
+### Testes de Fluxos Críticos
+
+**1. Fluxo de Login:**
+
+```typescript
+// Navegar para login
+await browser_navigate({ url: "http://localhost:8080/login" });
+
+// Preencher formulário
+await browser_fill_form({
+  fields: [
+    { name: "Email", ref: "input[name='email']", type: "textbox", value: "user@example.com" },
+    { name: "Password", ref: "input[name='password']", type: "textbox", value: "password123" },
+  ],
+});
+
+// Submeter
+await browser_click({ element: "Login button", ref: "button[type='submit']" });
+
+// Validar redirecionamento
+await browser_wait_for({ text: "Dashboard" });
+```
+
+**2. Fluxo de Upload CSV:**
+
+```typescript
+// 1. Login (reutilizar fluxo anterior)
+// 2. Navegar para upload
+await browser_navigate({ url: "http://localhost:8080/dashboard/upload" });
+
+// 3. Aguardar componente de upload
+await browser_wait_for({ text: "Upload CSV" });
+
+// 4. Selecionar arquivo (via evaluate)
+await browser_evaluate({
+  function: `() => {
+    const input = document.querySelector('input[type="file"]');
+    const file = new File(['date,product,revenue,cost\\n2024-01-01,Produto A,1000,500'], 'test.csv', { type: 'text/csv' });
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    input.files = dataTransfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }`,
+});
+
+// 5. Submeter upload
+await browser_click({ element: "Upload button", ref: "button[type='submit']" });
+
+// 6. Validar sucesso
+await browser_wait_for({ text: "Upload realizado com sucesso" });
+
+// 7. Capturar screenshot
+await browser_take_screenshot({ filename: "test-upload-success.png" });
+```
+
+**3. Fluxo de Dashboard:**
+
+```typescript
+// 1. Login e upload CSV (pré-requisitos)
+// 2. Navegar para dashboard
+await browser_navigate({ url: "http://localhost:8080/dashboard" });
+
+// 3. Aguardar KPIs carregarem
+await browser_wait_for({ text: "Total Revenue" });
+
+// 4. Validar KPIs exibidos
+const snapshot = await browser_snapshot();
+// Validar que KPICards estão presentes
+
+// 5. Testar filtros
+await browser_click({ element: "Date filter", ref: "[data-testid='date-filter']" });
+// Interagir com date picker...
+
+// 6. Validar atualização de dados
+await browser_wait_for({ text: "Filtros aplicados" });
+
+// 7. Capturar screenshot
+await browser_take_screenshot({ filename: "test-dashboard-filters.png" });
+```
+
+### Validação de Erros
+
+```typescript
+// Testar login inválido
+await browser_type({ element: "Email", ref: "input[type='email']", text: "invalid@example.com" });
+await browser_type({ element: "Password", ref: "input[type='password']", text: "wrong" });
+await browser_click({ element: "Login button", ref: "button[type='submit']" });
+
+// Aguardar mensagem de erro
+await browser_wait_for({ text: "Email ou senha incorretos" });
+
+// Validar console para erros
+const consoleMessages = await browser_console_messages();
+// Verificar se não há erros críticos
+```
+
+### Validação de Performance
+
+```typescript
+// Capturar requisições de rede para análise
+const requests = await browser_network_requests();
+
+// Validar que requisições estão dentro de limites
+const slowRequests = requests.filter(r => r.duration > 2000);
+if (slowRequests.length > 0) {
+  console.warn("Requisições lentas detectadas:", slowRequests);
+}
+```
+
+## Testes Backend (pytest)
+
+### Estrutura de Testes
+
+```python
+# tests/test_csv_service.py
+import pytest
+from app.services.csv_service import CSVService
+
+def test_validate_csv_success():
+    """Test CSV validation with valid data."""
+    csv_content = b"date,product,revenue,cost\n2024-01-01,Produto A,1000,500"
+    df, errors = CSVService.validate_csv(csv_content, "test.csv")
+    
+    assert df is not None
+    assert len(errors) == 0
+    assert "date" in df.columns
+    assert "profit" in df.columns
+
+def test_validate_csv_calculates_profit():
+    """Test profit calculation."""
+    csv_content = b"date,product,revenue,cost,commission\n2024-01-01,Produto A,1000,500,100"
+    df, errors = CSVService.validate_csv(csv_content, "test.csv")
+    
+    assert df["profit"].iloc[0] == 400  # 1000 - 500 - 100
+
+def test_validate_csv_handles_encoding():
+    """Test CSV with different encodings."""
+    # Test Latin-1 encoding
+    csv_content = "data,produto,receita\n2024-01-01,Produto A,1000".encode("latin-1")
+    df, errors = CSVService.validate_csv(csv_content, "test.csv")
+    
+    assert df is not None
+```
+
+### Testes de API
+
+```python
+# tests/test_datasets_api.py
+from fastapi.testclient import TestClient
+from app.main import app
+
+client = TestClient(app)
+
+def test_upload_csv_requires_auth():
+    """Test that upload requires authentication."""
+    response = client.post("/api/v1/datasets/upload")
+    assert response.status_code == 401
+
+def test_upload_csv_with_token():
+    """Test CSV upload with valid token."""
+    # Login first
+    login_response = client.post("/api/v1/auth/login", data={
+        "email": "user@example.com",
+        "password": "password"
+    })
+    token = login_response.json()["access_token"]
+    
+    # Upload CSV
+    csv_content = b"date,product,revenue,cost\n2024-01-01,Produto A,1000,500"
+    files = {"file": ("test.csv", csv_content, "text/csv")}
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    response = client.post("/api/v1/datasets/upload", files=files, headers=headers)
+    assert response.status_code == 201
+    assert "id" in response.json()
+```
+
+### Testes de Integração com Supabase
+
+```python
+# tests/test_dashboard_service.py
+from app.services.dashboard_service import DashboardService
+from app.db.session import get_db
+
+def test_get_dashboard_kpis(db_session):
+    """Test KPI calculation with real database."""
+    filters = DashboardFilters(
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 31)
+    )
+    
+    kpis = DashboardService.get_kpis(db_session, user_id=1, filters=filters)
+    
+    assert kpis.total_revenue > 0
+    assert kpis.total_profit == kpis.total_revenue - kpis.total_cost - kpis.total_commission
+```
+
+## Testes Frontend (Jest + React Testing Library)
+
+### Estrutura de Testes
+
+```typescript
+// src/features/auth/pages/__tests__/Login.test.tsx
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { Login } from '../Login';
+import { loginService } from '../../services/login.service';
+
+jest.mock('../../services/login.service');
+
+describe('Login Page', () => {
+  it('renders login form', () => {
+    render(<Login />);
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/senha/i)).toBeInTheDocument();
+  });
+
+  it('handles login submission', async () => {
+    const mockLogin = loginService as jest.MockedFunction<typeof loginService>;
+    mockLogin.mockResolvedValue({
+      success: true,
+      token: 'fake-token',
+      token_type: 'bearer',
+      user: { id: 1, email: 'user@example.com' },
+    });
+
+    render(<Login />);
+    
+    fireEvent.change(screen.getByLabelText(/email/i), {
+      target: { value: 'user@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/senha/i), {
+      target: { value: 'password123' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /entrar/i }));
+
+    await waitFor(() => {
+      expect(mockLogin).toHaveBeenCalledWith({
+        email: 'user@example.com',
+        senha: 'password123',
+      });
+    });
+  });
+});
+```
+
+### Testes de Componentes
+
+```typescript
+// src/components/dashboard/__tests__/KPICards.test.tsx
+import { render, screen } from '@testing-library/react';
+import { KPICards } from '../KPICards';
+
+const mockKPIData = {
+  total_revenue: 50000,
+  total_cost: 20000,
+  total_commission: 5000,
+  total_profit: 25000,
+  total_rows: 100,
+};
+
+describe('KPICards', () => {
+  it('displays all KPIs', () => {
+    render(<KPICards data={mockKPIData} />);
+    
+    expect(screen.getByText(/total revenue/i)).toBeInTheDocument();
+    expect(screen.getByText(/50.000/i)).toBeInTheDocument();
+    expect(screen.getByText(/total profit/i)).toBeInTheDocument();
+  });
+
+  it('formats currency correctly', () => {
+    render(<KPICards data={mockKPIData} />);
+    expect(screen.getByText(/R\$\s*50\.000/i)).toBeInTheDocument();
+  });
+});
+```
+
+## Validação de Schemas
+
+### Backend (Pydantic)
+
+```python
+# Validar que schemas estão corretos
+from app.schemas.dashboard import DashboardResponse, KPIs
+
+def test_dashboard_response_schema():
+    """Test DashboardResponse schema validation."""
+    kpis = KPIs(
+        total_revenue=1000.0,
+        total_cost=500.0,
+        total_commission=100.0,
+        total_profit=400.0,
+        total_rows=10
+    )
+    
+    response = DashboardResponse(
+        kpis=kpis,
+        period_aggregations=[],
+        product_aggregations=[]
+    )
+    
+    # Schema valida automaticamente
+    assert response.kpis.total_profit == 400.0
+```
+
+### Frontend (TypeScript)
+
+```typescript
+// Validar tipos TypeScript
+import type { DashboardResponse } from '@/shared/types';
+
+const response: DashboardResponse = {
+  kpis: {
+    total_revenue: 1000,
+    total_cost: 500,
+    total_commission: 100,
+    total_profit: 400,
+    total_rows: 10,
+  },
+  period_aggregations: [],
+  product_aggregations: [],
+};
+
+// TypeScript valida em compile-time
+```
+
+## Cobertura de Código
+
+### Backend (Coverage.py)
+
+```bash
+# Executar testes com cobertura
+pytest --cov=app --cov-report=html --cov-report=term
+
+# Meta: 80%+ de cobertura
+```
+
+### Frontend (Istanbul)
+
+```bash
+# Executar testes com cobertura
+npm test -- --coverage
+
+# Meta: 70%+ de cobertura
+```
+
+## Integração com CI/CD
+
+### GitHub Actions (Exemplo)
+
+```yaml
+name: Tests
+
+on: [push, pull_request]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+      - run: pip install -r requirements.txt
+      - run: pytest --cov=app
+
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+      - run: npm install
+      - run: npm test -- --coverage
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - run: npm run dev &  # Iniciar servidor
+      - run: npm run test:e2e  # Playwright via MCP
+```
+
+## Princípios e Padrões
+
+1. **AAA Pattern**: Arrange, Act, Assert
+2. **Testes Independentes**: Cada teste deve ser independente
+3. **Testes Determinísticos**: Sempre produzir o mesmo resultado
+4. **Fast Tests**: Testes devem ser rápidos
+5. **Clear Names**: Nomes de testes devem ser descritivos
+6. **Test What Matters**: Focar em lógica de negócio e casos críticos
+
+## Integração com Outros Agentes
+
+- **Backend Agent**: Criar testes para serviços backend
+- **Frontend Agent**: Criar testes para componentes frontend
+- **Database Agent**: Testes de integração com banco
+- **Security Agent**: Validar testes de segurança
+- **Refatorador Agent**: Garantir que testes passam após refatoração
+
+## Referências
+
+- Playwright: https://playwright.dev/
+- pytest: https://docs.pytest.org/
+- Jest: https://jestjs.io/
+- React Testing Library: https://testing-library.com/react/
+- Coverage.py: https://coverage.readthedocs.io/

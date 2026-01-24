@@ -1,0 +1,500 @@
+---
+applyIntelligently: true
+---
+
+# Security Agent - MarketDash
+
+## Overview
+
+Agente especializado em segurança e proteção contra vulnerabilidades no MarketDash. Responsável por garantir que o código e as integrações seguem melhores práticas de segurança, incluindo OWASP Top 10, validação de inputs, gerenciamento de secrets, e configurações de segurança.
+
+## Responsabilidades
+
+- **OWASP Top 10**: Proteção contra vulnerabilidades mais comuns
+- **Autenticação e Autorização**: Validação de JWT, permissões
+- **Validação de Inputs**: Prevenção de SQL injection, XSS, CSRF
+- **Secrets Management**: Gerenciamento seguro de credenciais
+- **CORS Configuration**: Configuração adequada de CORS
+- **Rate Limiting**: Proteção contra abuse
+- **Análise de Dependências**: Detecção de vulnerabilidades em pacotes
+
+## Quando Usar Este Agente
+
+- Antes de fazer merge de código
+- Ao implementar autenticação
+- Ao processar inputs do usuário
+- Ao configurar CORS e headers
+- Ao usar secrets e credenciais
+- Ao integrar com serviços externos
+- Em code reviews de segurança
+
+## OWASP Top 10 - Proteções Implementadas
+
+### 1. Broken Access Control
+
+**Problema**: Usuários podem acessar recursos não autorizados.
+
+**Proteções no MarketDash:**
+- JWT tokens com validação de usuário
+- Isolamento de dados por `user_id`
+- Validação de permissões em endpoints
+
+```python
+# app/api/deps.py
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> User:
+    """Get current authenticated user from JWT token."""
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    
+    user_id = int(payload.get("sub"))
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    # Validação de acesso
+    if not user or not user.is_active:
+        raise HTTPException(status_code=403, detail="Acesso negado")
+    
+    return user
+```
+
+**Validação:**
+- Todos os endpoints protegidos exigem `get_current_user`
+- Dados filtrados por `user_id` em queries
+- Verificação de propriedade antes de operações
+
+### 2. Cryptographic Failures
+
+**Problema**: Exposição de dados sensíveis.
+
+**Proteções no MarketDash:**
+- Senhas hasheadas com bcrypt
+- JWT secrets armazenados em variáveis de ambiente
+- HTTPS obrigatório em produção
+- Secrets nunca commitados no código
+
+```python
+# app/core/security.py
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def get_password_hash(password: str) -> str:
+    """Hash password with bcrypt (truncate to 72 bytes limit)."""
+    return pwd_context.hash(password[:72])
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password against hash."""
+    return pwd_context.verify(plain_password, hashed_password)
+```
+
+**Validação:**
+- Senhas nunca armazenadas em plain text
+- JWT_SECRET mínimo de 32 caracteres
+- Variáveis de ambiente para secrets
+
+### 3. Injection (SQL Injection, XSS)
+
+**Problema**: Injeção de código malicioso.
+
+**Proteções no MarketDash:**
+
+**SQL Injection:**
+- SQLAlchemy ORM (prevenção automática)
+- Parâmetros bindados em queries
+- Validação Pydantic de inputs
+
+```python
+# ✅ Seguro: SQLAlchemy ORM
+user = db.query(User).filter(User.email == email).first()
+
+# ✅ Seguro: Parâmetros bindados
+result = db.execute(
+    text("SELECT * FROM users WHERE email = :email"),
+    {"email": email}
+)
+
+# ❌ Inseguro: String concatenada (NUNCA FAZER)
+# query = f"SELECT * FROM users WHERE email = '{email}'"  # VULNERÁVEL!
+```
+
+**XSS (Cross-Site Scripting):**
+- React sanitiza output automaticamente
+- Validação de inputs no backend
+- Headers de segurança configurados
+
+```python
+# Backend valida inputs
+from pydantic import BaseModel, EmailStr
+
+class UserCreate(BaseModel):
+    email: EmailStr  # Validação automática
+    password: str  # Sanitizado
+    name: str  # Validado
+```
+
+### 4. Insecure Design
+
+**Problema**: Falhas arquiteturais de segurança.
+
+**Proteções no MarketDash:**
+- Separação de responsabilidades
+- Validação em múltiplas camadas
+- Princípio de menor privilégio
+- Rate limiting implementado
+
+### 5. Security Misconfiguration
+
+**Problema**: Configurações inseguras.
+
+**Proteções no MarketDash:**
+- CORS configurado corretamente
+- Headers de segurança
+- Environment variables para secrets
+- Docker security best practices
+
+```python
+# app/core/config.py
+CORS_ORIGINS: list[str] = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://marketdash.com.br",
+    "https://marketdash.hml.com.br",
+]
+
+# app/main.py
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### 6. Vulnerable and Outdated Components
+
+**Problema**: Dependências vulneráveis.
+
+**Validação:**
+- `pip-audit` para Python
+- `npm audit` para Node.js
+- Dependabot/GitHub Security alerts
+- Atualização regular de dependências
+
+### 7. Identification and Authentication Failures
+
+**Problema**: Falhas em autenticação.
+
+**Proteções no MarketDash:**
+- JWT com expiração configurável
+- Bcrypt para senhas
+- Validação de token em cada request
+- Verificação de usuário ativo
+
+```python
+# app/core/security.py
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create JWT token with expiration."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(hours=settings.JWT_EXPIRATION_HOURS)
+    
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+```
+
+### 8. Software and Data Integrity Failures
+
+**Problema**: Integridade de dados comprometida.
+
+**Proteções no MarketDash:**
+- Validação de arquivos CSV
+- Sanitização de dados
+- Validação de tipos
+- Transações atômicas no banco
+
+### 9. Security Logging and Monitoring Failures
+
+**Problema**: Falta de monitoramento.
+
+**Melhorias Futuras:**
+- Logging estruturado
+- Monitoramento de tentativas de login
+- Alertas de segurança
+- Auditoria de ações
+
+### 10. Server-Side Request Forgery (SSRF)
+
+**Problema**: Requisições a recursos internos.
+
+**Proteções no MarketDash:**
+- Validação de URLs externas
+- Whitelist de domínios permitidos
+- Validação de inputs antes de requests
+
+## Autenticação JWT
+
+### Best Practices Implementadas
+
+1. **Token Expiration**: Tokens expiram após 24h (configurável)
+2. **Secret Key**: JWT_SECRET mínimo de 32 caracteres
+3. **Algorithm**: HS256 (HMAC-SHA256)
+4. **Payload**: Apenas `user_id` (sub)
+5. **Validation**: Validação em cada request protegido
+
+```python
+# app/core/security.py
+def decode_access_token(token: str) -> Optional[dict]:
+    """Decode and verify JWT token."""
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.JWT_ALGORITHM]
+        )
+        return payload
+    except JWTError:
+        return None
+```
+
+### Migração Futura para Supabase Auth
+
+**Benefícios:**
+- OAuth integrado (Google, GitHub, etc)
+- Magic links
+- Email verification automático
+- Session management robusto
+- Menos código para manter
+
+**Implementação:**
+- Frontend usa Supabase Auth SDK
+- Backend valida tokens do Supabase (opcional)
+- Remover código JWT customizado
+
+## Validação de Inputs
+
+### Backend (Pydantic)
+
+```python
+from pydantic import BaseModel, EmailStr, validator, Field
+
+class UserCreate(BaseModel):
+    email: EmailStr  # Validação automática de email
+    password: str = Field(..., min_length=8)  # Mínimo 8 caracteres
+    name: str = Field(..., max_length=100)
+    
+    @validator('password')
+    def validate_password(cls, v):
+        if len(v) < 8:
+            raise ValueError('Senha deve ter no mínimo 8 caracteres')
+        return v
+```
+
+### CSV Upload Security
+
+```python
+# app/api/routes/datasets.py
+@router.post("/upload")
+async def upload_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    # Validação de tipo de arquivo
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Apenas CSV permitido")
+    
+    # Limite de tamanho (configurável)
+    file_content = await file.read()
+    if len(file_content) > 10 * 1024 * 1024:  # 10MB
+        raise HTTPException(status_code=400, detail="Arquivo muito grande")
+    
+    # Validação e sanitização via CSVService
+    df, errors = CSVService.validate_csv(file_content, file.filename)
+```
+
+## CORS Configuration
+
+### Configuração Segura
+
+```python
+# app/core/config.py
+CORS_ORIGINS: list[str] = [
+    "http://localhost:3000",  # Dev local
+    "http://localhost:5173",  # Vite dev
+    "https://marketdash.com.br",  # Produção
+    "https://marketdash.hml.com.br",  # Homologação
+]
+
+# app/main.py
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,  # Whitelist específica
+    allow_credentials=True,  # Permitir cookies/auth headers
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # Métodos específicos
+    allow_headers=["Content-Type", "Authorization"],  # Headers específicos
+)
+```
+
+**Nunca usar:**
+- `allow_origins=["*"]` em produção
+- `allow_methods=["*"]` se não necessário
+- `allow_credentials=True` com `allow_origins=["*"]`
+
+## Secrets Management
+
+### Variáveis de Ambiente
+
+```python
+# app/core/config.py
+class Settings(BaseSettings):
+    DATABASE_URL: str  # PostgreSQL connection string
+    JWT_SECRET: str  # Mínimo 32 caracteres
+    SUPABASE_KEY: Optional[str] = None
+    SUPABASE_SERVICE_KEY: Optional[str] = None
+    CAKTO_CLIENT_SECRET: Optional[str] = None
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+```
+
+**Best Practices:**
+- Nunca commitar `.env` no git
+- Usar `.env.example` com placeholders
+- Secrets diferentes por ambiente
+- Rotação regular de secrets
+- Usar secret managers em produção (AWS Secrets Manager, etc)
+
+### .gitignore
+
+```gitignore
+# Secrets
+.env
+.env.local
+.env.production
+*.pem
+*.key
+```
+
+## Rate Limiting
+
+### Implementação (Futuro)
+
+```python
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@router.post("/auth/login")
+@limiter.limit("5/minute")  # 5 tentativas por minuto
+def login(request: Request, ...):
+    pass
+```
+
+## Headers de Segurança
+
+### Middleware de Segurança (Futuro)
+
+```python
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+# Headers de segurança
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+```
+
+## Validação de Arquivos
+
+### CSV Upload Security
+
+```python
+# Validações de segurança
+def validate_csv_file(file: UploadFile) -> bool:
+    # 1. Extensão
+    if not file.filename.endswith('.csv'):
+        return False
+    
+    # 2. Content-Type
+    if file.content_type not in ['text/csv', 'application/csv']:
+        return False
+    
+    # 3. Tamanho (limite)
+    if file.size > 10 * 1024 * 1024:  # 10MB
+        return False
+    
+    return True
+```
+
+## Análise de Dependências
+
+### Ferramentas
+
+**Backend:**
+```bash
+# Verificar vulnerabilidades Python
+pip-audit
+
+# Verificar dependências desatualizadas
+pip list --outdated
+```
+
+**Frontend:**
+```bash
+# Verificar vulnerabilidades Node.js
+npm audit
+
+# Fix automático (quando possível)
+npm audit fix
+```
+
+**Integração CI/CD:**
+- Dependabot para atualizações automáticas
+- GitHub Security alerts
+- Scanning automático em PRs
+
+## Integração com Outros Agentes
+
+- **Backend Agent**: Validação de segurança em endpoints
+- **Database Agent**: Validação de queries e RLS
+- **QA Agent**: Testes de segurança
+- **Documentador Agent**: Documentação de práticas de segurança
+
+## Checklist de Segurança
+
+### Antes de Merge
+
+- [ ] Inputs validados com Pydantic
+- [ ] JWT tokens validados em endpoints protegidos
+- [ ] Queries SQL usando ORM (sem concatenação)
+- [ ] Secrets em variáveis de ambiente
+- [ ] CORS configurado corretamente
+- [ ] Dependências atualizadas e sem vulnerabilidades
+- [ ] Senhas hasheadas com bcrypt
+- [ ] Rate limiting implementado (quando necessário)
+- [ ] Headers de segurança configurados
+- [ ] Logs não expõem informações sensíveis
+
+## Referências
+
+- OWASP Top 10: https://owasp.org/www-project-top-ten/
+- FastAPI Security: https://fastapi.tiangolo.com/tutorial/security/
+- JWT Best Practices: https://datatracker.ietf.org/doc/html/rfc8725
+- CORS: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
+- bcrypt: https://github.com/pyca/bcrypt/

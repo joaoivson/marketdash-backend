@@ -1,0 +1,629 @@
+---
+applyIntelligently: true
+---
+
+# Refatorador Agent - MarketDash
+
+## Overview
+
+Agente especializado em refatoração de código para o MarketDash. Responsável por identificar code smells, aplicar padrões de refatoração seguros, melhorar legibilidade, reduzir complexidade e eliminar duplicação, mantendo funcionalidade e testes.
+
+## Responsabilidades
+
+- **Code Smells**: Identificar problemas de código
+- **Refatoração Segura**: Refatorar sem quebrar funcionalidade
+- **Padrões de Refatoração**: Aplicar padrões conhecidos
+- **Complexidade Ciclomática**: Reduzir complexidade
+- **Duplicação**: Eliminar código duplicado
+- **Legibilidade**: Melhorar clareza do código
+- **Manutenção de Testes**: Garantir que testes continuam passando
+
+## Quando Usar Este Agente
+
+- Ao identificar code smells
+- Ao reduzir complexidade
+- Ao eliminar duplicação
+- Ao melhorar legibilidade
+- Ao preparar código para novas features
+- Ao otimizar performance
+- Durante code review
+
+## Code Smells
+
+### 1. Long Method (Método Longo)
+
+**Sintoma:** Método com muitas linhas (> 30-50)
+
+**Exemplo Problemático:**
+
+```python
+# ❌ Método longo com múltiplas responsabilidades
+def process_csv_upload(file, user_id, db):
+    # Validação
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(400, "Apenas CSV")
+    if file.size > 10 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo muito grande")
+    
+    # Processamento
+    file_content = await file.read()
+    df, errors = CSVService.validate_csv(file_content, file.filename)
+    
+    # Persistência
+    dataset = Dataset(user_id=user_id, filename=file.filename)
+    db.add(dataset)
+    db.flush()
+    
+    # Inserção de linhas
+    rows_data = CSVService.dataframe_to_dict_list(df)
+    for row_data in rows_data:
+        dataset_row = DatasetRow(
+            dataset_id=dataset.id,
+            user_id=user_id,
+            date=row_data['date'],
+            # ... mais campos
+        )
+        db.add(dataset_row)
+    
+    db.commit()
+    return dataset
+```
+
+**Refatoração:**
+
+```python
+# ✅ Métodos menores e focados
+def validate_csv_file(file: UploadFile) -> None:
+    """Validate CSV file format and size."""
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(400, "Apenas CSV permitido")
+    if file.size > 10 * 1024 * 1024:
+        raise HTTPException(400, "Arquivo muito grande")
+
+def process_csv_file(file_content: bytes, filename: str) -> pd.DataFrame:
+    """Process and validate CSV file."""
+    df, errors = CSVService.validate_csv(file_content, filename)
+    if df is None:
+        raise HTTPException(400, f"Erro ao processar: {'; '.join(errors)}")
+    return df
+
+def create_dataset_rows(dataset_id: int, user_id: int, df: pd.DataFrame, db: Session) -> None:
+    """Create dataset rows from DataFrame."""
+    rows_data = CSVService.dataframe_to_dict_list(df)
+    for row_data in rows_data:
+        dataset_row = DatasetRow(
+            dataset_id=dataset_id,
+            user_id=user_id,
+            **extract_row_fields(row_data)
+        )
+        db.add(dataset_row)
+
+@router.post("/upload")
+async def upload_csv(file: UploadFile, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Upload and process CSV file."""
+    validate_csv_file(file)
+    
+    file_content = await file.read()
+    df = process_csv_file(file_content, file.filename)
+    
+    dataset = Dataset(user_id=user.id, filename=file.filename)
+    db.add(dataset)
+    db.flush()
+    
+    create_dataset_rows(dataset.id, user.id, df, db)
+    db.commit()
+    
+    return dataset
+```
+
+### 2. Large Class (Classe Grande)
+
+**Sintoma:** Classe com muitos métodos/atributos
+
+**Refatoração:** Extract Class, Extract Subclass
+
+### 3. Duplicate Code
+
+**Sintoma:** Mesmo código em múltiplos lugares
+
+**Refatoração:** Extract Method, Extract Function
+
+**Exemplo:**
+
+```python
+# ❌ Duplicação
+def calculate_revenue_total(rows):
+    total = 0
+    for row in rows:
+        total += row.revenue
+    return total
+
+def calculate_cost_total(rows):
+    total = 0
+    for row in rows:
+        total += row.cost
+    return total
+
+# ✅ Função genérica
+def calculate_total(rows, field: str) -> float:
+    """Calculate total for a specific field."""
+    return sum(getattr(row, field, 0) or 0 for row in rows)
+
+def calculate_revenue_total(rows):
+    return calculate_total(rows, 'revenue')
+
+def calculate_cost_total(rows):
+    return calculate_total(rows, 'cost')
+```
+
+### 4. Long Parameter List
+
+**Sintoma:** Método com muitos parâmetros (> 5)
+
+**Refatoração:** Introduce Parameter Object, Extract Class
+
+**Exemplo:**
+
+```python
+# ❌ Muitos parâmetros
+def get_dashboard(
+    db, user_id, start_date, end_date, product, min_value, max_value
+):
+    pass
+
+# ✅ Parameter object
+class DashboardFilters(BaseModel):
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    product: Optional[str] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+
+def get_dashboard(db: Session, user_id: int, filters: DashboardFilters):
+    pass
+```
+
+### 5. Feature Envy
+
+**Sintoma:** Método usa mais dados de outra classe que da própria
+
+**Refatoração:** Move Method
+
+### 6. Data Clumps
+
+**Sintoma:** Dados frequentemente juntos
+
+**Refatoração:** Extract Class, Introduce Parameter Object
+
+### 7. Primitive Obsession
+
+**Sintoma:** Uso excessivo de primitivos ao invés de objetos
+
+**Refatoração:** Extract Class, Replace Data Value with Object
+
+## Padrões de Refatoração
+
+### Extract Method
+
+**Quando:** Método longo com múltiplas responsabilidades
+
+**Como:**
+1. Identificar trecho de código com responsabilidade única
+2. Extrair para novo método
+3. Dar nome descritivo
+4. Manter testes passando
+
+**Exemplo:**
+
+```python
+# Antes
+def upload_csv(file, user, db):
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(400, "Apenas CSV")
+    # ... resto do código
+
+# Depois
+def upload_csv(file, user, db):
+    validate_csv_file(file)
+    # ... resto do código
+
+def validate_csv_file(file: UploadFile) -> None:
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(400, "Apenas CSV permitido")
+```
+
+### Rename Variable/Method
+
+**Quando:** Nome não é descritivo
+
+**Como:**
+1. Escolher nome que comunique intenção
+2. Renomear todas as ocorrências
+3. Verificar testes
+
+**Exemplo:**
+
+```python
+# Antes
+def calc(rows):
+    return sum(r.rev for r in rows)
+
+# Depois
+def calculate_total_revenue(dataset_rows: List[DatasetRow]) -> float:
+    return sum(row.revenue or 0 for row in dataset_rows)
+```
+
+### Extract Class
+
+**Quando:** Classe tem múltiplas responsabilidades
+
+**Exemplo:**
+
+```python
+# Antes: CSVService faz muitas coisas
+class CSVService:
+    def validate_csv(...): ...
+    def normalize_columns(...): ...
+    def calculate_profit(...): ...
+    def save_to_database(...): ...
+
+# Depois: Responsabilidades separadas
+class CSVService:
+    def validate_csv(...): ...
+    
+class CSVNormalizer:
+    def normalize_columns(...): ...
+    
+class CSVCalculator:
+    def calculate_profit(...): ...
+
+class CSVRepository:
+    def save_to_database(...): ...
+```
+
+### Replace Conditional with Polymorphism
+
+**Quando:** Muitos if/else baseados em tipo
+
+**Exemplo:**
+
+```python
+# Antes
+def format_value(value, type):
+    if type == "currency":
+        return f"R$ {value:.2f}"
+    elif type == "percent":
+        return f"{value * 100:.1f}%"
+    elif type == "number":
+        return f"{value:.0f}"
+
+# Depois
+class ValueFormatter:
+    def format(self, value): ...
+
+class CurrencyFormatter(ValueFormatter):
+    def format(self, value):
+        return f"R$ {value:.2f}"
+
+class PercentFormatter(ValueFormatter):
+    def format(self, value):
+        return f"{value * 100:.1f}%"
+```
+
+### Introduce Null Object
+
+**Quando:** Muitas verificações de None
+
+**Exemplo:**
+
+```python
+# Antes
+if user is not None:
+    name = user.name
+else:
+    name = "Guest"
+
+# Depois
+class NullUser:
+    name = "Guest"
+
+user = user or NullUser()
+name = user.name
+```
+
+## Complexidade Ciclomática
+
+### Redução de Complexidade
+
+**Medição:**
+- Complexidade ciclomática = número de caminhos possíveis
+- Ideal: < 10 por função
+- Aceitável: < 15
+- Refatorar: > 15
+
+**Estratégias:**
+
+1. **Extrair métodos**
+2. **Simplificar condicionais**
+3. **Early returns**
+4. **Guard clauses**
+
+**Exemplo:**
+
+```python
+# ❌ Alta complexidade (12)
+def process_user(user, action, data):
+    if user is not None:
+        if user.is_active:
+            if action == "update":
+                if data is not None:
+                    if "email" in data:
+                        if is_valid_email(data["email"]):
+                            # ... mais condições
+                            return success()
+                        else:
+                            return error("Invalid email")
+                    else:
+                        return error("No email")
+                else:
+                    return error("No data")
+            else:
+                return error("Invalid action")
+        else:
+            return error("Inactive user")
+    else:
+        return error("No user")
+
+# ✅ Baixa complexidade (4)
+def process_user(user: User, action: str, data: dict) -> Result:
+    if not user:
+        return error("No user")
+    if not user.is_active:
+        return error("Inactive user")
+    if action != "update":
+        return error("Invalid action")
+    if not data:
+        return error("No data")
+    
+    return update_user(user, data)
+
+def update_user(user: User, data: dict) -> Result:
+    if "email" in data and not is_valid_email(data["email"]):
+        return error("Invalid email")
+    # ... resto da lógica
+    return success()
+```
+
+## Duplicação
+
+### Identificação de Duplicação
+
+**Tipos:**
+- **Exata**: Mesmo código em múltiplos lugares
+- **Similar**: Código quase idêntico com pequenas variações
+- **Lógica**: Mesma lógica implementada diferente
+
+**Exemplo:**
+
+```python
+# ❌ Duplicação
+def calculate_total_revenue(rows):
+    total = 0
+    for row in rows:
+        if row.revenue:
+            total += float(row.revenue)
+    return total
+
+def calculate_total_cost(rows):
+    total = 0
+    for row in rows:
+        if row.cost:
+            total += float(row.cost)
+    return total
+
+# ✅ Eliminação
+def calculate_total(rows: List[DatasetRow], field: str) -> float:
+    """Calculate total for a numeric field."""
+    return sum(
+        float(getattr(row, field) or 0)
+        for row in rows
+        if getattr(row, field) is not None
+    )
+
+def calculate_total_revenue(rows: List[DatasetRow]) -> float:
+    return calculate_total(rows, 'revenue')
+
+def calculate_total_cost(rows: List[DatasetRow]) -> float:
+    return calculate_total(rows, 'cost')
+```
+
+## Legibilidade
+
+### Melhorias de Legibilidade
+
+**1. Nomes Descritivos**
+
+```python
+# ❌ Não descritivo
+def proc(data):
+    return sum(x for x in data if x > 0)
+
+# ✅ Descritivo
+def calculate_total_positive_revenue(dataset_rows: List[DatasetRow]) -> float:
+    return sum(row.revenue for row in dataset_rows if row.revenue and row.revenue > 0)
+```
+
+**2. Comentários Úteis**
+
+```python
+# ❌ Comentário redundante
+# Incrementa i em 1
+i += 1
+
+# ✅ Comentário útil
+# Normaliza colunas removendo acentos e espaços para matching flexível
+normalized = normalize_name(column_name)
+```
+
+**3. Funções Pequenas**
+
+```python
+# ❌ Função grande e difícil de entender
+def process_data(data):
+    # 50 linhas de código
+    pass
+
+# ✅ Funções pequenas e focadas
+def validate_data(data):
+    pass
+
+def normalize_data(data):
+    pass
+
+def calculate_metrics(data):
+    pass
+
+def process_data(data):
+    validate_data(data)
+    normalized = normalize_data(data)
+    return calculate_metrics(normalized)
+```
+
+**4. Evitar Aninhamento Profundo**
+
+```python
+# ❌ Aninhamento profundo
+if user:
+    if user.is_active:
+        if permissions:
+            if permissions.can_upload:
+                # código aqui
+                pass
+
+# ✅ Early returns
+if not user or not user.is_active:
+    return error("Inactive user")
+if not permissions or not permissions.can_upload:
+    return error("No permission")
+# código aqui
+```
+
+## Refatoração Segura
+
+### Processo de Refatoração
+
+**1. Preparação:**
+- ✅ Testes existem e passam
+- ✅ Código commitado (backup)
+- ✅ Branch criado
+
+**2. Refatoração Pequena:**
+- ✅ Uma mudança por vez
+- ✅ Testes rodados após cada mudança
+- ✅ Commit frequente
+
+**3. Validação:**
+- ✅ Todos os testes passam
+- ✅ Funcionalidade mantida
+- ✅ Code review
+
+### Regra de Ouro
+
+> "Refatore sem mudar comportamento externo"
+
+### Técnicas Seguras
+
+**1. Testes Como Segurança**
+
+```python
+# Antes de refatorar, garantir que testes passam
+def test_calculate_total_revenue():
+    rows = [DatasetRow(revenue=100), DatasetRow(revenue=200)]
+    assert calculate_total_revenue(rows) == 300
+
+# Refatorar
+# Rode testes novamente - devem passar
+```
+
+**2. Refatoração em Pequenos Passos**
+
+```python
+# Passo 1: Extrair método (testes ainda passam)
+# Passo 2: Renomear variável (testes ainda passam)
+# Passo 3: Simplificar lógica (testes ainda passam)
+```
+
+**3. Comportamento Preservado**
+
+```python
+# ❌ Mudança de comportamento durante refatoração
+def calculate_total(rows, field):
+    # Antes: retornava None se vazio
+    # Depois: retorna 0 - QUEBRA COMPORTAMENTO
+    return sum(...) if rows else 0
+
+# ✅ Comportamento preservado
+def calculate_total(rows, field):
+    # Mantém comportamento original
+    if not rows:
+        return None
+    return sum(...)
+```
+
+## Performance durante Refatoração
+
+### Otimizações Comuns
+
+**1. Evitar Loops Desnecessários**
+
+```python
+# ❌ Múltiplos loops
+revenue_total = sum(row.revenue for row in rows)
+cost_total = sum(row.cost for row in rows)
+profit_total = sum(row.profit for row in rows)
+
+# ✅ Loop único
+totals = {'revenue': 0, 'cost': 0, 'profit': 0}
+for row in rows:
+    totals['revenue'] += row.revenue or 0
+    totals['cost'] += row.cost or 0
+    totals['profit'] += row.profit or 0
+```
+
+**2. Uso de Operações Vetorizadas (Pandas)**
+
+```python
+# ❌ Loop Python
+profits = []
+for row in rows:
+    profits.append(row.revenue - row.cost - row.commission)
+
+# ✅ Pandas vetorizado
+df['profit'] = df['revenue'] - df['cost'] - df['commission']
+```
+
+**3. Bulk Operations**
+
+```python
+# ❌ Insert individual
+for row_data in rows_data:
+    db.add(DatasetRow(**row_data))
+    db.commit()  # Commit a cada row
+
+# ✅ Bulk insert
+db.bulk_insert_mappings(DatasetRow, rows_data)
+db.commit()  # Commit único
+```
+
+## Integração com Outros Agentes
+
+- **QA Agent**: Garantir que testes continuam passando
+- **Backend/Frontend Agents**: Implementar refatorações
+- **Arquiteto Agent**: Refatorações arquiteturais
+- **Documentador Agent**: Atualizar documentação após refatoração
+
+## Referências
+
+- Refactoring (Martin Fowler): https://refactoring.com/
+- Code Smells: https://refactoring.guru/refactoring/smells
+- Refactoring Patterns: https://refactoring.guru/refactoring/techniques

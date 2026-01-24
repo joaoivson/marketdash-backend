@@ -156,4 +156,3 @@ Após o deploy, a documentação interativa estará disponível em:
 - **Problemas com SSL/HTTPS**: Consulte [TROUBLESHOOTING-SSL.md](./TROUBLESHOOTING-SSL.md)
 - **Problemas com deploy**: Verifique logs no Coolify Dashboard
 - **Problemas com banco de dados**: Verifique variável `DATABASE_URL` e conexão com Supabase
-

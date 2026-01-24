@@ -1,0 +1,468 @@
+---
+applyIntelligently: true
+---
+
+# Backend Agent - MarketDash
+
+## Overview
+
+Agente especializado para desenvolvimento do backend MarketDash. O backend é construído com FastAPI, utiliza Pandas para processamento de dados, e está integrado com Supabase PostgreSQL via SQLAlchemy.
+
+## Arquitetura
+
+### Estrutura de Pastas
+
+```
+marketDash_backend/
+├── app/
+│   ├── main.py                 # Entry point FastAPI
+│   ├── core/
+│   │   ├── config.py           # Configurações e variáveis de ambiente
+│   │   ├── security.py         # JWT e hash de senhas
+│   │   ├── logging.py          # Configuração de logs
+│   │   ├── errors.py           # Exception handlers
+│   │   └── cache.py            # Cache (Redis)
+│   ├── db/
+│   │   ├── session.py          # Sessão do banco de dados (SQLAlchemy)
+│   │   └── base.py             # Base declarativa SQLAlchemy
+│   ├── models/                 # Modelos SQLAlchemy
+│   │   ├── user.py             # Modelo de usuário
+│   │   ├── dataset.py          # Modelo de dataset (upload)
+│   │   ├── dataset_row.py      # Modelo de linhas do CSV
+│   │   ├── subscription.py     # Modelo de assinatura
+│   │   └── ad_spend.py         # Modelo de gastos com anúncios
+│   ├── schemas/                # Schemas Pydantic
+│   │   ├── user.py             # Schemas para usuários
+│   │   ├── dataset.py          # Schemas para datasets
+│   │   ├── dashboard.py        # Schemas para dashboard
+│   │   └── analytics.py        # Schemas para analytics
+│   ├── services/               # Lógica de negócio
+│   │   ├── csv_service.py      # Processamento de CSV com Pandas
+│   │   ├── dashboard_service.py # Analytics e agregações
+│   │   ├── auth_service.py     # Autenticação
+│   │   ├── cakto_service.py    # Integração Cakto
+│   │   ├── dataset_service.py  # Gerenciamento de datasets
+│   │   └── subscription_service.py # Gerenciamento de assinaturas
+│   ├── repositories/           # Abstração de acesso ao banco
+│   │   ├── user_repository.py
+│   │   ├── dataset_repository.py
+│   │   └── ...
+│   ├── api/
+│   │   ├── deps.py             # Dependências (autenticação)
+│   │   ├── v1/
+│   │   │   ├── dependencies.py
+│   │   │   └── routes/
+│   │   │       ├── auth.py     # Endpoints de autenticação
+│   │   │       ├── datasets.py # Endpoints de datasets
+│   │   │       ├── dashboard.py # Endpoints de dashboard
+│   │   │       ├── ad_spends.py # Endpoints de ad spends
+│   │   │       └── cakto.py    # Endpoints Cakto
+│   └── utils/
+│       └── serialization.py    # Utilitários de serialização
+```
+
+### Princípios da Arquitetura
+
+- **Separação em camadas**: routes → services → repositories → models
+- **Services contêm lógica de negócio**
+- **Repositories abstraem acesso ao banco**
+- **Models definem estrutura de dados SQLAlchemy**
+- **Schemas (Pydantic) para validação de I/O**
+- **Dependency Injection** via FastAPI `Depends`
+
+## Serviços Principais
+
+### 1. CSVService (`app/services/csv_service.py`)
+
+**Responsabilidade**: Processamento e validação de arquivos CSV com Pandas.
+
+**Funcionalidades críticas:**
+
+- **Validação de encoding**: Suporta UTF-8, Latin-1, ISO-8859-1
+- **Normalização de colunas**: Sistema flexível de aliases para reconhecer múltiplos formatos de CSV
+  - Aliases para `date`, `product`, `revenue`, `cost`, `commission`
+  - Suporte a variações (Shopee, afiliados, etc)
+  - Normalização de nomes (remove acentos, espaços, pontuação)
+  
+- **Limpeza de dados numéricos**: 
+  - Remove formatações (R$, espaços, separadores de milhar)
+  - Converte vírgula decimal para ponto
+  - Trata valores NaN/null
+  
+- **Conversão de tipos**:
+  - Datas: Suporte a múltiplos formatos, dayfirst=True
+  - Números: Conversão automática com tratamento de erros
+  
+- **Cálculo automático**: `profit = revenue - cost - commission`
+
+- **Preservação de dados originais**: Armazena `raw_data` para auditoria
+
+**Exemplo de uso:**
+
+```python
+from app.services.csv_service import CSVService
+
+# Validar e processar CSV
+df, errors = CSVService.validate_csv(file_content, filename)
+
+# Converter para lista de dicionários
+rows_data = CSVService.dataframe_to_dict_list(df)
+```
+
+**Fluxo de dados:**
+```
+CSV upload → Pandas processa → SQLAlchemy salva → PostgreSQL armazena
+```
+
+### 2. DashboardService (`app/services/dashboard_service.py`)
+
+**Responsabilidade**: Analytics e agregações de dados com queries SQL otimizadas.
+
+**Funcionalidades:**
+
+- **KPIs calculados**:
+  - Total revenue, cost, commission, profit
+  - Total de linhas (row_count)
+  
+- **Agregações por período**: Agrupa por data
+- **Agregações por produto**: Agrupa por produto
+- **Filtros dinâmicos**: 
+  - Por data (start_date, end_date)
+  - Por produto (busca parcial com ILIKE)
+  - Por valores (min_value, max_value)
+  
+- **Queries otimizadas**: Usa índices do PostgreSQL para performance
+
+**Exemplo:**
+
+```python
+from app.services.dashboard_service import DashboardService
+
+filters = DashboardFilters(
+    start_date=date(2024, 1, 1),
+    end_date=date(2024, 1, 31),
+    product="Produto A"
+)
+
+# Obter KPIs
+kpis = DashboardService.get_kpis(db, user_id, filters)
+
+# Obter dashboard completo
+dashboard = DashboardService.get_dashboard(db, user_id, filters)
+```
+
+### 3. AuthService / Autenticação
+
+**Atual**: JWT customizado implementado em `app/core/security.py` e `app/api/routes/auth.py`
+
+**Funcionalidades atuais:**
+- Registro de usuários (`/api/v1/auth/register`)
+- Login com JWT (`/api/v1/auth/login`)
+- Validação de senhas com bcrypt
+- Tokens JWT com expiração configurável
+- Integração com Cakto para verificar assinaturas ativas
+
+**Migração futura**: Planejada para Supabase Auth
+- Autenticação nativa do Supabase
+- OAuth integrado (Google, GitHub, etc)
+- Magic links
+- Email verification automático
+- Frontend se integra diretamente com Supabase Auth
+- Backend apenas valida tokens do Supabase (opcional)
+
+**Implementação atual:**
+
+```python
+from app.core.security import create_access_token, verify_password
+
+# Criar token
+token = create_access_token(data={"sub": user_id})
+
+# Verificar senha
+is_valid = verify_password(plain_password, hashed_password)
+```
+
+### 4. CaktoService (`app/services/cakto_service.py`)
+
+**Responsabilidade**: Integração com sistema de assinaturas Cakto.
+
+**Funcionalidades:**
+- Verificar assinaturas ativas por email
+- Validação de acesso baseada em assinatura
+- Webhook para atualizações de assinatura
+
+## Integração Supabase PostgreSQL
+
+### Configuração
+
+- **Conexão**: Configurada em `app/core/config.py` via `DATABASE_URL`
+- **ORM**: SQLAlchemy 2.0
+- **Pooling**: Connection pooling configurado
+  - `pool_size=10`
+  - `max_overflow=20`
+  - `pool_pre_ping=True` (verifica conexões antes de usar)
+
+### Tabelas Principais
+
+1. **users**: Usuários do sistema
+   - Campos: id, name, cpf_cnpj, email, hashed_password, is_active
+   - Índices: email, cpf_cnpj
+
+2. **datasets**: Metadados de uploads CSV
+   - Campos: id, user_id, filename, uploaded_at
+   - Relacionamento: user → datasets
+
+3. **dataset_rows**: Linhas processadas dos CSVs
+   - Campos: id, dataset_id, user_id, date, product, revenue, cost, commission, profit
+   - Campos opcionais: time, status, category, sub_id1, mes_ano, raw_data (JSONB)
+   - Índices otimizados: user_id, date, product, (user_id, date), (user_id, product)
+
+4. **subscriptions**: Assinaturas (integração Cakto)
+
+5. **ad_spends**: Gastos com anúncios
+
+### Fluxo de Dados com Supabase
+
+```
+1. CSV upload recebido via API
+2. CSVService (Pandas) processa e valida
+3. SQLAlchemy Session cria records
+4. PostgreSQL (Supabase) armazena dados
+5. DashboardService consulta com queries otimizadas
+```
+
+### Connection Session
+
+```python
+# app/db/session.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db():
+    """Dependency for getting database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+## Models e Schemas
+
+### Models (SQLAlchemy)
+
+Models definem a estrutura das tabelas no banco:
+
+```python
+# app/models/dataset_row.py
+class DatasetRow(Base):
+    __tablename__ = "dataset_rows"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    dataset_id = Column(Integer, ForeignKey("datasets.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    date = Column(Date, nullable=False, index=True)
+    product = Column(String, nullable=False, index=True)
+    revenue = Column(Numeric(10, 2))
+    cost = Column(Numeric(10, 2))
+    commission = Column(Numeric(10, 2))
+    profit = Column(Numeric(10, 2))
+    raw_data = Column(JSONB)  # Dados originais do CSV
+```
+
+### Schemas (Pydantic)
+
+Schemas validam e serializam dados de entrada/saída:
+
+```python
+# app/schemas/dashboard.py
+class DashboardFilters(BaseModel):
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    product: Optional[str] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+
+class KPIs(BaseModel):
+    total_revenue: float
+    total_cost: float
+    total_commission: float
+    total_profit: float
+    total_rows: int
+```
+
+## Padrões de Código
+
+### Nomenclatura
+
+- **Classes**: `PascalCase` (ex: `CSVService`, `DashboardService`)
+- **Funções/Métodos**: `snake_case` (ex: `validate_csv`, `get_dashboard`)
+- **Constantes**: `UPPER_SNAKE_CASE` (ex: `TARGET_COLUMNS`, `DATABASE_URL`)
+- **Arquivos**: `snake_case.py`
+
+### Type Hints
+
+Sempre use type hints:
+
+```python
+def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+    """Validate and parse CSV file."""
+    pass
+```
+
+### Docstrings
+
+Documente funções e classes:
+
+```python
+class CSVService:
+    """Service for processing and validating CSV files."""
+    
+    @staticmethod
+    def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+        """
+        Validate and parse CSV file (flexível).
+        
+        Args:
+            file_content: Conteúdo do arquivo em bytes
+            filename: Nome do arquivo
+            
+        Returns:
+            Tuple[DataFrame, List[str]]: DataFrame processado e lista de erros
+        """
+        pass
+```
+
+### Dependency Injection
+
+Use `Depends` para injeção de dependências:
+
+```python
+from fastapi import Depends
+from app.db.session import get_db
+from app.api.deps import get_current_user
+
+@router.get("/dashboard")
+def get_dashboard(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pass
+```
+
+### Tratamento de Erros
+
+Use `HTTPException` apropriado:
+
+```python
+from fastapi import HTTPException, status
+
+if not user:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Usuário não encontrado"
+    )
+```
+
+## Variáveis de Ambiente
+
+Configuradas em `app/core/config.py`:
+
+```python
+# Banco de Dados
+DATABASE_URL=postgresql://user:pass@host:5432/db
+
+# JWT
+JWT_SECRET=your-secret-key-min-32-chars
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_HOURS=24
+
+# Supabase
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_KEY=publishable-key
+SUPABASE_SERVICE_KEY=service-key
+
+# Cakto
+CAKTO_API_BASE=https://api.cakto.com.br
+CAKTO_CLIENT_ID=client-id
+CAKTO_CLIENT_SECRET=client-secret
+CAKTO_ENFORCE_SUBSCRIPTION=false
+```
+
+## Processamento de Dados com Pandas
+
+### Padrões Importantes
+
+1. **Sempre valide encoding** antes de processar
+2. **Normalize colunas** usando o sistema de aliases
+3. **Limpe dados numéricos** removendo formatações
+4. **Preserve dados originais** em `raw_data`
+5. **Calcule profit** automaticamente
+6. **Trate erros** graciosamente com mensagens claras
+
+### Aliases Suportados
+
+O sistema reconhece múltiplos formatos de CSV através de aliases normalizados:
+
+- **date**: date, data, datapedido, data_do_pedido, horario, etc
+- **product**: product, produto, idpedido, id_do_pedido, produto_nome, etc
+- **revenue**: revenue, receita, valor, valorvenda, faturamento, preco_r, etc
+- **cost**: cost, custo, valorcusto, valor_gasto_anuncios, etc
+- **commission**: commission, comissao, taxa, comissao_shopee_r, etc
+
+## Boas Práticas
+
+1. **Sempre valide inputs** com Pydantic schemas
+2. **Use transactions** para operações críticas
+3. **Logs estruturados** para debugging
+4. **Tratamento de erros** apropriado
+5. **Queries otimizadas** com índices
+6. **Connection pooling** para performance
+7. **Type hints** em todo código
+8. **Docstrings** para funções públicas
+
+## Referências
+
+- FastAPI Docs: https://fastapi.tiangolo.com/
+- SQLAlchemy 2.0: https://docs.sqlalchemy.org/
+- Pandas: https://pandas.pydata.org/docs/
+- Supabase PostgreSQL: https://supabase.com/docs/guides/database
+
+## Fluxo Crítico: Processamento CSV
+
+```
+1. Upload CSV via POST /api/v1/datasets/upload
+2. CSVService.validate_csv() processa com Pandas
+   - Detecta encoding
+   - Normaliza colunas
+   - Limpa dados numéricos
+   - Calcula profit
+3. Cria Dataset record no banco
+4. Converte DataFrame para lista de dicts
+5. Cria DatasetRow records via SQLAlchemy
+6. Commit transaction
+7. Retorna DatasetResponse
+```
+
+## Autenticação
+
+### Estado Atual (JWT Customizado)
+
+- Endpoints: `/api/v1/auth/register`, `/api/v1/auth/login`
+- Validação: `get_current_user` em `app/api/deps.py`
+- Segurança: bcrypt para senhas, JWT para tokens
+
+### Migração Futura (Supabase Auth)
+
+- Usar Supabase Auth SDK no frontend
+- Backend valida tokens do Supabase (opcional)
+- Remover código de autenticação customizado

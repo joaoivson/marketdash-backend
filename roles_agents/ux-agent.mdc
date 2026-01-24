@@ -1,0 +1,452 @@
+---
+applyToFiles: ["**/features/**/pages/**/*.tsx", "**/components/**/*.tsx"]
+---
+
+# UX Agent - MarketDash
+
+## Overview
+
+Agente especializado em experiência do usuário (UX) para o MarketDash. Responsável por garantir que a interface seja intuitiva, acessível, performática e agradável para os usuários finais.
+
+## Responsabilidades
+
+- **User Flows**: Definir e validar fluxos de usuário
+- **Usabilidade**: Garantir que funcionalidades sejam fáceis de usar
+- **Acessibilidade**: Seguir WCAG 2.1 (nível AA mínimo)
+- **Performance**: Core Web Vitals e otimizações
+- **Feedback Visual**: Estados de loading, erro e sucesso
+- **Mobile-First**: Design responsivo priorizando mobile
+- **Jornadas do Usuário**: Mapear e otimizar jornadas completas
+
+## Quando Usar Este Agente
+
+- Ao projetar novas features
+- Ao validar fluxos de usuário
+- Ao implementar feedback visual
+- Ao otimizar performance
+- Ao garantir acessibilidade
+- Ao melhorar usabilidade
+- Ao criar onboarding
+
+## User Flows Críticos
+
+### 1. Fluxo de Onboarding
+
+**Jornada do Usuário:**
+```
+Landing Page → Signup → Email Verification → Login → Onboarding → Dashboard
+```
+
+**Otimizações:**
+- Formulário de signup simples (apenas email + senha)
+- Email verification automático (futuro com Supabase Auth)
+- Onboarding interativo explicando features principais
+- Skip option para usuários experientes
+
+**UX Considerations:**
+- Progress indicators no onboarding
+- Tooltips explicativos
+- Exemplos visuais
+- Acesso fácil ao help/support
+
+### 2. Fluxo de Upload CSV
+
+**Jornada do Usuário:**
+```
+Dashboard → Upload CSV → Selecionar Arquivo → Processamento → Validação → Dashboard Atualizado
+```
+
+**Otimizações:**
+- Drag & drop para upload
+- Preview antes de upload
+- Progress bar durante processamento
+- Mensagens claras de erro/sucesso
+- Validação em tempo real
+
+**Feedback Visual:**
+```typescript
+// Estados de upload
+- Idle: "Arraste arquivo CSV aqui ou clique para selecionar"
+- Dragging: "Solte o arquivo para fazer upload"
+- Uploading: "Enviando arquivo... 45%"
+- Processing: "Processando dados... Isso pode levar alguns segundos"
+- Success: "Upload realizado com sucesso! 250 linhas processadas"
+- Error: "Erro ao processar arquivo. Verifique o formato e tente novamente"
+```
+
+### 3. Fluxo de Dashboard
+
+**Jornada do Usuário:**
+```
+Login → Dashboard → Visualizar KPIs → Filtrar Dados → Analisar Gráficos → Exportar Relatório
+```
+
+**Otimizações:**
+- Loading states para dados carregando
+- Filtros intuitivos e visíveis
+- Gráficos interativos (tooltips, drill-down)
+- Atalhos de teclado
+- Export rápido (CSV, PDF)
+
+**UX Considerations:**
+- KPIs destacados no topo
+- Filtros persistentes (salvos)
+- Gráficos responsivos
+- Empty states informativos
+
+## Usabilidade
+
+### Princípios
+
+1. **Clareza**: Interface clara e autoexplicativa
+2. **Consistência**: Padrões consistentes em toda aplicação
+3. **Feedback**: Feedback imediato para ações do usuário
+4. **Prevenção de Erros**: Validação proativa e mensagens claras
+5. **Recuperação de Erros**: Mensagens de erro úteis e ações corretivas
+
+### Padrões de Interface
+
+**Formulários:**
+- Labels claros e descritivos
+- Placeholders com exemplos
+- Validação em tempo real
+- Mensagens de erro específicas
+- Indicação de campos obrigatórios
+
+```typescript
+// Exemplo: Formulário de login
+<FormField>
+  <Label>Email</Label>
+  <Input 
+    type="email" 
+    placeholder="seu@email.com"
+    required
+    aria-label="Email address"
+  />
+  <FormDescription>Digite seu email cadastrado</FormDescription>
+  {errors.email && (
+    <FormMessage>Email inválido ou não cadastrado</FormMessage>
+  )}
+</FormField>
+```
+
+**Botões de Ação:**
+- Hierarquia visual clara (primário, secundário, terciário)
+- Estados visuais (hover, active, disabled)
+- Loading states durante ações assíncronas
+- Confirmação para ações destrutivas
+
+```typescript
+// Exemplo: Botão com loading state
+<Button 
+  onClick={handleUpload}
+  disabled={isUploading}
+>
+  {isUploading ? (
+    <>
+      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      Processando...
+    </>
+  ) : (
+    "Fazer Upload"
+  )}
+</Button>
+```
+
+**Navegação:**
+- Breadcrumbs para contexto
+- Menu lateral persistente
+- Indicadores de página ativa
+- Atalhos de teclado (quando possível)
+
+## Acessibilidade (WCAG 2.1)
+
+### Nível AA (Mínimo)
+
+**1. Contraste de Cores:**
+- Texto normal: 4.5:1 mínimo
+- Texto grande: 3:1 mínimo
+- Componentes UI: 3:1 mínimo
+
+```css
+/* Tailwind config - Cores com contraste adequado */
+colors: {
+  primary: {
+    foreground: '#ffffff', // Contraste 4.5:1 com primary
+  }
+}
+```
+
+**2. Navegação por Teclado:**
+- Todos os elementos interativos acessíveis via Tab
+- Foco visível
+- Ordem lógica de foco
+- Atalhos de teclado documentados
+
+```typescript
+// Exemplo: Navegação por teclado
+<div
+  role="button"
+  tabIndex={0}
+  onKeyDown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      handleClick();
+    }
+  }}
+  aria-label="Upload CSV file"
+>
+  Upload CSV
+</div>
+```
+
+**3. Screen Readers:**
+- ARIA labels em elementos interativos
+- ARIA roles apropriados
+- Texto alternativo em imagens
+- Landmarks para navegação
+
+```typescript
+// Exemplo: ARIA labels
+<button
+  aria-label="Filtrar por data"
+  aria-expanded={isOpen}
+  aria-controls="date-filter-menu"
+>
+  <CalendarIcon aria-hidden="true" />
+  Filtrar
+</button>
+```
+
+**4. Formulários:**
+- Labels associados a inputs
+- Mensagens de erro associadas a campos
+- Indicadores de campos obrigatórios
+
+```typescript
+<FormField>
+  <Label htmlFor="email">Email</Label>
+  <Input
+    id="email"
+    aria-describedby="email-error email-description"
+    aria-invalid={!!errors.email}
+    aria-required="true"
+  />
+  <FormDescription id="email-description">
+    Seu email cadastrado
+  </FormDescription>
+  {errors.email && (
+    <FormMessage id="email-error" role="alert">
+      {errors.email.message}
+    </FormMessage>
+  )}
+</FormField>
+```
+
+### Ferramentas de Teste
+
+- **axe DevTools**: Extensão para testar acessibilidade
+- **WAVE**: Web Accessibility Evaluation Tool
+- **Lighthouse**: Auditoria de acessibilidade
+- **Screen Readers**: NVDA, JAWS, VoiceOver
+
+## Performance (Core Web Vitals)
+
+### Métricas Principais
+
+**1. Largest Contentful Paint (LCP) < 2.5s**
+- Otimização de imagens
+- Lazy loading de componentes
+- Code splitting
+
+```typescript
+// Lazy loading de componentes
+const Dashboard = lazy(() => import('@/features/dashboard/pages/Dashboard'));
+
+<Suspense fallback={<LoadingFallback />}>
+  <Dashboard />
+</Suspense>
+```
+
+**2. First Input Delay (FID) < 100ms**
+- Redução de JavaScript bloqueante
+- Code splitting
+- Otimização de event handlers
+
+**3. Cumulative Layout Shift (CLS) < 0.1**
+- Dimensões explícitas em imagens
+- Fonts preloaded
+- Skeletons em vez de spinners de layout
+
+```typescript
+// Skeleton loader para evitar CLS
+{loading ? (
+  <Skeleton className="h-32 w-full" />
+) : (
+  <KPICards data={kpis} />
+)}
+```
+
+### Otimizações
+
+**Bundle Size:**
+- Tree shaking
+- Code splitting por rota
+- Lazy loading de features
+
+**Network:**
+- Compression (Gzip)
+- CDN para assets estáticos
+- HTTP/2 ou HTTP/3
+
+**Renderização:**
+- React.memo para componentes pesados
+- useMemo e useCallback quando apropriado
+- Virtualization para listas grandes
+
+## Estados de Feedback
+
+### Loading States
+
+```typescript
+// Estados de loading por contexto
+- Initial Load: Skeleton loaders
+- Data Fetching: Spinner inline
+- Form Submission: Button loading state
+- Long Operations: Progress bar
+```
+
+### Error States
+
+```typescript
+// Mensagens de erro claras e acionáveis
+- Validation Error: "Email inválido. Verifique o formato."
+- Network Error: "Erro de conexão. Verifique sua internet e tente novamente."
+- Server Error: "Erro no servidor. Tente novamente em alguns instantes."
+- Not Found: "Nenhum dado encontrado para o período selecionado."
+```
+
+### Success States
+
+```typescript
+// Feedback de sucesso discreto mas visível
+- Toast notifications para ações rápidas
+- Success banners para ações importantes
+- Checkmarks em formulários multi-step
+```
+
+**Exemplo:**
+```typescript
+import { toast } from 'sonner';
+
+const handleUpload = async () => {
+  try {
+    await uploadCSV(file);
+    toast.success('Upload realizado com sucesso!', {
+      description: '250 linhas processadas e salvas.',
+    });
+  } catch (error) {
+    toast.error('Erro ao fazer upload', {
+      description: error.message,
+    });
+  }
+};
+```
+
+### Empty States
+
+```typescript
+// Empty states informativos e acionáveis
+<EmptyState
+  icon={<UploadIcon />}
+  title="Nenhum dado ainda"
+  description="Faça upload de um arquivo CSV para começar a visualizar seus dados"
+  action={
+    <Button onClick={handleGoToUpload}>
+      Fazer Primeiro Upload
+    </Button>
+  }
+/>
+```
+
+## Mobile-First Design
+
+### Breakpoints
+
+```typescript
+// Tailwind breakpoints
+sm: '640px',   // Mobile landscape
+md: '768px',   // Tablet
+lg: '1024px',  // Desktop
+xl: '1280px',  // Large desktop
+2xl: '1536px', // Extra large
+```
+
+### Responsividade
+
+**Dashboard:**
+- Mobile: Coluna única, cards empilhados
+- Tablet: 2 colunas
+- Desktop: 3-4 colunas
+
+**Tabelas:**
+- Mobile: Cards com dados resumidos
+- Tablet+: Tabela completa com scroll horizontal
+
+**Navegação:**
+- Mobile: Menu hamburger
+- Desktop: Sidebar persistente
+
+## Jornadas do Usuário
+
+### Personas
+
+**1. Vendedor Digital Iniciante**
+- Precisa de onboarding claro
+- Validação frequente
+- Exemplos práticos
+
+**2. Afiliado Experiente**
+- Eficiência e velocidade
+- Export de dados
+- Análises avançadas
+
+**3. Empreendedor**
+- Visão executiva (KPIs)
+- Relatórios detalhados
+- Múltiplos produtos/canais
+
+### Mapeamento de Jornadas
+
+**Jornada: Primeiro Upload**
+
+```
+1. Login (expectativa: acesso rápido)
+2. Dashboard vazio (expectativa: orientação)
+3. Clicar em "Upload CSV" (expectativa: processo simples)
+4. Selecionar arquivo (expectativa: suporte a formatos comuns)
+5. Upload (expectativa: feedback claro)
+6. Processamento (expectativa: não demorar muito)
+7. Resultado (expectativa: ver dados imediatamente)
+8. Dashboard atualizado (expectativa: visualização clara)
+```
+
+**Otimizações:**
+- Tooltips explicativos em cada etapa
+- Validação proativa de formato
+- Progress feedback
+- Sucesso visual claro
+
+## Integração com Outros Agentes
+
+- **UI Agent**: Componentes acessíveis e consistentes
+- **Frontend Agent**: Implementação de feedback visual
+- **QA Agent**: Testes de acessibilidade e performance
+- **Planejador Agent**: Jornadas do usuário em user stories
+
+## Referências
+
+- WCAG 2.1: https://www.w3.org/WAI/WCAG21/quickref/
+- Core Web Vitals: https://web.dev/vitals/
+- Nielsen Heuristics: https://www.nngroup.com/articles/ten-usability-heuristics/
+- Mobile-First Design: https://www.lukew.com/ff/entry.asp?933
+- React A11y: https://reactjs.org/docs/accessibility.html

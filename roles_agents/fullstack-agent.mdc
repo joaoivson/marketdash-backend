@@ -1,0 +1,648 @@
+---
+applyIntelligently: true
+---
+
+# Fullstack Agent - MarketDash
+
+## Overview
+
+Agente especializado para trabalhos que envolvem integração entre backend (FastAPI) e frontend (React). Documenta contratos de API, fluxo de dados end-to-end, autenticação e padrões de integração.
+
+## Arquitetura de Integração
+
+### Fluxo de Dados End-to-End
+
+```
+Frontend (React)                    Backend (FastAPI)                 Database (Supabase PostgreSQL)
+     │                                      │                                    │
+     │  1. HTTP Request                     │                                    │
+     ├──────────────────────────────────────>│                                    │
+     │                                      │                                    │
+     │                                      │  2. Validação (Pydantic)           │
+     │                                      │  3. Service Layer                   │
+     │                                      │  4. SQLAlchemy Query               │
+     │                                      ├────────────────────────────────────>│
+     │                                      │                                    │
+     │                                      │  5. Resultado                      │
+     │                                      │<────────────────────────────────────┤
+     │                                      │                                    │
+     │  6. JSON Response                    │                                    │
+     │<──────────────────────────────────────┤                                    │
+     │                                      │                                    │
+     │  7. State Update (Zustand/React Query)                                    │
+     │  8. UI Update                                                             │
+```
+
+## Contratos de API
+
+### Base URL
+
+- **Desenvolvimento**: `http://localhost:8000`
+- **Produção**: `https://api.marketdash.com.br`
+- **Homologação**: `https://api.marketdash.hml.com.br`
+
+Configurado via `VITE_API_URL` no frontend (`src/core/config/api.config.ts`).
+
+### Autenticação
+
+#### Estado Atual: JWT Customizado
+
+**Login:**
+```http
+POST /api/v1/auth/login
+Content-Type: application/x-www-form-urlencoded
+
+email=usuario@example.com&password=senha123
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "email": "usuario@example.com",
+    "name": "Usuário",
+    "is_active": true
+  }
+}
+```
+
+**Uso no Frontend:**
+```typescript
+// features/auth/services/login.service.ts
+const formData = new FormData();
+formData.append('email', data.email);
+formData.append('password', data.senha);
+
+const response = await fetch(getApiUrl('/api/v1/auth/login'), {
+  method: 'POST',
+  body: formData,
+});
+
+const result = await response.json();
+// Salvar token: tokenStorage.set(result.access_token);
+// Salvar user: userStorage.set(result.user);
+```
+
+**Requests Autenticados:**
+```typescript
+// Incluir token no header
+const response = await fetch(getApiUrl('/api/v1/dashboard'), {
+  headers: {
+    'Authorization': `Bearer ${tokenStorage.get()}`,
+    'Content-Type': 'application/json',
+  },
+});
+```
+
+**Backend (FastAPI):**
+```python
+from app.api.deps import get_current_user
+
+@router.get("/dashboard")
+def get_dashboard(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # current_user já está validado pelo get_current_user
+    pass
+```
+
+#### Migração Futura: Supabase Auth
+
+**Planejado:**
+- Frontend usa Supabase Auth SDK diretamente
+- Backend valida tokens do Supabase (opcional)
+- Remover código de autenticação customizado
+
+```typescript
+// Futuro (Supabase Auth)
+import { supabase } from '@/lib/supabase';
+
+const { data, error } = await supabase.auth.signInWithPassword({
+  email,
+  password,
+});
+
+// Token automático gerenciado pelo Supabase
+```
+
+### Endpoints Principais
+
+#### 1. Upload de CSV
+
+**Request:**
+```http
+POST /api/v1/datasets/upload
+Authorization: Bearer {token}
+Content-Type: multipart/form-data
+
+file: [arquivo.csv]
+user_id: 1 (opcional, query param)
+```
+
+**Response:**
+```json
+{
+  "id": 1,
+  "user_id": 1,
+  "filename": "dados.csv",
+  "uploaded_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Fluxo Completo:**
+```
+1. Frontend: Upload CSV via FormData
+2. Backend: CSVService.validate_csv() processa com Pandas
+3. Backend: Normaliza colunas, limpa dados, calcula profit
+4. Backend: Cria Dataset record
+5. Backend: Cria DatasetRow records via SQLAlchemy bulk insert
+6. Backend: Commit transaction
+7. Frontend: Recebe DatasetResponse
+8. Frontend: Invalida cache e refaz fetch dos dados
+```
+
+**Exemplo Frontend:**
+```typescript
+const formData = new FormData();
+formData.append('file', file);
+
+const response = await fetch(getApiUrl('/api/v1/datasets/upload'), {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+  },
+  body: formData,
+});
+
+const dataset = await response.json();
+// Invalidar cache e refazer fetch
+datasetStore.invalidate();
+await datasetStore.fetchRows({ force: true });
+```
+
+#### 2. Listar Linhas do Dataset
+
+**Request:**
+```http
+GET /api/v1/datasets/all/rows?start_date=2024-01-01&end_date=2024-01-31&include_raw_data=true&limit=100&offset=0
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "dataset_id": 1,
+    "user_id": 1,
+    "date": "2024-01-01",
+    "product": "Produto A",
+    "revenue": 1000.00,
+    "cost": 500.00,
+    "commission": 100.00,
+    "profit": 400.00,
+    "status": "completed",
+    "category": "Categoria 1",
+    "raw_data": { ... }
+  }
+]
+```
+
+**Exemplo Frontend:**
+```typescript
+// services/datasets.service.ts
+export const fetchDatasetRows = async (query: DatasetQuery = {}): Promise<DatasetRow[]> => {
+  const params = new URLSearchParams();
+  if (query.startDate) params.set("start_date", query.startDate);
+  if (query.endDate) params.set("end_date", query.endDate);
+  // ...
+
+  const url = getApiUrl(`/api/v1/datasets/all/rows?${params.toString()}`);
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${tokenStorage.get()}`,
+    },
+  });
+  
+  return await res.json();
+};
+```
+
+#### 3. Dashboard (KPIs e Agregações)
+
+**Request:**
+```http
+GET /api/v1/dashboard?start_date=2024-01-01&end_date=2024-01-31&product=Produto%20A
+Authorization: Bearer {token}
+```
+
+**Response:**
+```json
+{
+  "kpis": {
+    "total_revenue": 50000.00,
+    "total_cost": 20000.00,
+    "total_commission": 5000.00,
+    "total_profit": 25000.00,
+    "total_rows": 100
+  },
+  "period_aggregations": [
+    {
+      "period": "2024-01-01",
+      "revenue": 1000.00,
+      "cost": 500.00,
+      "commission": 100.00,
+      "profit": 400.00,
+      "row_count": 5
+    }
+  ],
+  "product_aggregations": [
+    {
+      "product": "Produto A",
+      "revenue": 20000.00,
+      "cost": 8000.00,
+      "commission": 2000.00,
+      "profit": 10000.00,
+      "row_count": 50
+    }
+  ]
+}
+```
+
+**Exemplo Frontend:**
+```typescript
+const response = await fetch(
+  getApiUrl(`/api/v1/dashboard?start_date=${startDate}&end_date=${endDate}`),
+  {
+    headers: {
+      'Authorization': `Bearer ${tokenStorage.get()}`,
+    },
+  }
+);
+
+const dashboardData = await response.json();
+// Usar dashboardData.kpis, dashboardData.period_aggregations, etc
+```
+
+#### 4. Adicionar Gasto com Anúncios
+
+**Request:**
+```http
+POST /api/v1/datasets/latest/ad_spend?user_id=1
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "amount": 5000.00,
+  "sub_id1": "campanha-001" (opcional)
+}
+```
+
+**Response:**
+```json
+{
+  "updated": 250,
+  "dataset_id": 1,
+  "sub_id1": "campanha-001",
+  "amount": 5000.00
+}
+```
+
+**Fluxo:**
+```
+1. Frontend: Envia amount e sub_id1 (opcional)
+2. Backend: Busca dataset mais recente do usuário
+3. Backend: Filtra linhas por sub_id1 (se informado)
+4. Backend: Divide amount pelo número de linhas (rateio)
+5. Backend: Atualiza raw_data["Valor gasto anuncios"] em cada linha
+6. Backend: Bulk update via SQLAlchemy (em lotes de 1000)
+7. Frontend: Recebe confirmação e invalida cache
+```
+
+## Sincronização de Schemas
+
+### Backend Schemas (Pydantic)
+
+Definidos em `app/schemas/`:
+
+```python
+# app/schemas/dashboard.py
+class KPIs(BaseModel):
+    total_revenue: float
+    total_cost: float
+    total_commission: float
+    total_profit: float
+    total_rows: int
+
+class DashboardResponse(BaseModel):
+    kpis: KPIs
+    period_aggregations: List[PeriodAggregation]
+    product_aggregations: List[ProductAggregation]
+```
+
+### Frontend Types (TypeScript)
+
+Definidos em `src/shared/types/` e `src/features/*/types/`:
+
+```typescript
+// shared/types/adspend.ts
+export interface DatasetRow {
+  id: number;
+  dataset_id: number;
+  user_id: number;
+  date: string;
+  product: string;
+  revenue: number;
+  cost: number;
+  commission: number;
+  profit: number;
+  status?: string;
+  category?: string;
+  raw_data?: Record<string, any>;
+}
+
+// features/dashboard/types/index.ts
+export interface DashboardResponse {
+  kpis: {
+    total_revenue: number;
+    total_cost: number;
+    total_commission: number;
+    total_profit: number;
+    total_rows: number;
+  };
+  period_aggregations: PeriodAggregation[];
+  product_aggregations: ProductAggregation[];
+}
+```
+
+### Manter Schemas Sincronizados
+
+1. **Backend como fonte de verdade**: Schemas Pydantic são a referência
+2. **TypeScript types**: Manter sincronizados manualmente ou gerar via script
+3. **Validação**: Backend valida com Pydantic, frontend valida com Zod (se usado)
+
+## Padrões de Integração
+
+### 1. Error Handling
+
+**Backend (FastAPI):**
+```python
+from fastapi import HTTPException, status
+
+if not user:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Usuário não encontrado"
+    )
+```
+
+**Frontend:**
+```typescript
+try {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Erro na requisição');
+  }
+  return await response.json();
+} catch (error) {
+  if (error instanceof Error) {
+    throw error;
+  }
+  throw new Error('Erro de conexão');
+}
+```
+
+### 2. Loading States
+
+**Frontend (Zustand):**
+```typescript
+type DatasetState = {
+  rows: DatasetRow[];
+  loading: boolean;
+  error: string | null;
+  
+  fetchRows: async () => {
+    set({ loading: true, error: null });
+    try {
+      const rows = await fetchDatasetRows();
+      set({ rows, loading: false });
+    } catch (error) {
+      set({ error: error.message, loading: false });
+    }
+  };
+};
+```
+
+**UI:**
+```typescript
+const { rows, loading, error } = useDatasetStore();
+
+if (loading) return <LoadingSpinner />;
+if (error) return <ErrorMessage error={error} />;
+return <DataTable rows={rows} />;
+```
+
+### 3. Cache e Hydration
+
+**Padrão:**
+```typescript
+// stores/datasetStore.ts
+fetchRows: async (opts = {}) => {
+  // 1. Verificar cache se não forçado
+  if (!opts.force && hydrated) {
+    const cached = getCached();
+    if (cached) return cached.rows;
+  }
+  
+  // 2. Fetch da API
+  set({ loading: true });
+  const rows = await fetchDatasetRows();
+  
+  // 3. Salvar em cache e estado
+  persist(rows);
+  return rows;
+};
+```
+
+### 4. Data Transformation
+
+**Backend → Frontend:**
+- Datas: Backend retorna `YYYY-MM-DD`, Frontend converte para `Date`
+- Números: Backend retorna `Decimal`, Frontend recebe como `number`
+- JSON: Backend retorna `JSONB`, Frontend recebe como `Record<string, any>`
+
+**Exemplo:**
+```typescript
+// Backend retorna
+{
+  "date": "2024-01-15",
+  "revenue": 1000.00
+}
+
+// Frontend transforma
+const row = {
+  ...apiRow,
+  date: new Date(apiRow.date), // Converter string para Date
+  revenue: Number(apiRow.revenue), // Garantir number
+};
+```
+
+### 5. Pagination
+
+**Backend:**
+```python
+@router.get("/datasets/all/rows")
+def list_all_rows(
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    rows = query.limit(limit).offset(offset).all()
+    return rows
+```
+
+**Frontend:**
+```typescript
+const [page, setPage] = useState(0);
+const limit = 50;
+
+const fetchPage = async (page: number) => {
+  const rows = await fetchDatasetRows({
+    limit,
+    offset: page * limit,
+  });
+  return rows;
+};
+```
+
+## Fluxos Críticos
+
+### 1. Upload e Processamento de CSV
+
+```
+Frontend:
+1. Usuário seleciona arquivo CSV
+2. FormData criado com file
+3. POST /api/v1/datasets/upload
+
+Backend:
+4. Recebe arquivo via UploadFile
+5. CSVService.validate_csv() processa com Pandas
+   - Detecta encoding (UTF-8, Latin-1, ISO-8859-1)
+   - Normaliza colunas via aliases
+   - Limpa dados numéricos (R$, formatações)
+   - Calcula profit = revenue - cost - commission
+6. Cria Dataset record
+7. Converte DataFrame para lista de dicts
+8. Bulk insert de DatasetRow records
+9. Commit transaction
+
+Frontend:
+10. Recebe DatasetResponse
+11. Invalida cache do datasetStore
+12. Refaz fetch dos dados
+13. Atualiza UI
+```
+
+### 2. Dashboard com Filtros
+
+```
+Frontend:
+1. Usuário seleciona filtros (data, produto)
+2. Monta query string: ?start_date=2024-01-01&end_date=2024-01-31&product=Produto%20A
+3. GET /api/v1/dashboard com query params
+
+Backend:
+4. Recebe query params
+5. Cria DashboardFilters (Pydantic)
+6. DashboardService.get_dashboard() executa:
+   - get_kpis() - Calcula totais
+   - get_period_aggregations() - Agrupa por data
+   - get_product_aggregations() - Agrupa por produto
+7. Queries SQL otimizadas com índices
+8. Retorna DashboardResponse
+
+Frontend:
+9. Recebe DashboardResponse
+10. Atualiza KPICards com kpis
+11. Atualiza gráficos com period_aggregations
+12. Atualiza tabela de produtos com product_aggregations
+```
+
+### 3. Autenticação e Autorização
+
+```
+Atual (JWT Customizado):
+
+Frontend:
+1. POST /api/v1/auth/login com email/password
+2. Recebe access_token e user
+3. Salva token em tokenStorage
+4. Salva user em userStorage
+
+Backend:
+5. Verifica credenciais
+6. Cria JWT token com user.id
+7. Retorna token e user
+
+Requests Subsequentes:
+8. Frontend inclui: Authorization: Bearer {token}
+9. Backend valida via get_current_user (app/api/deps.py)
+10. Extrai user_id do token
+11. Busca user no banco
+12. Retorna user ou 401 Unauthorized
+
+Futuro (Supabase Auth):
+1. Frontend usa Supabase Auth SDK
+2. Autenticação gerenciada pelo Supabase
+3. Backend valida tokens Supabase (opcional)
+```
+
+## CORS Configuration
+
+**Backend (`app/core/config.py`):**
+```python
+CORS_ORIGINS: list[str] = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
+    "https://marketdash.com.br",
+    "https://marketdash.hml.com.br",
+]
+```
+
+**FastAPI (`app/main.py`):**
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+## Boas Práticas de Integração
+
+1. **Sempre valide dados** no backend (Pydantic)
+2. **Tipagem forte** no frontend (TypeScript)
+3. **Error handling** consistente
+4. **Loading states** para UX
+5. **Cache inteligente** para performance
+6. **Paginação** para grandes datasets
+7. **Tokens seguros** (httpOnly cookies no futuro)
+8. **CORS configurado** corretamente
+9. **Validação de tipos** em runtime (Zod opcional)
+10. **Logs estruturados** para debugging
+
+## Referências
+
+- FastAPI Docs: https://fastapi.tiangolo.com/
+- React Query: https://tanstack.com/query
+- Zustand: https://zustand-demo.pmnd.rs/
+- Supabase Auth: https://supabase.com/docs/guides/auth

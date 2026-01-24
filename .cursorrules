@@ -1,0 +1,182 @@
+# MarketDash - Cursor Rules
+
+## Overview
+
+MarketDash é uma plataforma SaaS de análise de dados para vendedores digitais, afiliados e empreendedores. O projeto possui arquitetura separada entre backend (FastAPI + PostgreSQL) e frontend (React + TypeScript).
+
+## Tech Stack
+
+### Backend
+- **Python 3.11+**
+- **FastAPI** - Framework web moderno e rápido
+- **SQLAlchemy 2.0** - ORM para PostgreSQL
+- **PostgreSQL (Supabase)** - Banco de dados relacional
+- **Pandas** - Processamento e validação de CSV
+- **Pydantic** - Validação de dados e schemas
+- **JWT** - Autenticação baseada em tokens
+- **Docker & Docker Compose** - Containerização
+
+### Frontend
+- **React 18** + **TypeScript**
+- **Vite** - Build tool
+- **Tailwind CSS** - Estilização
+- **Shadcn/ui** - Componentes UI
+- **React Router** - Roteamento
+- **React Query** - Data fetching e cache
+- **Zustand** - Estado global
+- **Recharts** - Gráficos
+- **SASS** - Pré-processador CSS
+
+## Code Standards
+
+### Nomenclatura
+
+**Backend (Python):**
+- Classes: `PascalCase` (ex: `CSVService`, `DashboardService`)
+- Funções/Métodos: `snake_case` (ex: `validate_csv`, `get_dashboard`)
+- Constantes: `UPPER_SNAKE_CASE` (ex: `TARGET_COLUMNS`, `DATABASE_URL`)
+- Arquivos: `snake_case.py` (ex: `csv_service.py`, `dashboard_service.py`)
+
+**Frontend (TypeScript):**
+- Componentes: `PascalCase.tsx` (ex: `DashboardHeader.tsx`)
+- Hooks: `camelCase` com prefixo `use` (ex: `useIsMobile.tsx`)
+- Services: `camelCase.service.ts` (ex: `login.service.ts`)
+- Types/Interfaces: `PascalCase` (ex: `User`, `SignupData`)
+- Constantes: `UPPER_SNAKE_CASE` (ex: `API_CONFIG`)
+
+### Arquitetura
+
+**Backend:**
+- Separação em camadas: `routes` → `services` → `repositories` → `models`
+- Services contêm lógica de negócio
+- Repositories abstraem acesso ao banco
+- Models definem estrutura de dados
+- Schemas (Pydantic) para validação de I/O
+
+**Frontend:**
+- Feature-based organization: cada feature é auto-contida
+- `features/` - Features organizadas por domínio
+- `shared/` - Código compartilhado (componentes, hooks, utils)
+- `core/` - Configurações fundamentais
+- `app/` - Configuração da aplicação
+
+## Padrões de Código
+
+### Backend (Python/FastAPI)
+
+- Use type hints sempre
+- Documente funções com docstrings
+- Valide inputs com Pydantic schemas
+- Use dependency injection (`Depends`)
+- Trate erros com `HTTPException` apropriado
+- Logs estruturados com `logging`
+
+```python
+# Exemplo de serviço
+class CSVService:
+    """Service for processing and validating CSV files."""
+    
+    @staticmethod
+    def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+        """Validate and normalize CSV file."""
+        # Implementação...
+```
+
+### Frontend (React/TypeScript)
+
+- Use TypeScript strict mode
+- Componentes funcionais com hooks
+- Separe lógica de apresentação
+- Use React Query para data fetching
+- Zustand apenas para estado global necessário
+- Componentes reutilizáveis em `shared/components/`
+
+```typescript
+// Exemplo de componente
+interface DashboardHeaderProps {
+  title: string;
+  onFilterChange?: (filters: FilterType) => void;
+}
+
+export const DashboardHeader: React.FC<DashboardHeaderProps> = ({ title, onFilterChange }) => {
+  // Implementação...
+};
+```
+
+## Integrações Críticas
+
+### Supabase PostgreSQL
+
+- **Conexão**: Configurada via `DATABASE_URL` em `app/core/config.py`
+- **ORM**: SQLAlchemy 2.0
+- **Pooling**: Connection pooling configurado (pool_size=10, max_overflow=20)
+- **Tabelas**: users, datasets, dataset_rows, subscriptions, ad_spends
+- **Índices**: Otimizados para queries frequentes
+
+### Processamento de Dados
+
+- **CSVService**: Processa CSVs com Pandas
+  - Valida encoding (UTF-8, Latin-1, ISO-8859-1)
+  - Normaliza colunas com aliases flexíveis
+  - Limpa dados numéricos
+  - Calcula profit automaticamente
+- **Fluxo**: CSV upload → Pandas processa → SQLAlchemy salva → PostgreSQL
+
+### Autenticação
+
+- **Atual**: JWT customizado (app/core/security.py)
+- **Futuro**: Migração planejada para Supabase Auth
+- **Validação**: Integração com Cakto para assinaturas
+- **Endpoints**: `/api/v1/auth/register`, `/api/v1/auth/login`
+
+## Git Practices
+
+- Commits descritivos e em português
+- Use prefixos: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`
+- Branches: `main` (produção), `develop` (homologação)
+- Pull requests com descrição clara
+
+## Testing
+
+- Backend: Testes unitários com pytest (quando implementados)
+- Frontend: Testes de componentes quando necessário
+- Testes de integração para fluxos críticos
+
+## Documentação
+
+- Documente APIs com docstrings
+- README.md atualizado
+- Comente código complexo
+- Use type hints como documentação
+
+## Boas Práticas
+
+- **Backend**: 
+  - Sempre valide inputs
+  - Use transactions para operações críticas
+  - Logs estruturados
+  - Tratamento de erros apropriado
+  
+- **Frontend**:
+  - Componentes pequenos e focados
+  - Evite prop drilling (use Zustand ou Context)
+  - Loading e error states
+  - Acessibilidade básica (aria labels)
+
+## Variáveis de Ambiente
+
+**Backend (.env):**
+- `DATABASE_URL` - URL do Supabase PostgreSQL
+- `JWT_SECRET` - Chave secreta para JWT
+- `SUPABASE_URL`, `SUPABASE_KEY` - Credenciais Supabase
+- `CAKTO_CLIENT_ID`, `CAKTO_CLIENT_SECRET` - Integração Cakto
+
+**Frontend (.env):**
+- `VITE_API_URL` - URL da API backend
+
+## Referências
+
+- Backend: `marketDash_backend/README.md`
+- Frontend: `marketDash_frontend/README.md`
+- Arquitetura: `marketDash_backend/ARQUITETURA-SERVICOS.md`
+- Frontend: `marketDash_frontend/src/ARCHITECTURE.md`
