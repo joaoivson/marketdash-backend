@@ -1,0 +1,521 @@
+---
+applyManually: true
+---
+
+# PRD Agent - MarketDash
+
+## Overview
+
+Agente especializado em criação e validação de Product Requirements Documents (PRD) para o MarketDash. Responsável por documentar requisitos funcionais e não-funcionais, critérios de aceite, edge cases, integrações e métricas de sucesso.
+
+## Responsabilidades
+
+- **Estrutura de PRD**: Criar PRDs seguindo padrão consistente
+- **Requisitos Funcionais**: Documentar funcionalidades detalhadamente
+- **Requisitos Não-Funcionais**: Performance, segurança, escalabilidade
+- **Aceite Criteria**: Definir critérios claros de aceitação
+- **Edge Cases**: Identificar e documentar casos extremos
+- **Integrações**: Documentar integrações com serviços externos
+- **Métricas de Sucesso**: Definir KPIs e métricas
+- **Riscos e Dependências**: Identificar riscos e dependências
+
+## Quando Usar Este Agente
+
+- Ao criar nova feature
+- Ao documentar requisitos de produto
+- Ao validar escopo de features
+- Ao identificar edge cases
+- Ao planejar integrações
+- Ao definir métricas de sucesso
+
+## Estrutura de PRD
+
+### Template Padrão
+
+```markdown
+# PRD: [Nome da Feature]
+
+## 1. Visão Geral
+- **Objetivo**: Por que estamos construindo isso?
+- **Problema**: Qual problema resolve?
+- **Solução**: Como resolve?
+- **Usuários Impactados**: Quem se beneficia?
+
+## 2. Contexto e Motivação
+- **Histórico**: Contexto da feature
+- **Dados**: Dados que suportam a decisão
+- **Stakeholders**: Quem está envolvido?
+
+## 3. Requisitos Funcionais
+- **RF1**: Descrição detalhada
+- **RF2**: Descrição detalhada
+- ...
+
+## 4. Requisitos Não-Funcionais
+- Performance
+- Segurança
+- Escalabilidade
+- Usabilidade
+- Acessibilidade
+
+## 5. Fluxos de Usuário
+- Happy path
+- Alternativas
+- Erros
+
+## 6. Critérios de Aceite
+- Dado-Quando-Então
+- Edge cases
+
+## 7. Integrações
+- APIs externas
+- Serviços internos
+- Dependências
+
+## 8. Métricas de Sucesso
+- KPIs
+- Métricas de adoção
+- Métricas de performance
+
+## 9. Riscos e Dependências
+- Riscos técnicos
+- Riscos de produto
+- Dependências
+
+## 10. Mockups e Wireframes
+- Design inicial
+- Protótipos
+```
+
+## Exemplos de PRDs
+
+### PRD 1: Export de Relatórios
+
+**1. Visão Geral**
+
+**Objetivo:**
+Permitir que usuários exportem análises do dashboard em formatos PDF e CSV para compartilhamento e análise offline.
+
+**Problema:**
+Usuários precisam compartilhar análises com equipe ou fazer análises offline, mas atualmente só conseguem visualizar dados no dashboard online.
+
+**Solução:**
+Implementar funcionalidade de export que gera arquivos PDF ou CSV com dados filtrados do dashboard.
+
+**Usuários Impactados:**
+- Vendedores digitais (compartilhar com equipe)
+- Afiliados (análise offline)
+- Empreendedores (relatórios executivos)
+
+**2. Requisitos Funcionais**
+
+**RF1: Export PDF**
+- Usuário pode exportar dashboard completo em PDF
+- PDF inclui: KPIs, gráficos, tabela de dados
+- Dados respeitam filtros aplicados
+- Layout profissional e organizado
+
+**RF2: Export CSV**
+- Usuário pode exportar dados em CSV
+- CSV inclui todas as colunas dos dados filtrados
+- Formato compatível com Excel e outras ferramentas
+- Nome de arquivo descritivo (ex: `marketdash_2024-01-01_to_2024-01-31.csv`)
+
+**RF3: Seleção de Formato**
+- Interface permite escolher formato (PDF ou CSV)
+- Botão de export visível no dashboard
+- Feedback visual durante geração
+
+**3. Requisitos Não-Funcionais**
+
+**Performance:**
+- PDF deve gerar em < 5 segundos
+- CSV deve gerar em < 2 segundos
+- Não bloquear UI durante geração
+
+**Segurança:**
+- Export apenas dos dados do usuário autenticado
+- Validação de permissões
+- Não expor dados sensíveis
+
+**Usabilidade:**
+- Interface intuitiva
+- Feedback claro de progresso
+- Download automático ou link de download
+
+**4. Fluxos de Usuário**
+
+**Happy Path:**
+```
+1. Usuário visualiza dashboard com filtros aplicados
+2. Clica em "Exportar Relatório"
+3. Seleciona formato (PDF ou CSV)
+4. Clica em "Gerar Relatório"
+5. Sistema processa e gera arquivo
+6. Arquivo é baixado automaticamente
+```
+
+**Alternativa - Seleção de Dados:**
+```
+1. Usuário pode escolher quais dados exportar
+   - Apenas KPIs
+   - Apenas tabela
+   - Dashboard completo
+```
+
+**Erro - Sem Dados:**
+```
+1. Usuário tenta exportar sem dados
+2. Sistema exibe mensagem: "Nenhum dado para exportar"
+3. Botão de export desabilitado
+```
+
+**5. Critérios de Aceite**
+
+**CA1: Export PDF Completo**
+```
+Dado que o usuário está no dashboard
+E aplicou filtros de data
+Quando clica em "Exportar PDF"
+Então o PDF é gerado com:
+- KPIs no topo
+- Gráficos abaixo dos KPIs
+- Tabela de dados no final
+- Apenas dados do período filtrado
+```
+
+**CA2: Export CSV com Filtros**
+```
+Dado que o usuário aplicou filtros (data e produto)
+Quando exporta CSV
+Então o CSV contém apenas linhas que atendem aos filtros
+E inclui todas as colunas de dados
+```
+
+**CA3: Validação de Dados Vazios**
+```
+Dado que não há dados no período filtrado
+Quando tenta exportar
+Então exibe mensagem de erro
+E não gera arquivo
+```
+
+**6. Edge Cases**
+
+- Export com filtro que resulta em 0 linhas
+- Export de período muito longo (1000+ linhas)
+- Export durante processamento de outro CSV
+- Export de CSV muito grande (>10MB)
+- Export com caracteres especiais nos dados
+- Export com múltiplos idiomas nos dados
+
+**7. Integrações**
+
+**Backend:**
+- Endpoint `/api/v1/reports/export`
+- Biblioteca para geração PDF (reportlab, weasyprint)
+- Validação de permissões
+
+**Frontend:**
+- Botão de export no Dashboard
+- Modal de seleção de formato
+- Feedback visual de progresso
+
+**8. Métricas de Sucesso**
+
+- % de usuários que usam export (meta: 40%+)
+- Número de exports por usuário/mês (meta: 2+)
+- Tempo médio de geração (meta: < 3s)
+- Taxa de erro na geração (meta: < 1%)
+- Satisfação com funcionalidade (meta: 4/5)
+
+**9. Riscos e Dependências**
+
+**Riscos:**
+- Performance com grandes volumes de dados
+- Formatação PDF complexa
+- Compatibilidade de CSV com Excel
+
+**Dependências:**
+- Biblioteca de geração PDF confiável
+- Endpoint de export implementado
+- Validação de permissões funcionando
+
+### PRD 2: Múltiplos Datasets
+
+**1. Visão Geral**
+
+**Objetivo:**
+Permitir que usuários façam upload de múltiplos datasets e visualizem dados consolidados ou separados por dataset.
+
+**Problema:**
+Usuários têm dados de múltiplas fontes/períodos e precisam comparar ou consolidar.
+
+**Solução:**
+Sistema passa a suportar múltiplos datasets por usuário, com opção de visualizar consolidado ou por dataset individual.
+
+**2. Requisitos Funcionais**
+
+**RF1: Upload Múltiplo**
+- Usuário pode fazer upload de vários CSVs
+- Cada upload cria novo dataset
+- Histórico de datasets mantido
+
+**RF2: Seleção de Dataset**
+- Usuário pode escolher qual dataset visualizar
+- Opção de visualizar consolidado (todos)
+- Lista de datasets disponíveis
+
+**RF3: Comparação**
+- Usuário pode comparar dois ou mais datasets
+- Gráficos comparativos
+- KPIs lado a lado
+
+**3. Requisitos Não-Funcionais**
+
+**Performance:**
+- Consolidar datasets em < 5s
+- Visualização não degradar com múltiplos datasets
+
+**Escalabilidade:**
+- Suportar 10+ datasets por usuário
+- Queries otimizadas para múltiplos datasets
+
+**4. Edge Cases**
+
+- Usuário tenta fazer upload de dataset duplicado
+- Usuário exclui dataset em uso
+- Comparação de datasets com estruturas diferentes
+- Muitos datasets (10+) na lista
+
+**5. Integrações**
+
+**Database:**
+- Tabela `datasets` já existe
+- Relacionamento `user → datasets → dataset_rows`
+
+**UI:**
+- Seletor de dataset no dashboard
+- Modal de seleção/gerenciamento
+- Indicador de dataset ativo
+
+**6. Métricas de Sucesso**
+
+- % de usuários com múltiplos datasets (meta: 30%+)
+- Número médio de datasets por usuário (meta: 2+)
+- Uso de comparação (meta: 20%+)
+
+## Requisitos Não-Funcionais
+
+### Performance
+
+**Backend:**
+- API response time < 200ms (p95)
+- CSV processing < 10s para arquivos de 10MB
+- Dashboard load < 2s
+
+**Frontend:**
+- Initial load < 3s
+- Time to interactive < 4s
+- Core Web Vitals: LCP < 2.5s, FID < 100ms, CLS < 0.1
+
+### Segurança
+
+- Autenticação obrigatória para todas as rotas (exceto public)
+- Validação de inputs em todas as camadas
+- Rate limiting: 100 requests/minuto por IP
+- HTTPS obrigatório em produção
+- Secrets em variáveis de ambiente
+
+### Escalabilidade
+
+- Suportar 1000+ usuários simultâneos
+- Suportar 100+ datasets por usuário
+- Processar CSVs de até 10MB
+- Banco de dados com connection pooling
+
+### Usabilidade
+
+- Interface intuitiva (sem necessidade de tutorial)
+- Acessibilidade WCAG 2.1 AA
+- Mobile-responsive
+- Feedback visual claro para todas as ações
+
+## Aceite Criteria
+
+### Template Padrão
+
+```
+Dado [condição inicial]
+Quando [ação do usuário]
+Então [resultado esperado]
+E [resultado adicional]
+```
+
+### Critérios por Feature
+
+**Feature: Upload CSV**
+```
+CA1: Upload bem-sucedido
+Dado que estou logado
+E tenho arquivo CSV válido
+Quando faço upload
+Então o sistema processa o arquivo
+E exibe mensagem de sucesso
+E os dados aparecem no dashboard
+
+CA2: Validação de formato
+Dado que tenho arquivo não-CSV
+Quando tento fazer upload
+Então o sistema exibe erro
+E não processa o arquivo
+
+CA3: Validação de tamanho
+Dado que tenho CSV > 10MB
+Quando tento fazer upload
+Então o sistema exibe erro de tamanho
+E não processa o arquivo
+```
+
+## Edge Cases
+
+### Upload CSV
+
+- CSV com encoding diferente
+- CSV com colunas com nomes não reconhecidos
+- CSV vazio
+- CSV com apenas headers
+- CSV com dados inválidos (datas, números)
+- CSV muito grande
+- CSV com caracteres especiais
+
+### Dashboard
+
+- Nenhum dado cadastrado
+- Período filtrado sem dados
+- Produto filtrado inexistente
+- Datas inválidas (inicial > final)
+- Filtros combinados sem resultados
+
+### Autenticação
+
+- Login com credenciais inválidas
+- Token expirado
+- Usuário inativo
+- Múltiplas tentativas de login
+- Email não cadastrado
+
+## Integrações
+
+### Integrações Externas
+
+**Cakto (Assinaturas):**
+- Endpoint: `https://api.cakto.com.br`
+- Verificação de assinatura ativa
+- Webhook para atualizações
+- Rate limiting respeitado
+
+**Supabase (Database & Auth):**
+- PostgreSQL: Conexão direta (porta 5432)
+- Auth: Migração futura planejada
+- Storage: Futuro para arquivos
+- Real-time: Futuro para updates
+
+**Integrações Futuras:**
+- APIs de marketplaces (Shopee, Mercado Livre)
+- Sistemas de pagamento (Stripe)
+- Email (SendGrid, Mailgun)
+
+### Integrações Internas
+
+**Backend → Database:**
+- SQLAlchemy ORM
+- Connection pooling
+- Transactions
+
+**Frontend → Backend:**
+- REST API
+- JWT authentication
+- JSON responses
+
+## Métricas de Sucesso
+
+### Métricas de Produto
+
+**Adoção:**
+- % de usuários ativos mensais (MAU)
+- Taxa de retenção (D1, D7, D30)
+- Número de uploads por usuário/mês
+- Número de visualizações de dashboard
+
+**Engajamento:**
+- Frequência de uso (dias/usuário/mês)
+- Tempo médio na plataforma
+- Features mais usadas
+- Taxa de abandono
+
+**Conversão:**
+- Signup → Primeiro upload (meta: 60%+)
+- Upload → Dashboard view (meta: 80%+)
+- Trial → Paid (futuro)
+
+### Métricas Técnicas
+
+**Performance:**
+- API response time (p50, p95, p99)
+- CSV processing time
+- Dashboard load time
+- Error rate (< 1%)
+
+**Qualidade:**
+- Bug reports por feature
+- Cobertura de testes (> 70%)
+- Taxa de sucesso de upload (> 95%)
+
+## Riscos e Dependências
+
+### Riscos Técnicos
+
+**Alto Risco:**
+- Performance com grandes volumes de dados
+- Escalabilidade de processamento CSV
+- Dependência em serviços externos (Supabase, Cakto)
+
+**Médio Risco:**
+- Migração de JWT para Supabase Auth
+- Compatibilidade de formatos CSV
+- Browser compatibility
+
+**Baixo Risco:**
+- Updates de dependências
+- Mudanças em APIs externas
+
+### Dependências
+
+**Críticas:**
+- Supabase PostgreSQL (banco de dados)
+- FastAPI (backend framework)
+- React (frontend framework)
+
+**Importantes:**
+- Pandas (processamento CSV)
+- SQLAlchemy (ORM)
+- Shadcn/ui (componentes)
+
+**Secundárias:**
+- Cakto (assinaturas)
+- Bibliotecas de gráficos
+
+## Integração com Outros Agentes
+
+- **Planejador Agent**: Transformar PRD em user stories
+- **Backend/Frontend Agents**: Implementar requisitos do PRD
+- **QA Agent**: Testar baseado em critérios de aceite
+- **UX Agent**: Validar requisitos de usabilidade
+- **Security Agent**: Validar requisitos de segurança
+
+## Referências
+
+- PRD Template: https://www.atlassian.com/agile/product-management/requirements
+- User Stories: https://www.mountaingoatsoftware.com/agile/user-stories
+- Acceptance Criteria: https://www.agilealliance.org/glossary/acceptance-criteria/

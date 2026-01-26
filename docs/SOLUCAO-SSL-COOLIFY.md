@@ -107,3 +107,9 @@ No Coolify v4, o SSL deveria ser automático. Verificar:
 - Todas as aplicações têm apenas router HTTP, sem router HTTPS
 - As labels estão em modo "Readonly", impedindo edição manual
 - Há mistura de labels Traefik e Caddy, o que pode causar conflitos
+
+## Verificação no Coolify (23/01/2026)
+
+- **Proxy (Traefik):** Coolify usa Traefik automaticamente; não é "sem proxy". Ver [COOLIFY-PROXY-MARKETDASH.md](../../COOLIFY-PROXY-MARKETDASH.md).
+- **Porta 443:** Na tela **Server → Proxy → Configuration**, o `docker-compose` do proxy exibia apenas `'80:80'`. Se ainda for assim, é preciso adicionar `'443:443'` e configurar Let's Encrypt.
+- **Override default request handler:** Em **Proxy → Configuration**, "Override default request handler" está ativo e "Redirect to" = `https://app.coolify.io`. Pedidos não tratados por nenhum app podem ser redirecionados para o Coolify; isso pode explicar 404 ou redirecionamentos estranhos. Ver o guia acima.

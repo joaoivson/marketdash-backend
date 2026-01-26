@@ -1,0 +1,589 @@
+---
+applyIntelligently: true
+---
+
+# Arquiteto Agent - MarketDash
+
+## Overview
+
+Agente especializado em arquitetura de software para o MarketDash. Responsável por definir decisões arquiteturais, padrões de design, escalabilidade, performance e separação de responsabilidades.
+
+## Responsabilidades
+
+- **Arquitetura de Software**: Definir e validar decisões arquiteturais
+- **Clean Architecture**: Garantir separação de responsabilidades
+- **Padrões de Design**: Aplicar padrões apropriados
+- **Escalabilidade**: Planejar para crescimento
+- **Performance**: Otimizações arquiteturais
+- **Decisões Arquiteturais**: Documentar ADRs (Architecture Decision Records)
+- **Microserviços vs Monólito**: Decisões sobre estrutura
+
+## Quando Usar Este Agente
+
+- Ao projetar novas features
+- Ao fazer decisões arquiteturais importantes
+- Ao avaliar padrões de design
+- Ao planejar escalabilidade
+- Ao otimizar performance
+- Ao definir estruturas de código
+- Ao documentar decisões arquiteturais
+
+## Arquitetura Atual do MarketDash
+
+### Visão Geral
+
+MarketDash segue uma arquitetura separada entre backend e frontend:
+
+```
+┌─────────────────┐         ┌─────────────────┐
+│  Frontend       │         │  Backend        │
+│  (React)        │◄───────►│  (FastAPI)      │
+│                 │  HTTP   │                 │
+└─────────────────┘         └─────────────────┘
+                                      │
+                                      ▼
+                            ┌─────────────────┐
+                            │  Supabase       │
+                            │  PostgreSQL     │
+                            └─────────────────┘
+```
+
+### Backend Architecture (FastAPI)
+
+**Camadas:**
+
+```
+┌─────────────────────────────────────┐
+│  API Routes (FastAPI)               │  ← Interface HTTP
+├─────────────────────────────────────┤
+│  Services (Business Logic)          │  ← Lógica de negócio
+├─────────────────────────────────────┤
+│  Repositories (Data Access)         │  ← Abstração de dados
+├─────────────────────────────────────┤
+│  Models (SQLAlchemy)                │  ← Estrutura de dados
+├─────────────────────────────────────┤
+│  Database (Supabase PostgreSQL)     │  ← Persistência
+└─────────────────────────────────────┘
+```
+
+**Separação de Responsabilidades:**
+
+1. **Routes** (`app/api/routes/`)
+   - Endpoints HTTP
+   - Validação de inputs (Pydantic)
+   - Autenticação (JWT)
+   - Respostas HTTP
+
+2. **Services** (`app/services/`)
+   - Lógica de negócio
+   - Processamento de dados (Pandas)
+   - Validações complexas
+   - Orquestração de operações
+
+3. **Repositories** (`app/repositories/`)
+   - Abstração de acesso ao banco
+   - Queries SQL otimizadas
+   - Transações
+
+4. **Models** (`app/models/`)
+   - Estrutura de dados SQLAlchemy
+   - Relacionamentos
+   - Validações de schema
+
+### Frontend Architecture (React)
+
+**Organização por Features:**
+
+```
+┌─────────────────────────────────────┐
+│  App (Providers, Routes)            │  ← Configuração
+├─────────────────────────────────────┤
+│  Features                           │  ← Features isoladas
+│  ├── auth/                          │
+│  ├── dashboard/                     │
+│  └── landing/                       │
+├─────────────────────────────────────┤
+│  Shared                             │  ← Código compartilhado
+│  ├── components/                    │
+│  ├── hooks/                         │
+│  ├── lib/                           │
+│  └── types/                         │
+├─────────────────────────────────────┤
+│  Core (Config)                      │  ← Configurações
+└─────────────────────────────────────┘
+```
+
+**Separação de Responsabilidades:**
+
+1. **Features** (`src/features/`)
+   - Organização por domínio
+   - Auto-contidas (pages, services, types)
+   - Isolamento de responsabilidades
+
+2. **Shared** (`src/shared/`)
+   - Componentes reutilizáveis
+   - Hooks customizados
+   - Utilitários
+   - Tipos compartilhados
+
+3. **Services** (`src/services/`)
+   - Chamadas de API
+   - Abstração de HTTP
+   - Transformação de dados
+
+4. **Stores** (`src/stores/`)
+   - Estado global (Zustand)
+   - Cache local
+   - Sincronização de dados
+
+## Clean Architecture
+
+### Princípios Aplicados
+
+1. **Separação de Responsabilidades**
+   - Cada camada tem responsabilidade única
+   - Dependências unidirecionais
+   - Baixo acoplamento, alta coesão
+
+2. **Dependency Inversion**
+   - Dependências apontam para abstrações
+   - Injeção de dependências (FastAPI Depends)
+
+3. **Independência de Framework**
+   - Lógica de negócio isolada
+   - Possibilidade de trocar frameworks
+
+### Backend - Clean Architecture
+
+```python
+# Layer: Routes (Interface)
+@router.post("/datasets/upload")
+async def upload_csv(
+    file: UploadFile,
+    current_user: User = Depends(get_current_user),  # Dependency Injection
+    db: Session = Depends(get_db)
+):
+    # Delega para Service Layer
+    return await dataset_service.upload_csv(file, current_user.id, db)
+
+# Layer: Service (Business Logic)
+class DatasetService:
+    @staticmethod
+    def upload_csv(file: UploadFile, user_id: int, db: Session):
+        # Validação de negócio
+        # Processamento (CSVService)
+        # Persistência (Repository)
+        pass
+
+# Layer: Repository (Data Access)
+class DatasetRepository:
+    @staticmethod
+    def create_dataset(user_id: int, filename: str, db: Session):
+        # Abstração de acesso ao banco
+        pass
+```
+
+### Frontend - Clean Architecture
+
+```typescript
+// Layer: Pages (Interface)
+export const Dashboard = () => {
+  const { data, isLoading } = useQuery(['dashboard'], fetchDashboard);
+  return <DashboardView data={data} loading={isLoading} />;
+};
+
+// Layer: Services (Business Logic)
+export const fetchDashboard = async (filters: DashboardFilters) => {
+  const response = await api.get('/dashboard', { params: filters });
+  return transformDashboardData(response.data); // Transformação
+};
+
+// Layer: Stores (State Management)
+export const useDashboardStore = create<DashboardState>((set) => ({
+  data: null,
+  loading: false,
+  fetch: async (filters) => {
+    set({ loading: true });
+    const data = await fetchDashboard(filters);
+    set({ data, loading: false });
+  },
+}));
+```
+
+## Padrões de Design
+
+### 1. Service Layer Pattern
+
+**Backend:**
+
+```python
+# app/services/csv_service.py
+class CSVService:
+    """Service layer para processamento de CSV."""
+    
+    @staticmethod
+    def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+        # Lógica de validação isolada
+        pass
+```
+
+**Benefícios:**
+- Reutilização de lógica
+- Testabilidade
+- Separação de responsabilidades
+
+### 2. Repository Pattern
+
+**Backend:**
+
+```python
+# app/repositories/dataset_repository.py
+class DatasetRepository:
+    """Repository para acesso a dados de datasets."""
+    
+    @staticmethod
+    def create_dataset(user_id: int, filename: str, db: Session) -> Dataset:
+        dataset = Dataset(user_id=user_id, filename=filename)
+        db.add(dataset)
+        db.commit()
+        return dataset
+    
+    @staticmethod
+    def get_datasets_by_user(user_id: int, db: Session) -> List[Dataset]:
+        return db.query(Dataset).filter(Dataset.user_id == user_id).all()
+```
+
+**Benefícios:**
+- Abstração de acesso a dados
+- Fácil trocar implementação
+- Testabilidade com mocks
+
+### 3. Feature-Based Organization (Frontend)
+
+**Estrutura:**
+
+```
+features/
+├── auth/
+│   ├── pages/          # Páginas da feature
+│   ├── services/       # Serviços de API
+│   ├── types/          # Tipos específicos
+│   └── styles/         # Estilos específicos
+└── dashboard/
+    ├── pages/
+    ├── services/
+    └── types/
+```
+
+**Benefícios:**
+- Organização clara por domínio
+- Isolamento de features
+- Fácil encontrar código relacionado
+- Facilita lazy loading
+
+### 4. Dependency Injection (FastAPI)
+
+```python
+# FastAPI usa Depends para injeção de dependências
+@router.get("/dashboard")
+def get_dashboard(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Dependências injetadas automaticamente
+    pass
+```
+
+**Benefícios:**
+- Baixo acoplamento
+- Testabilidade
+- Configuração centralizada
+
+### 5. Singleton Pattern (Configuration)
+
+```python
+# app/core/config.py
+class Settings(BaseSettings):
+    # Configurações
+    pass
+
+settings = Settings()  # Singleton instance
+```
+
+### 6. Factory Pattern (Database Session)
+
+```python
+# app/db/session.py
+def get_db():
+    """Factory para criar sessões de banco."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+```
+
+## Escalabilidade
+
+### Backend
+
+**Estratégias:**
+
+1. **Connection Pooling**
+   ```python
+   engine = create_engine(
+       settings.DATABASE_URL,
+       pool_size=10,
+       max_overflow=20
+   )
+   ```
+
+2. **Horizontal Scaling**
+   - Stateless API (JWT tokens)
+   - Load balancer friendly
+   - Session management no cliente
+
+3. **Caching (Futuro)**
+   - Redis para cache
+   - Cache de queries frequentes
+   - Invalidation strategies
+
+4. **Async Operations (Futuro)**
+   - Background tasks para processamento pesado
+   - Queue system (Celery, RQ)
+   - Event-driven architecture
+
+### Frontend
+
+**Estratégias:**
+
+1. **Code Splitting**
+   ```typescript
+   // Lazy loading de features
+   const Dashboard = lazy(() => import('@/features/dashboard/pages/Dashboard'));
+   ```
+
+2. **Bundle Optimization**
+   - Tree shaking
+   - Minification
+   - Compression (Gzip)
+
+3. **Caching**
+   - LocalStorage para dados estáticos
+   - React Query cache
+   - Service Workers (PWA - futuro)
+
+4. **Virtualization**
+   - Virtual lists para grandes datasets
+   - Pagination
+   - Infinite scroll
+
+## Performance
+
+### Backend
+
+**Otimizações:**
+
+1. **Query Optimization**
+   - Índices no banco
+   - Select apenas colunas necessárias
+   - Join otimizado
+   - Bulk operations
+
+2. **Pandas Processing**
+   - Processamento eficiente
+   - Uso de operações vetorizadas
+   - Chunking para arquivos grandes
+
+3. **Connection Pooling**
+   - Reutilização de conexões
+   - Pool size adequado
+
+### Frontend
+
+**Otimizações:**
+
+1. **React Performance**
+   - React.memo para componentes pesados
+   - useMemo e useCallback quando apropriado
+   - Lazy loading
+
+2. **Bundle Size**
+   - Code splitting
+   - Dynamic imports
+   - Remover dependências não usadas
+
+3. **Network**
+   - Compression
+   - CDN para assets
+   - HTTP/2
+
+## Decisões Arquiteturais
+
+### ADR 1: Separação Backend/Frontend
+
+**Decisão:** Manter backend e frontend separados.
+
+**Contexto:** 
+- FastAPI (Python) é ideal para processamento de dados (Pandas)
+- React é ideal para UI complexa
+- Equipes podem trabalhar independentemente
+
+**Consequências:**
+- Integração via API REST
+- Necessário gerenciar CORS
+- Schemas precisam estar sincronizados
+
+### ADR 2: Supabase PostgreSQL
+
+**Decisão:** Usar Supabase PostgreSQL ao invés de banco próprio.
+
+**Contexto:**
+- Managed service reduz overhead
+- Recursos adicionais (RLS, Edge Functions)
+- Escalabilidade gerenciada
+
+**Consequências:**
+- Dependency em serviço externo
+- Menos controle sobre infraestrutura
+- Benefícios: RLS, Auth, Storage
+
+### ADR 3: JWT Customizado → Supabase Auth
+
+**Decisão:** Migrar de JWT customizado para Supabase Auth.
+
+**Status:** Planejado (futuro)
+
+**Contexto:**
+- Supabase Auth oferece mais features
+- Menos código para manter
+- OAuth integrado
+
+**Consequências:**
+- Refatoração necessária
+- Melhor experiência de usuário
+- Menos vulnerabilidades
+
+### ADR 4: Pandas para Processamento CSV
+
+**Decisão:** Usar Pandas para processamento de CSV.
+
+**Contexto:**
+- Pandas é excelente para manipulação de dados
+- Validações complexas
+- Normalização de colunas
+
+**Consequências:**
+- Dependency em Pandas (pesado)
+- Processamento mais lento em arquivos muito grandes
+- Flexibilidade para validações complexas
+
+### ADR 5: Feature-Based Organization (Frontend)
+
+**Decisão:** Organizar frontend por features ao invés de tipos.
+
+**Contexto:**
+- Features são auto-contidas
+- Facilita lazy loading
+- Organização mais intuitiva
+
+**Consequências:**
+- Alguma duplicação entre features
+- Necessário disciplina para manter shared/
+
+### ADR 6: Zustand para State Management
+
+**Decisão:** Usar Zustand ao invés de Redux.
+
+**Contexto:**
+- Zustand é mais simples
+- Menos boilerplate
+- Suficiente para necessidades do projeto
+
+**Consequências:**
+- Menos features que Redux
+- Ideal para projetos médios
+
+## Microserviços vs Monólito
+
+### Arquitetura Atual: Modular Monolith
+
+**Características:**
+- Backend único (FastAPI)
+- Separação interna em módulos
+- Banco de dados único
+
+**Por que esta escolha:**
+- Projeto em estágio inicial
+- Equipe pequena
+- Simplicidade de deploy
+- Comunicação eficiente entre módulos
+
+**Quando migrar para microserviços:**
+- Escala crítica atingida
+- Necessidade de deploy independente
+- Times múltiplos
+- Tecnologias diferentes por serviço
+
+**Estrutura Modular Atual:**
+
+```
+Backend FastAPI
+├── Módulo Auth (routes/auth.py)
+├── Módulo Datasets (routes/datasets.py)
+├── Módulo Dashboard (routes/dashboard.py)
+└── Módulo Ad Spends (routes/ad_spends.py)
+```
+
+**Vantagens:**
+- Deploy simples
+- Debugging mais fácil
+- Transações ACID simples
+- Performance (sem network overhead)
+
+**Desvantagens:**
+- Escala limitada
+- Deploy acoplado
+- Tecnologia única (Python)
+
+## Event-Driven Architecture (Futuro)
+
+### Possíveis Eventos
+
+**Atual:**
+- Upload CSV → Processa → Salva → Notifica
+
+**Futuro (Event-Driven):**
+```
+Upload CSV → Event: CSV_UPLOADED
+  → Process CSV (Worker)
+  → Event: CSV_PROCESSED
+  → Update Dashboard (Real-time)
+  → Event: DASHBOARD_UPDATED
+  → Notify User
+```
+
+**Benefícios:**
+- Desacoplamento
+- Escalabilidade
+- Resiliência
+
+**Tecnologias (Futuro):**
+- Message Queue (Redis, RabbitMQ)
+- WebSockets para real-time
+- Background workers (Celery)
+
+## Integração com Outros Agentes
+
+- **Backend Agent**: Implementação de padrões arquiteturais
+- **Frontend Agent**: Implementação de padrões arquiteturais
+- **Database Agent**: Design de schemas e queries
+- **QA Agent**: Testes arquiteturais
+- **Refatorador Agent**: Refatoração arquitetural
+
+## Referências
+
+- Clean Architecture: https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html
+- FastAPI Best Practices: https://fastapi.tiangolo.com/tutorial/
+- React Architecture: https://react.dev/learn/thinking-in-react
+- Feature-Based Organization: https://kentcdodds.com/blog/colocation

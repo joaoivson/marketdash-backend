@@ -67,15 +67,28 @@ backend/
 - `uploaded_at`: Data de upload
 
 ### Linhas do Dataset (dataset_rows)
-- `id`: ID único
+- `id`: ID unico
 - `dataset_id`: ID do dataset
-- `user_id`: ID do usuário proprietário
-- `date`: Data da transação
-- `product`: Nome do produto
+- `user_id`: ID do usuario proprietario
+- `date`: Data da transacao (normalizada)
+- `transaction_date`: Data original (quando aplicavel)
+- `time`: Hora da transacao (quando aplicavel)
+- `product`: Produto normalizado
+- `product_name`: Nome original do produto (quando aplicavel)
+- `platform`: Plataforma/origem
+- `status`: Status da transacao
+- `category`: Categoria
+- `sub_id1`: Sub ID
+- `mes_ano`: Mes/ano de referencia
+- `gross_value`: Valor bruto
+- `commission_value`: Valor de comissao
+- `net_value`: Valor liquido
+- `quantity`: Quantidade
 - `revenue`: Receita
 - `cost`: Custo
-- `commission`: Comissão
+- `commission`: Comissao
 - `profit`: Lucro (calculado: revenue - cost - commission)
+- `raw_data`: JSON bruto da linha (quando aplicavel)
 
 **Índices criados para otimização:**
 - `user_id`
@@ -178,9 +191,9 @@ GET /health
 
 ### 🔐 Autenticação
 
-#### Registrar Usuário
+#### Registrar Usuario
 ```http
-POST /api/auth/register
+POST /api/v1/auth/register
 Content-Type: application/json
 
 {
@@ -191,8 +204,25 @@ Content-Type: application/json
 
 #### Login
 ```http
-POST /api/auth/login
+POST /api/v1/auth/login
 Content-Type: application/x-www-form-urlencoded
+#### Obter Usuario Atual
+```http
+GET /api/v1/auth/me
+Authorization: Bearer {token}
+```
+
+#### Atualizar Usuario
+```http
+PUT /api/v1/auth/users/{user_id}
+Authorization: Bearer {token}
+```
+
+#### Excluir Usuario
+```http
+DELETE /api/v1/auth/users/{user_id}
+Authorization: Bearer {token}
+```
 
 email=usuario@example.com&password=senha123
 ```
@@ -209,7 +239,7 @@ email=usuario@example.com&password=senha123
 
 #### Upload de CSV
 ```http
-POST /api/datasets/upload
+POST /api/v1/datasets/upload
 Authorization: Bearer {token}
 Content-Type: multipart/form-data
 
@@ -242,19 +272,43 @@ date,product,revenue,cost,commission
 
 #### Listar Datasets
 ```http
-GET /api/datasets
+GET /api/v1/datasets
 Authorization: Bearer {token}
 ```
 
-#### Obter Dataset Específico
+#### Obter Dataset Especifico
 ```http
-GET /api/datasets/{dataset_id}
+GET /api/v1/datasets/{dataset_id}
+Authorization: Bearer {token}
+```
+
+#### Linhas do Dataset Mais Recente
+```http
+GET /api/v1/datasets/latest/rows?limit=100&offset=0
+Authorization: Bearer {token}
+```
+
+#### Todas as Linhas (paginado)
+```http
+GET /api/v1/datasets/all/rows?limit=100&offset=0
+Authorization: Bearer {token}
+```
+
+#### Linhas de um Dataset
+```http
+GET /api/v1/datasets/{dataset_id}/rows
+Authorization: Bearer {token}
+```
+
+#### Aplicar Ad Spend no Dataset Mais Recente
+```http
+POST /api/v1/datasets/latest/ad_spend
 Authorization: Bearer {token}
 ```
 
 #### Atualizar Dataset (Refresh)
 ```http
-POST /api/datasets/{dataset_id}/refresh
+POST /api/v1/datasets/{dataset_id}/refresh
 Authorization: Bearer {token}
 ```
 
@@ -264,8 +318,52 @@ Authorization: Bearer {token}
 
 #### Obter Dashboard Completo
 ```http
-GET /api/dashboard?start_date=2024-01-01&end_date=2024-01-31&product=Produto A
+GET /api/v1/dashboard?start_date=2024-01-01&end_date=2024-01-31&product=Produto A
 Authorization: Bearer {token}
+```
+### 💸 Ad Spends
+
+#### Listar Ad Spends
+```http
+GET /api/v1/ad_spends?limit=100&offset=0
+Authorization: Bearer {token}
+```
+
+#### Criar Ad Spend
+```http
+POST /api/v1/ad_spends
+Authorization: Bearer {token}
+```
+
+#### Criar Ad Spends em Lote
+```http
+POST /api/v1/ad_spends/bulk
+Authorization: Bearer {token}
+```
+
+#### Atualizar Ad Spend
+```http
+PATCH /api/v1/ad_spends/{ad_spend_id}
+Authorization: Bearer {token}
+```
+
+#### Excluir Ad Spend
+```http
+DELETE /api/v1/ad_spends/{ad_spend_id}
+Authorization: Bearer {token}
+```
+
+#### Template de Importacao
+```http
+GET /api/v1/ad_spends/template
+Authorization: Bearer {token}
+```
+
+### 🔗 Cakto
+
+#### Webhook de Assinaturas
+```http
+POST /api/v1/cakto/webhook
 ```
 
 **Parâmetros de Query (todos opcionais):**

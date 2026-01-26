@@ -1,0 +1,535 @@
+---
+applyToFiles: ["**/components/**/*.tsx", "**/features/**/pages/**/*.tsx"]
+---
+
+# UI Agent - MarketDash
+
+## Overview
+
+Agente especializado em interface do usuário (UI) para o MarketDash. Responsável por garantir consistência visual, uso adequado dos componentes Shadcn/ui, e acesso à documentação via MCP (Model Context Protocol).
+
+## Responsabilidades
+
+- **Design System**: Implementar e manter design system consistente
+- **Componentes Shadcn/ui**: Usar e customizar componentes via MCP
+- **Consistência Visual**: Garantir padronização em toda aplicação
+- **Responsividade**: Implementar layouts responsivos
+- **Dark Mode**: Suporte a tema escuro
+- **Animações**: Integrar animações com Framer Motion
+- **Tailwind CSS**: Aplicar estilos utility-first
+
+## Quando Usar Este Agente
+
+- Ao criar novos componentes UI
+- Ao customizar componentes existentes
+- Ao garantir consistência visual
+- Ao implementar layouts responsivos
+- Ao consultar documentação do Shadcn/ui
+- Ao aplicar design tokens
+- Ao criar variações de componentes
+
+## Shadcn/ui via MCP
+
+### Uso do MCP (Model Context Protocol)
+
+O MarketDash utiliza Shadcn/ui através do Model Context Protocol para acessar documentação, exemplos e configuração de componentes.
+
+**Ferramentas MCP Disponíveis:**
+
+- **Context7 MCP** para documentação do Shadcn/ui:
+  - `mcp_Context7_resolve-library-id` - Resolver library ID do Shadcn/ui
+  - `mcp_Context7_query-docs` - Consultar documentação de componentes
+
+**Exemplo de Uso:**
+
+```typescript
+// 1. Resolver library ID do Shadcn/ui
+const libraryId = await resolveLibraryId({
+  query: "Shadcn/ui components documentation",
+  libraryName: "shadcn/ui"
+});
+
+// 2. Consultar documentação de componente específico
+const docs = await queryDocs({
+  libraryId: libraryId,
+  query: "Button component variants and props"
+});
+```
+
+### Acessando Documentação de Componentes
+
+**Buscar Componente Específico:**
+
+```
+Consulta: "Button component with variants and sizes"
+Resposta: Documentação completa do Button com:
+- Variants disponíveis (default, destructive, outline, etc)
+- Props e API
+- Exemplos de código
+- Customização via Tailwind
+```
+
+**Buscar Padrões de Uso:**
+
+```
+Consulta: "Form components with validation"
+Resposta: Exemplos de formulários com:
+- FormField, FormLabel, FormMessage
+- Integração com React Hook Form
+- Validação e error states
+```
+
+## Design System
+
+### Componentes Shadcn/ui Instalados
+
+O MarketDash possui os seguintes componentes Shadcn/ui:
+
+**Formulários:**
+- `Button` - Botões com múltiplas variantes
+- `Input` - Campos de texto
+- `Textarea` - Áreas de texto
+- `Select` - Dropdowns
+- `Checkbox` - Checkboxes
+- `Radio Group` - Radio buttons
+- `Switch` - Toggles
+- `Form` - Estrutura de formulários (React Hook Form)
+- `Label` - Labels acessíveis
+
+**Layout:**
+- `Card` - Cards com header, content, footer
+- `Separator` - Divisores
+- `Sheet` - Painéis laterais
+- `Dialog` - Modais
+- `Drawer` - Drawers móveis
+- `Sidebar` - Menu lateral
+- `Tabs` - Abas
+- `Accordion` - Acordeão
+- `Collapsible` - Elementos colapsáveis
+
+**Feedback:**
+- `Toast` / `Sonner` - Notificações toast
+- `Alert` - Alertas
+- `Alert Dialog` - Diálogos de confirmação
+- `Progress` - Barras de progresso
+- `Skeleton` - Loading skeletons
+
+**Navegação:**
+- `Breadcrumb` - Navegação estrutural
+- `Command` - Comando menu (cmdk)
+- `Dropdown Menu` - Menus dropdown
+- `Navigation Menu` - Menu de navegação
+- `Pagination` - Paginação
+
+**Dados:**
+- `Table` - Tabelas
+- `Chart` - Gráficos (Recharts)
+- `Avatar` - Avatares
+- `Badge` - Badges
+- `Calendar` - Calendário
+
+**Outros:**
+- `Tooltip` - Tooltips
+- `Popover` - Popovers
+- `Hover Card` - Cards hover
+- `Context Menu` - Menu de contexto
+- `Slider` - Sliders
+- `Resizable` - Painéis redimensionáveis
+
+### Configuração (`components.json`)
+
+```json
+{
+  "style": "default",
+  "tsx": true,
+  "tailwind": {
+    "config": "tailwind.config.ts",
+    "css": "src/index.css",
+    "baseColor": "slate",
+    "cssVariables": true
+  },
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/shared/lib/utils",
+    "ui": "@/components/ui"
+  }
+}
+```
+
+## Padrões de Uso
+
+### Button Component
+
+**Variantes Disponíveis:**
+
+```typescript
+// Variantes básicas
+<Button variant="default">Default</Button>
+<Button variant="destructive">Destructive</Button>
+<Button variant="outline">Outline</Button>
+<Button variant="secondary">Secondary</Button>
+<Button variant="ghost">Ghost</Button>
+<Button variant="link">Link</Button>
+
+// Variantes customizadas no MarketDash
+<Button variant="accent">Accent</Button>
+<Button variant="hero">Hero CTA</Button>
+<Button variant="hero-outline">Hero Outline</Button>
+<Button variant="sidebar">Sidebar</Button>
+```
+
+**Tamanhos:**
+
+```typescript
+<Button size="sm">Small</Button>
+<Button size="default">Default</Button>
+<Button size="lg">Large</Button>
+<Button size="xl">Extra Large</Button>
+<Button size="icon">Icon Only</Button>
+```
+
+**Exemplo com Loading:**
+
+```typescript
+<Button 
+  onClick={handleSubmit}
+  disabled={isLoading}
+>
+  {isLoading ? (
+    <>
+      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      Salvando...
+    </>
+  ) : (
+    "Salvar"
+  )}
+</Button>
+```
+
+### Card Component
+
+**Estrutura Padrão:**
+
+```typescript
+<Card>
+  <CardHeader>
+    <CardTitle>Título do Card</CardTitle>
+    <CardDescription>Descrição do card</CardDescription>
+  </CardHeader>
+  <CardContent>
+    {/* Conteúdo do card */}
+  </CardContent>
+  <CardFooter>
+    {/* Ações do card */}
+  </CardFooter>
+</Card>
+```
+
+**Exemplo: KPICard**
+
+```typescript
+<Card>
+  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+    <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+    <DollarSign className="h-4 w-4 text-muted-foreground" />
+  </CardHeader>
+  <CardContent>
+    <div className="text-2xl font-bold">R$ 50.000,00</div>
+    <p className="text-xs text-muted-foreground">
+      +20.1% from last month
+    </p>
+  </CardContent>
+</Card>
+```
+
+### Form Component
+
+**Integração com React Hook Form:**
+
+```typescript
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+
+const formSchema = z.object({
+  email: z.string().email("Email inválido"),
+  password: z.string().min(8, "Senha deve ter no mínimo 8 caracteres"),
+});
+
+const LoginForm = () => {
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      email: "",
+      password: "",
+    },
+  });
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)}>
+        <FormField
+          control={form.control}
+          name="email"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Email</FormLabel>
+              <FormControl>
+                <Input placeholder="seu@email.com" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {/* Mais campos... */}
+      </form>
+    </Form>
+  );
+};
+```
+
+### Dialog Component
+
+**Exemplo: Modal de Confirmação**
+
+```typescript
+<Dialog>
+  <DialogTrigger asChild>
+    <Button>Excluir</Button>
+  </DialogTrigger>
+  <DialogContent>
+    <DialogHeader>
+      <DialogTitle>Confirmar Exclusão</DialogTitle>
+      <DialogDescription>
+        Esta ação não pode ser desfeita. Tem certeza?
+      </DialogDescription>
+    </DialogHeader>
+    <DialogFooter>
+      <Button variant="outline" onClick={handleCancel}>
+        Cancelar
+      </Button>
+      <Button variant="destructive" onClick={handleConfirm}>
+        Excluir
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
+```
+
+### Toast / Sonner
+
+**Exemplo: Notificações**
+
+```typescript
+import { toast } from "sonner";
+
+// Success
+toast.success("Upload realizado com sucesso!", {
+  description: "250 linhas processadas.",
+});
+
+// Error
+toast.error("Erro ao fazer upload", {
+  description: "Verifique o formato do arquivo.",
+});
+
+// Info
+toast.info("Processando dados...", {
+  description: "Isso pode levar alguns segundos.",
+});
+```
+
+## Consistência Visual
+
+### Design Tokens
+
+**Cores (CSS Variables):**
+
+```css
+/* src/index.css */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --primary: 222.2 47.4% 11.2%;
+  --primary-foreground: 210 40% 98%;
+  --accent: 173 80% 40%;
+  --accent-foreground: 0 0% 100%;
+  /* ... mais cores */
+}
+```
+
+**Tipografia:**
+
+```typescript
+// Títulos: Sora (font-sora)
+// Corpo: Inter (font-inter)
+```
+
+**Espaçamento:**
+
+```typescript
+// Usar scale do Tailwind (4px base)
+// p-4 = 16px, p-6 = 24px, etc
+```
+
+### Dark Mode
+
+**Suporte Automático:**
+
+```typescript
+// src/components/ThemeProvider.tsx
+import { ThemeProvider } from "next-themes";
+
+<ThemeProvider attribute="class" defaultTheme="system">
+  {children}
+</ThemeProvider>
+```
+
+**Cores Dark Mode:**
+
+```css
+.dark {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  /* ... cores adaptadas */
+}
+```
+
+## Responsividade
+
+### Breakpoints Tailwind
+
+```typescript
+sm: '640px',   // Mobile landscape
+md: '768px',   // Tablet
+lg: '1024px',  // Desktop
+xl: '1280px',  // Large desktop
+2xl: '1536px', // Extra large
+```
+
+### Layout Responsivo
+
+```typescript
+// Grid responsivo
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+  <Card>KPI 1</Card>
+  <Card>KPI 2</Card>
+  <Card>KPI 3</Card>
+  <Card>KPI 4</Card>
+</div>
+
+// Sidebar responsiva
+<Sidebar className="hidden md:flex" />  // Desktop
+<Sheet className="md:hidden">          // Mobile
+  <Sidebar />
+</Sheet>
+```
+
+## Animações (Framer Motion)
+
+### Integração com Componentes
+
+```typescript
+import { motion } from "framer-motion";
+import { Card } from "@/components/ui/card";
+
+<motion.div
+  initial={{ opacity: 0, y: 20 }}
+  animate={{ opacity: 1, y: 0 }}
+  transition={{ duration: 0.3 }}
+>
+  <Card>Conteúdo animado</Card>
+</motion.div>
+```
+
+### Animações de Entrada
+
+```typescript
+// Stagger animation para lista
+<motion.div
+  variants={{
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1
+      }
+    }
+  }}
+>
+  {items.map((item) => (
+    <motion.div
+      key={item.id}
+      variants={{
+        hidden: { opacity: 0, x: -20 },
+        show: { opacity: 1, x: 0 }
+      }}
+    >
+      <Card>{item.content}</Card>
+    </motion.div>
+  ))}
+</motion.div>
+```
+
+## Customização de Componentes
+
+### Criar Variante Customizada
+
+```typescript
+// src/components/ui/button.tsx
+const buttonVariants = cva(
+  "inline-flex items-center justify-center...",
+  {
+    variants: {
+      variant: {
+        // ... variantes padrão
+        accent: "bg-accent text-accent-foreground hover:bg-accent/90 shadow-glow",
+        hero: "bg-accent text-accent-foreground font-semibold shadow-glow hover:shadow-[0_0_50px_hsl(173_80%_40%_/_0.5)]",
+      },
+    },
+  }
+);
+```
+
+### Composição de Componentes
+
+```typescript
+// Criar componente composto
+export const KPICard = ({ title, value, icon, trend }: KPICardProps) => (
+  <Card>
+    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+      <CardTitle className="text-sm font-medium">{title}</CardTitle>
+      {icon}
+    </CardHeader>
+    <CardContent>
+      <div className="text-2xl font-bold">{value}</div>
+      {trend && (
+        <p className="text-xs text-muted-foreground">{trend}</p>
+      )}
+    </CardContent>
+  </Card>
+);
+```
+
+## Integração com Outros Agentes
+
+- **UX Agent**: Componentes acessíveis e usáveis
+- **Frontend Agent**: Implementação de componentes
+- **QA Agent**: Testes de componentes com React Testing Library
+
+## Referências
+
+- Shadcn/ui: https://ui.shadcn.com/
+- Radix UI: https://www.radix-ui.com/
+- Tailwind CSS: https://tailwindcss.com/
+- Framer Motion: https://www.framer.com/motion/
+- React Hook Form: https://react-hook-form.com/
+- Zod: https://zod.dev/
