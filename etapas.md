@@ -75,14 +75,14 @@ Guia passo a passo do zero ao deploy em produção.
 2. Crie conta (ou login)
 3. New Project
 4. Preencha:
-   - Name: `dashads-prod`
+   - Name: `marketdash-prod`
    - Database Password: (crie uma senha forte)
    - Region: escolha próxima ao Brasil
 5. Aguarde a criação (1-2 minutos)
 
 ### 2.2. Criar projeto de homologação
 1. Repita o passo 2.1 com:
-   - Name: `dashads-staging`
+   - Name: `marketdash-staging`
 
 ### 2.3. Obter credenciais
 Para cada projeto (prod e staging):
@@ -171,15 +171,15 @@ apt update && apt upgrade -y
 ### 4.3. Criar usuário não-root
 ```bash
 # Criar usuário
-adduser dashads
-usermod -aG sudo dashads
+adduser marketdash
+usermod -aG sudo marketdash
 
 # Configurar SSH para novo usuário
-mkdir -p /home/dashads/.ssh
-cp ~/.ssh/authorized_keys /home/dashads/.ssh/
-chown -R dashads:dashads /home/dashads/.ssh
-chmod 700 /home/dashads/.ssh
-chmod 600 /home/dashads/.ssh/authorized_keys
+mkdir -p /home/marketdash/.ssh
+cp ~/.ssh/authorized_keys /home/marketdash/.ssh/
+chown -R marketdash:marketdash /home/marketdash/.ssh
+chmod 700 /home/marketdash/.ssh
+chmod 600 /home/marketdash/.ssh/authorized_keys
 
 # Sair e reconectar com novo usuário
 exit
@@ -187,7 +187,7 @@ exit
 
 Reconecte:
 ```bash
-ssh dashads@[IP_DA_VPS]
+ssh marketdash@[IP_DA_VPS]
 ```
 
 ### 4.4. Instalar dependências
@@ -234,12 +234,12 @@ node --version
 ### 5.1. Criar estrutura de diretórios na VPS
 ```bash
 # Criar estrutura
-sudo mkdir -p /var/www/dashads
-sudo mkdir -p /var/www/dashads/backend
-sudo mkdir -p /var/www/dashads/backend-staging
-sudo mkdir -p /var/www/dashads/frontend
-sudo mkdir -p /var/www/dashads/frontend-staging
-sudo chown -R $USER:$USER /var/www/dashads
+sudo mkdir -p /var/www/marketdash
+sudo mkdir -p /var/www/marketdash/backend
+sudo mkdir -p /var/www/marketdash/backend-staging
+sudo mkdir -p /var/www/marketdash/frontend
+sudo mkdir -p /var/www/marketdash/frontend-staging
+sudo chown -R $USER:$USER /var/www/marketdash
 ```
 
 ### 5.2. Criar Dockerfile de produção
@@ -279,7 +279,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
-    container_name: dashads_backend_prod
+    container_name: marketdash_backend_prod
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -308,7 +308,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
-    container_name: dashads_backend_staging
+    container_name: marketdash_backend_staging
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL}
@@ -323,7 +323,7 @@ services:
 ```
 
 ### 5.4. Criar arquivo .env de produção
-Na VPS, crie `/var/www/dashads/backend/.env.prod`:
+Na VPS, crie `/var/www/marketdash/backend/.env.prod`:
 
 ```env
 # Supabase Production
@@ -341,7 +341,7 @@ JWT_EXPIRATION_HOURS=24
 ENVIRONMENT=production
 ```
 
-E `.env.staging` em `/var/www/dashads/backend-staging/` (com credenciais do projeto staging).
+E `.env.staging` em `/var/www/marketdash/backend-staging/` (com credenciais do projeto staging).
 
 ### 5.5. Gerar JWT_SECRET seguro
 ```bash
@@ -358,23 +358,23 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 Opção A: Git (recomendado)
 ```bash
 # Na VPS
-cd /var/www/dashads/backend
+cd /var/www/marketdash/backend
 git clone [SEU_REPOSITORIO] .
 
 # Ou via SCP (do seu computador)
-scp -r backend/* dashads@[IP_VPS]:/var/www/dashads/backend/
+scp -r backend/* marketdash@[IP_VPS]:/var/www/marketdash/backend/
 ```
 
 Opção B: SCP manual
 ```bash
 # Do seu computador
-scp -r c:\projetos\backend\dashads/* dashads@[IP_VPS]:/var/www/dashads/backend/
+scp -r c:\projetos\backend\marketdash/* marketdash@[IP_VPS]:/var/www/marketdash/backend/
 ```
 
 ### 6.2. Configurar backend produção
 ```bash
 # Na VPS
-cd /var/www/dashads/backend
+cd /var/www/marketdash/backend
 
 # Copiar arquivos de produção
 cp Dockerfile.prod Dockerfile
@@ -392,9 +392,9 @@ docker-compose logs -f
 ### 6.3. Configurar backend staging
 ```bash
 # Na VPS
-cd /var/www/dashads/backend-staging
+cd /var/www/marketdash/backend-staging
 # Copie todos os arquivos do backend
-cp -r /var/www/dashads/backend/* .
+cp -r /var/www/marketdash/backend/* .
 
 # Ajustar configurações
 cp docker-compose.staging.yml docker-compose.yml
@@ -421,7 +421,7 @@ curl http://localhost:8001/health  # Staging
 ## Etapa 7: Configurar Nginx
 
 ### 7.1. Configurar Nginx para produção
-Crie `/etc/nginx/sites-available/dashads-prod`:
+Crie `/etc/nginx/sites-available/marketdash-prod`:
 
 ```nginx
 # Backend API - Produção
@@ -447,7 +447,7 @@ server {
     listen 80;
     server_name app.marketdash.com.br;
 
-    root /var/www/dashads/frontend;
+    root /var/www/marketdash/frontend;
     index index.html;
 
     location / {
@@ -462,7 +462,7 @@ server {
 ```
 
 ### 7.2. Configurar Nginx para staging
-Crie `/etc/nginx/sites-available/dashads-staging`:
+Crie `/etc/nginx/sites-available/marketdash-staging`:
 
 ```nginx
 # Backend API - Staging
@@ -488,7 +488,7 @@ server {
     listen 80;
     server_name app-staging.marketdash.com.br;
 
-    root /var/www/dashads/frontend-staging;
+    root /var/www/marketdash/frontend-staging;
     index index.html;
 
     location / {
@@ -500,8 +500,8 @@ server {
 ### 7.3. Ativar sites
 ```bash
 # Criar links simbólicos
-sudo ln -s /etc/nginx/sites-available/dashads-prod /etc/nginx/sites-enabled/
-sudo ln -s /etc/nginx/sites-available/dashads-staging /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/marketdash-prod /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/marketdash-staging /etc/nginx/sites-enabled/
 
 # Remover default (opcional)
 sudo rm /etc/nginx/sites-enabled/default
@@ -556,15 +556,15 @@ npm run build
 ### 9.2. Enviar build para VPS
 ```bash
 # Do seu computador
-scp -r [caminho_do_frontend]/dist/* dashads@[IP_VPS]:/var/www/dashads/frontend/
-scp -r [caminho_do_frontend]/dist/* dashads@[IP_VPS]:/var/www/dashads/frontend-staging/
+scp -r [caminho_do_frontend]/dist/* marketdash@[IP_VPS]:/var/www/marketdash/frontend/
+scp -r [caminho_do_frontend]/dist/* marketdash@[IP_VPS]:/var/www/marketdash/frontend-staging/
 ```
 
 ### 9.3. Configurar permissões
 ```bash
 # Na VPS
-sudo chown -R www-data:www-data /var/www/dashads/frontend
-sudo chown -R www-data:www-data /var/www/dashads/frontend-staging
+sudo chown -R www-data:www-data /var/www/marketdash/frontend
+sudo chown -R www-data:www-data /var/www/marketdash/frontend-staging
 ```
 
 ### 9.4. Configurar variáveis do frontend
@@ -594,7 +594,7 @@ Por enquanto, o backend pode continuar usando sua autenticação atual enquanto 
 ### 10.2. Testar conexão
 ```bash
 # Na VPS, testar conexão com Supabase
-docker exec -it dashads_backend_prod python3 -c "
+docker exec -it marketdash_backend_prod python3 -c "
 from app.db.session import engine
 with engine.connect() as conn:
     print('Conexão OK!')
@@ -623,8 +623,8 @@ curl https://marketdash.hml.com.br
 docker ps
 
 # Ver logs
-docker logs dashads_backend_prod
-docker logs dashads_backend_staging
+docker logs marketdash_backend_prod
+docker logs marketdash_backend_staging
 ```
 
 ### 11.2. Monitoramento básico
@@ -645,19 +645,19 @@ df -h
 ## Etapa 12: Automação (opcional)
 
 ### 12.1. Script de deploy
-Crie `/var/www/dashads/deploy.sh`:
+Crie `/var/www/marketdash/deploy.sh`:
 
 ```bash
 #!/bin/bash
 ENV=$1  # prod ou staging
 
 if [ "$ENV" == "prod" ]; then
-    cd /var/www/dashads/backend
+    cd /var/www/marketdash/backend
     git pull
     docker-compose build
     docker-compose up -d
 elif [ "$ENV" == "staging" ]; then
-    cd /var/www/dashads/backend-staging
+    cd /var/www/marketdash/backend-staging
     git pull
     docker-compose build
     docker-compose up -d
@@ -665,7 +665,7 @@ fi
 ```
 
 ```bash
-chmod +x /var/www/dashads/deploy.sh
+chmod +x /var/www/marketdash/deploy.sh
 ```
 
 Uso:

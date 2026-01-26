@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     
     # App Configuration
     API_V1_STR: str = "/api/v1"
-    PROJECT_NAME: str = "DashAds Backend"
+    PROJECT_NAME: str = "MarketDash Backend"
     ENVIRONMENT: str = "development"
 
     # Cache / Redis

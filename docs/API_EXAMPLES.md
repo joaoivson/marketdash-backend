@@ -1,6 +1,6 @@
 # Exemplos de Uso da API
 
-Este documento contém exemplos práticos de como usar a API do DashAds Backend.
+Este documento contém exemplos práticos de como usar a API do MarketDash Backend.
 
 ## 🔐 1. Autenticação
 

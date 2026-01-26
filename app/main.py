@@ -63,7 +63,7 @@ app.include_router(api_v1_router, prefix=settings.API_V1_STR)
 def root():
     """Root endpoint."""
     return {
-        "message": "DashAds Backend API",
+        "message": "MarketDash Backend API",
         "version": "1.0.0",
         "docs": "/docs",
         "environment": settings.ENVIRONMENT
