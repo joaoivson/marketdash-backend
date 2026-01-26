@@ -285,3 +285,10 @@ class DatasetService:
             "sub_id1": sub_id1,
             "amount": amount,
         }
+
+    def delete_all(self, user_id: int) -> dict:
+        """Deleta todos os datasets de um usuário e retorna a quantidade deletada."""
+        count = self.dataset_repo.delete_all_by_user(user_id)
+        # As linhas (DatasetRow) serão deletadas automaticamente via CASCADE
+        # Cache removido - frontend gerencia via localStorage
+        return {"deleted": count}

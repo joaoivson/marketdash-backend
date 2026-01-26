@@ -90,6 +90,16 @@ def update_ad_spend(
     return service.update(current_user.id, ad_spend_id, payload)
 
 
+@router.delete("/all", status_code=status.HTTP_200_OK)
+def delete_all_ad_spends(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Deleta todos os ad_spends do usuário autenticado."""
+    service = AdSpendService(AdSpendRepository(db))
+    return service.delete_all(current_user.id)
+
+
 @router.delete("/{ad_spend_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_ad_spend(
     ad_spend_id: int,

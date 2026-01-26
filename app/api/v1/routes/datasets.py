@@ -79,6 +79,16 @@ def list_datasets(
     return service.list_datasets(current_user.id)
 
 
+@router.delete("/all", status_code=status.HTTP_200_OK)
+def delete_all_datasets(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Deleta todos os datasets do usuário autenticado."""
+    service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
+    return service.delete_all(current_user.id)
+
+
 @router.get("/{dataset_id}/rows", response_model=List[DatasetRowResponse])
 def list_dataset_rows(
     dataset_id: int,

@@ -74,3 +74,9 @@ class AdSpendService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado")
         self.repo.delete(ad_spend)
         # Cache removido - frontend gerencia via localStorage
+
+    def delete_all(self, user_id: int) -> dict:
+        """Deleta todos os ad_spends de um usuário e retorna a quantidade deletada."""
+        count = self.repo.delete_all_by_user(user_id)
+        # Cache removido - frontend gerencia via localStorage
+        return {"deleted": count}
