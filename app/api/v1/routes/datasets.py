@@ -98,14 +98,8 @@ def list_dataset_rows(
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    # Verificar se o dataset pertence ao usuário
-    dataset = service.get_dataset(dataset_id)
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem permissão para acessar este dataset"
-        )
-    return service.list_dataset_rows(dataset_id, start_date, end_date, True)
+    # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
+    return service.list_dataset_rows(dataset_id, current_user.id, start_date, end_date, True)
 
 
 @router.get("/{dataset_id}", response_model=DatasetResponse)
@@ -115,13 +109,8 @@ def get_dataset(
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    dataset = service.get_dataset(dataset_id)
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem permissão para acessar este dataset"
-        )
-    return dataset
+    # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
+    return service.get_dataset(dataset_id, current_user.id)
 
 
 @router.post("/{dataset_id}/refresh", response_model=DatasetResponse)
@@ -131,10 +120,5 @@ async def refresh_dataset(
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    dataset = service.get_dataset(dataset_id)
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem permissão para acessar este dataset"
-        )
-    return dataset
+    # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
+    return service.get_dataset(dataset_id, current_user.id)

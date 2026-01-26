@@ -30,8 +30,13 @@ class DatasetRepository:
             .all()
         )
 
-    def get_by_id(self, dataset_id: int) -> Optional[Dataset]:
-        return self.db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    def get_by_id(self, dataset_id: int, user_id: int) -> Optional[Dataset]:
+        """Busca dataset por ID, sempre filtrando por user_id PRIMEIRO para garantir isolamento de dados."""
+        return (
+            self.db.query(Dataset)
+            .filter(Dataset.user_id == user_id, Dataset.id == dataset_id)
+            .first()
+        )
 
     def delete_all_by_user(self, user_id: int) -> int:
         """Deleta todos os datasets de um usuário e retorna a quantidade deletada."""

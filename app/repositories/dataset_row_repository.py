@@ -54,12 +54,18 @@ class DatasetRowRepository:
     def list_by_dataset(
         self,
         dataset_id: int,
+        user_id: int,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[DatasetRow]:
-        query = self.db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id)
+        """Lista linhas de um dataset, sempre filtrando por user_id PRIMEIRO para garantir isolamento de dados."""
+        # Sempre filtrar por user_id PRIMEIRO para garantir isolamento de dados
+        query = self.db.query(DatasetRow).filter(
+            DatasetRow.user_id == user_id,
+            DatasetRow.dataset_id == dataset_id
+        )
         if start_date:
             query = query.filter(DatasetRow.date >= start_date)
         if end_date:
