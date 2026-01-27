@@ -4,7 +4,16 @@ from sqlalchemy.orm import Session
 from app.api.v1.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse, UserUpdate, TokenWithUser
+from app.schemas.user import (
+    UserCreate, 
+    UserResponse, 
+    UserUpdate, 
+    TokenWithUser, 
+    SetPasswordRequest, 
+    SetPasswordResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse
+)
 from app.services.auth_service import AuthService
 from app.repositories.user_repository import UserRepository
 
@@ -23,6 +32,54 @@ def login(
     db: Session = Depends(get_db),
 ):
     return AuthService(UserRepository(db)).login(email, password)
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse, status_code=status.HTTP_200_OK)
+def forgot_password(
+    request: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Solicita reset de senha. Envia email com link para redefinir senha.
+    
+    Por segurança, sempre retorna sucesso mesmo se o email não existir,
+    para prevenir enumeração de emails cadastrados.
+    """
+    auth_service = AuthService(UserRepository(db))
+    auth_service.forgot_password(request.email)
+    
+    return ForgotPasswordResponse(
+        message="Se o email estiver cadastrado, você receberá um link para redefinir sua senha."
+    )
+
+
+@router.post("/set-password", response_model=SetPasswordResponse, status_code=status.HTTP_200_OK)
+def set_password(
+    request: SetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Define/redefine senha do usuário usando token recebido por email.
+    
+    Este endpoint é usado tanto para:
+    - Novos usuários definirem senha pela primeira vez (após assinatura Cakto)
+    - Usuários redefinirem senha esquecida (após solicitar forgot-password)
+    """
+    auth_service = AuthService(UserRepository(db))
+    user = auth_service.set_password(request.token, request.password)
+    
+    return SetPasswordResponse(
+        message="Senha definida com sucesso",
+        user=UserResponse(
+            id=user.id,
+            name=user.name,
+            cpf_cnpj=user.cpf_cnpj,
+            email=user.email,
+            is_active=user.is_active,
+            created_at=user.created_at,
+            updated_at=user.updated_at,
+        )
+    )
 
 
 @router.get("/me", response_model=UserResponse)

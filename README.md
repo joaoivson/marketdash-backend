@@ -461,6 +461,14 @@ alembic upgrade head
 | `JWT_ALGORITHM` | Algoritmo JWT | HS256 |
 | `JWT_EXPIRATION_HOURS` | Horas de expiração do token | 24 |
 | `CAKTO_WEBHOOK_SECRET` | Chave secreta para validação de webhooks Cakto | - |
+| `CAKTO_SUBSCRIPTION_PRODUCT_IDS` | IDs dos produtos Cakto separados por vírgula | 8e9qxyg_742442,hi5cerw,6bpwn57 |
+| `SMTP_HOST` | Servidor SMTP para envio de emails | smtp.hostinger.com |
+| `SMTP_PORT` | Porta do servidor SMTP | 465 |
+| `SMTP_USER` | Usuário/email para autenticação SMTP | - |
+| `SMTP_PASSWORD` | Senha para autenticação SMTP | - |
+| `SMTP_FROM_EMAIL` | Email remetente dos emails enviados | - |
+| `SMTP_FROM_NAME` | Nome do remetente | MarketDash |
+| `FRONTEND_URL` | URL do frontend (para links nos emails) | https://marketdash.com.br |
 
 ## 🚀 Próximos Passos
 

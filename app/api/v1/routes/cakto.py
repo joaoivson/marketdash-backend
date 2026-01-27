@@ -14,6 +14,7 @@ from app.repositories.user_repository import UserRepository
 from app.services.subscription_service import SubscriptionService
 from app.services.auth_service import AuthService
 from app.services.cakto_service import create_checkout_url
+from app.schemas.subscription import PlansResponse, PlanInfo
 
 logger = logging.getLogger(__name__)
 
@@ -235,12 +236,58 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/plans", response_model=PlansResponse)
+def get_plans():
+    """
+    Retorna lista de todos os planos de assinatura disponíveis.
+    
+    Permite que o frontend exiba as opções de planos para o usuário escolher.
+    """
+    all_plans = settings.get_all_cakto_plans()
+    
+    plans_list = [
+        PlanInfo(
+            id=plan_id,
+            name=plan_data["name"],
+            checkout_url=plan_data["checkout_url"],
+            period=plan_data["period"]
+        )
+        for plan_id, plan_data in all_plans.items()
+    ]
+    
+    return PlansResponse(plans=plans_list)
+
+
 @router.get("/checkout-url")
 def get_checkout_url(
     email: str = Query(..., description="Email do usuário"),
     name: str = Query(None, description="Nome do usuário"),
     cpf_cnpj: str = Query(None, description="CPF/CNPJ do usuário"),
+    plan: str = Query("principal", description="ID do plano (principal, trimestral, anual)"),
 ):
-    """Gera URL de checkout do Cakto com parâmetros pré-preenchidos."""
-    checkout_url = create_checkout_url(email=email, name=name, cpf_cnpj=cpf_cnpj)
+    """
+    Gera URL de checkout do Cakto com parâmetros pré-preenchidos.
+    
+    Args:
+        email: Email do usuário (obrigatório)
+        name: Nome do usuário (opcional)
+        cpf_cnpj: CPF/CNPJ do usuário (opcional)
+        plan: ID do plano desejado. Valores aceitos: "principal", "trimestral", "anual". Default: "principal"
+    
+    Returns:
+        URL de checkout do Cakto para o plano especificado
+    """
+    # Validar se o plano existe
+    if plan not in settings.CAKTO_PLANS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plano '{plan}' não encontrado. Planos disponíveis: {', '.join(settings.CAKTO_PLANS.keys())}"
+        )
+    
+    checkout_url = create_checkout_url(
+        email=email, 
+        name=name, 
+        cpf_cnpj=cpf_cnpj,
+        plan_id=plan
+    )
     return {"checkout_url": checkout_url}

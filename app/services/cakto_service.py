@@ -170,9 +170,34 @@ def get_subscription_status(customer_id: str) -> Dict[str, Any]:
         raise CaktoError(f"Error getting subscription status: {str(e)}")
 
 
-def create_checkout_url(email: str, name: str = None, cpf_cnpj: str = None) -> str:
-    """Gera URL de checkout do Cakto com parâmetros pré-preenchidos."""
-    base_url = settings.CAKTO_CHECKOUT_URL
+def create_checkout_url(
+    email: str, 
+    name: str = None, 
+    cpf_cnpj: str = None,
+    plan_id: str = "principal"
+) -> str:
+    """
+    Gera URL de checkout do Cakto com parâmetros pré-preenchidos.
+    
+    Args:
+        email: Email do usuário
+        name: Nome do usuário (opcional)
+        cpf_cnpj: CPF/CNPJ do usuário (opcional)
+        plan_id: ID do plano ("principal", "trimestral", "anual"). Default: "principal"
+    
+    Returns:
+        URL de checkout do Cakto para o plano especificado
+    """
+    # Buscar informações do plano
+    plan = settings.get_cakto_plan(plan_id)
+    
+    # Se plano não existir, usar plano principal como fallback
+    if not plan:
+        plan = settings.get_cakto_plan("principal")
+        if not plan:
+            raise CaktoError(f"Plano '{plan_id}' não encontrado e plano principal não configurado")
+    
+    base_url = plan["checkout_url"]
     params = []
     
     if email:

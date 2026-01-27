@@ -40,3 +40,21 @@ class UserUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
 
+
+class SetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class SetPasswordResponse(BaseModel):
+    message: str
+    user: UserResponse
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    message: str
+

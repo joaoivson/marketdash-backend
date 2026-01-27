@@ -148,26 +148,91 @@ Produção: https://api.marketdash.com.br
 Homologação: https://api.hml.marketdash.com.br
 ```
 
-### 1. Obter URL de Checkout
+### 1. Listar Planos Disponíveis
 
-**GET** `/api/v1/cakto/checkout-url`
+**GET** `/api/v1/cakto/plans`
 
-Gera URL de checkout da Cakto com dados pré-preenchidos.
-
-**Query Parameters:**
-- `email` (obrigatório): Email do usuário
-- `name` (opcional): Nome do usuário
-- `cpf_cnpj` (opcional): CPF ou CNPJ do usuário
+Retorna lista de todos os planos de assinatura disponíveis.
 
 **Resposta:**
 ```json
 {
-  "checkout_url": "https://pay.cakto.com.br/8e9qxyg_742442?email=usuario@example.com&name=João Silva&cpf_cnpj=12345678900"
+  "plans": [
+    {
+      "id": "principal",
+      "name": "Oferta Principal",
+      "checkout_url": "https://pay.cakto.com.br/8e9qxyg_742442",
+      "period": "mensal"
+    },
+    {
+      "id": "trimestral",
+      "name": "MarketDash Trimestral",
+      "checkout_url": "https://pay.cakto.com.br/hi5cerw",
+      "period": "trimestral"
+    },
+    {
+      "id": "anual",
+      "name": "MarketDash Anual",
+      "checkout_url": "https://pay.cakto.com.br/6bpwn57",
+      "period": "anual"
+    }
+  ]
 }
 ```
 
 **Exemplo de Requisição:**
 ```typescript
+const response = await fetch(`${API_BASE_URL}/api/v1/cakto/plans`, {
+  method: 'GET',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+const data = await response.json();
+// data.plans contém array com todos os planos disponíveis
+```
+
+---
+
+### 2. Obter URL de Checkout
+
+**GET** `/api/v1/cakto/checkout-url`
+
+Gera URL de checkout da Cakto com dados pré-preenchidos para um plano específico.
+
+**Query Parameters:**
+- `email` (obrigatório): Email do usuário
+- `name` (opcional): Nome do usuário
+- `cpf_cnpj` (opcional): CPF ou CNPJ do usuário
+- `plan` (opcional): ID do plano desejado. Valores: `"principal"`, `"trimestral"`, `"anual"`. Default: `"principal"`
+
+**Resposta:**
+```json
+{
+  "checkout_url": "https://pay.cakto.com.br/6bpwn57?email=usuario@example.com&name=João Silva&cpf_cnpj=12345678900"
+}
+```
+
+**Exemplo de Requisição (Plano Anual):**
+```typescript
+const response = await fetch(
+  `${API_BASE_URL}/api/v1/cakto/checkout-url?email=${email}&name=${name}&cpf_cnpj=${cpfCnpj}&plan=anual`,
+  {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  }
+);
+
+const data = await response.json();
+window.location.href = data.checkout_url;
+```
+
+**Exemplo de Requisição (Plano Principal - Default):**
+```typescript
+// Sem especificar plan, usa "principal" como padrão
 const response = await fetch(
   `${API_BASE_URL}/api/v1/cakto/checkout-url?email=${email}&name=${name}&cpf_cnpj=${cpfCnpj}`,
   {
@@ -184,7 +249,7 @@ window.location.href = data.checkout_url;
 
 ---
 
-### 2. Verificar Status da Assinatura
+### 3. Verificar Status da Assinatura
 
 **GET** `/api/v1/subscription/status`
 
@@ -230,7 +295,7 @@ const subscription = await response.json();
 
 ---
 
-### 3. Login
+### 4. Login
 
 **POST** `/api/v1/auth/login`
 
@@ -260,7 +325,7 @@ password: string
 
 ---
 
-### 4. Registro (Opcional)
+### 5. Registro (Opcional)
 
 **POST** `/api/v1/auth/register`
 
@@ -452,15 +517,35 @@ export const subscriptionService = {
 ```typescript
 import { api } from './api';
 
+export interface PlanInfo {
+  id: string;
+  name: string;
+  checkout_url: string;
+  period: string;  // "mensal", "trimestral", "anual"
+}
+
+export interface PlansResponse {
+  plans: PlanInfo[];
+}
+
 export interface CheckoutUrlParams {
   email?: string;  // Opcional para site institucional
   name?: string;
   cpf_cnpj?: string;
+  plan?: string;  // ID do plano: "principal", "trimestral", "anual"
 }
 
 export const caktoService = {
   /**
-   * Obtém URL de checkout da Cakto
+   * Obtém lista de planos disponíveis
+   */
+  async getPlans(): Promise<PlanInfo[]> {
+    const response = await api.publicRequest<PlansResponse>('/api/v1/cakto/plans');
+    return response.plans;
+  },
+  
+  /**
+   * Obtém URL de checkout da Cakto para um plano específico
    * Pode ser chamado sem autenticação (para site institucional)
    */
   async getCheckoutUrl(params: CheckoutUrlParams = {}): Promise<string> {
@@ -476,6 +561,10 @@ export const caktoService = {
     
     if (params.cpf_cnpj) {
       queryParams.append('cpf_cnpj', params.cpf_cnpj);
+    }
+    
+    if (params.plan) {
+      queryParams.append('plan', params.plan);
     }
     
     // Para site institucional, não precisa de token
@@ -497,8 +586,8 @@ export const caktoService = {
   },
   
   /**
-   * Redireciona diretamente para checkout (sem pré-preenchimento)
-   * Usado no botão "Assinar" do site institucional
+   * Redireciona diretamente para checkout do plano principal (sem pré-preenchimento)
+   * Usado no botão "Assinar" do site institucional quando não há seleção de plano
    */
   redirectToCheckoutDirect(): void {
     const baseUrl = 'https://pay.cakto.com.br/8e9qxyg_742442';
@@ -1043,10 +1132,10 @@ export const CaktoCallback: React.FC = () => {
 **`src/pages/LandingPage.tsx`**
 
 ```typescript
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/Header';
-import { caktoService } from '../services/cakto.service';
+import { caktoService, PlanInfo } from '../services/cakto.service';
 import { useAuth } from '../hooks/useAuth';
 
 export const LandingPage: React.FC = () => {
@@ -1115,20 +1204,109 @@ export const LandingPage: React.FC = () => {
       
       <section className="pricing">
         <h2>Planos</h2>
-        <div className="pricing-card">
-          <h3>Plano MarketDash</h3>
-          <p className="price">R$ 99,90/mês</p>
-          <ul>
-            <li>Análise ilimitada de dados</li>
-            <li>Upload de CSVs</li>
-            <li>Dashboard completo</li>
-            <li>Suporte prioritário</li>
-          </ul>
-          <button onClick={handleSubscribe} className="btn-primary">
-            Assinar Agora
+        {loading ? (
+          <div>Carregando planos...</div>
+        ) : (
+          <div className="pricing-grid">
+            {plans.map((plan) => (
+              <div key={plan.id} className="pricing-card">
+                <h3>{plan.name}</h3>
+                <p className="period">{plan.period}</p>
+                <ul>
+                  <li>Análise ilimitada de dados</li>
+                  <li>Upload de CSVs</li>
+                  <li>Dashboard completo</li>
+                  <li>Suporte prioritário</li>
+                </ul>
+                <button 
+                  onClick={() => handleSubscribe(plan.id)} 
+                  className="btn-primary"
+                >
+                  Assinar {plan.name}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+};
+```
+
+---
+
+## 📦 Planos Disponíveis
+
+O MarketDash oferece três planos de assinatura:
+
+1. **Oferta Principal** (Mensal)
+   - ID: `principal`
+   - Checkout: `https://pay.cakto.com.br/8e9qxyg_742442`
+   - Período: Mensal
+
+2. **MarketDash Trimestral**
+   - ID: `trimestral`
+   - Checkout: `https://pay.cakto.com.br/hi5cerw`
+   - Período: Trimestral
+
+3. **MarketDash Anual**
+   - ID: `anual`
+   - Checkout: `https://pay.cakto.com.br/6bpwn57`
+   - Período: Anual
+
+### Exemplo: Exibir Planos no Frontend
+
+```typescript
+import { caktoService, PlanInfo } from '../services/cakto.service';
+
+export const SubscriptionPlans: React.FC = () => {
+  const [plans, setPlans] = useState<PlanInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    const fetchPlans = async () => {
+      try {
+        const plansList = await caktoService.getPlans();
+        setPlans(plansList);
+      } catch (error) {
+        console.error('Erro ao carregar planos:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchPlans();
+  }, []);
+  
+  const handleSelectPlan = async (planId: string) => {
+    try {
+      await caktoService.redirectToCheckout({
+        email: user?.email,
+        name: user?.name,
+        cpf_cnpj: user?.cpf_cnpj,
+        plan: planId,
+      });
+    } catch (error) {
+      console.error('Erro ao redirecionar:', error);
+    }
+  };
+  
+  if (loading) {
+    return <div>Carregando planos...</div>;
+  }
+  
+  return (
+    <div className="plans-grid">
+      {plans.map((plan) => (
+        <div key={plan.id} className="plan-card">
+          <h3>{plan.name}</h3>
+          <p>Período: {plan.period}</p>
+          <button onClick={() => handleSelectPlan(plan.id)}>
+            Assinar {plan.name}
           </button>
         </div>
-      </section>
+      ))}
     </div>
   );
 };
@@ -1149,9 +1327,10 @@ export const LandingPage: React.FC = () => {
 - **API Base (Homologação):** `https://api.hml.marketdash.com.br`
 - **Webhook URL:** `https://api.marketdash.com.br/cakto/webhook`
 
-### URLs da Cakto
-- **Checkout Cakto:** `https://pay.cakto.com.br/8e9qxyg_742442`
-- **Product ID:** `8e9qxyg_742442`
+### URLs da Cakto (Planos)
+- **Oferta Principal:** `https://pay.cakto.com.br/8e9qxyg_742442`
+- **Trimestral:** `https://pay.cakto.com.br/hi5cerw`
+- **Anual:** `https://pay.cakto.com.br/6bpwn57`
 
 ### Rotas do Frontend
 - `/` - Site institucional (Landing Page)

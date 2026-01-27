@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 from fastapi import HTTPException, status
 
@@ -7,6 +7,7 @@ from app.core.security import verify_password, get_password_hash, create_access_
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
 from app.services.cakto_service import check_active_subscription, CaktoError
+from app.services.email_service import EmailService
 
 
 class AuthService:
@@ -71,29 +72,141 @@ class AuthService:
         return {"access_token": access_token, "token_type": "bearer", "user": user}
 
     def register_from_cakto(self, email: str, name: str = None, cpf_cnpj: str = None) -> User:
-        """Cria usuário a partir dos dados do webhook do Cakto. Gera senha temporária."""
+        """Cria usuário a partir dos dados do webhook do Cakto. Gera token para definir senha e envia email."""
         existing = self.user_repo.get_by_email(email)
         if existing:
             return existing  # Usuário já existe, retornar existente
         
-        # Gerar senha temporária segura
+        # Gerar token único para definir senha (32 caracteres)
         import secrets
         import string
-        temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
-        hashed = get_password_hash(temp_password)
+        token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+        
+        # Definir expiração (24 horas)
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        
+        # Criar hash temporário (será substituído quando usuário definir senha)
+        # Usar token como senha temporária para garantir que não possa fazer login sem definir senha
+        temp_hash = get_password_hash(token)
         
         new_user = User(
             name=name,
             cpf_cnpj=cpf_cnpj,
             email=email,
-            hashed_password=hashed,
+            hashed_password=temp_hash,
             is_active=True,
+            password_set_token=token,
+            password_set_token_expires_at=expires_at,
         )
         user = self.user_repo.create(new_user)
         
-        # Log da senha temporária (em produção, enviar por email)
+        # Enviar email com link para definir senha
         import logging
         logger = logging.getLogger(__name__)
-        logger.info(f"Usuário criado do Cakto: {email}, senha temporária: {temp_password}")
+        try:
+            email_service = EmailService()
+            email_sent = email_service.send_set_password_email(
+                user_email=email,
+                user_name=name or "Usuário",
+                token=token
+            )
+            if email_sent:
+                logger.info(f"Email de definir senha enviado para: {email}")
+            else:
+                logger.error(f"Falha ao enviar email de definir senha para: {email}")
+        except Exception as e:
+            # Log do erro mas não falhar a criação do usuário
+            logger.error(f"Erro ao enviar email de definir senha para {email}: {e}")
         
         return user
+    
+    def set_password(self, token: str, password: str) -> User:
+        """Define senha do usuário usando token recebido por email."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Buscar usuário pelo token
+        user = self.user_repo.get_by_password_set_token(token)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token inválido ou expirado"
+            )
+        
+        # Verificar se token não expirou
+        if user.password_set_token_expires_at and user.password_set_token_expires_at < datetime.utcnow():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token inválido ou expirado"
+            )
+        
+        # Verificar força da senha
+        if len(password) < 8:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A senha deve ter no mínimo 8 caracteres"
+            )
+        
+        # Atualizar senha
+        hashed_password = get_password_hash(password)
+        user.hashed_password = hashed_password
+        
+        # Remover token (usado apenas uma vez)
+        user.password_set_token = None
+        user.password_set_token_expires_at = None
+        
+        # Salvar alterações
+        self.user_repo.update(user)
+        
+        logger.info(f"Senha definida com sucesso para usuário: {user.email}")
+        
+        return user
+    
+    def forgot_password(self, email: str) -> bool:
+        """Solicita reset de senha. Gera token e envia email."""
+        import logging
+        import secrets
+        import string
+        logger = logging.getLogger(__name__)
+        
+        # Buscar usuário pelo email
+        user = self.user_repo.get_by_email(email)
+        
+        # Por segurança, sempre retornar sucesso mesmo se email não existir
+        # Isso previne enumeração de emails
+        if not user:
+            logger.warning(f"Tentativa de reset de senha para email não cadastrado: {email}")
+            return True  # Retornar True para não revelar se email existe
+        
+        if not user.is_active:
+            logger.warning(f"Tentativa de reset de senha para usuário inativo: {email}")
+            return True  # Retornar True mesmo para usuário inativo
+        
+        # Gerar token único para reset de senha (32 caracteres)
+        token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+        
+        # Definir expiração (24 horas)
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        
+        # Atualizar token no usuário
+        user.password_set_token = token
+        user.password_set_token_expires_at = expires_at
+        self.user_repo.update(user)
+        
+        # Enviar email com link para resetar senha
+        try:
+            email_service = EmailService()
+            email_sent = email_service.send_reset_password_email(
+                user_email=email,
+                user_name=user.name or "Usuário",
+                token=token
+            )
+            if email_sent:
+                logger.info(f"Email de reset de senha enviado para: {email}")
+            else:
+                logger.error(f"Falha ao enviar email de reset de senha para: {email}")
+            return email_sent
+        except Exception as e:
+            logger.error(f"Erro ao enviar email de reset de senha para {email}: {e}")
+            return False
