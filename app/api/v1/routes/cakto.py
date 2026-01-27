@@ -190,6 +190,8 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     # Buscar ou criar usuário
     user = db.query(User).filter(User.email.ilike(email)).first()
     user_created = False
+    user_has_password = False
+    
     if not user:
         # Criar usuário a partir dos dados do Cakto
         logger.info(f"Criando novo usuário do Cakto: {email}")
@@ -200,7 +202,12 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
             cpf_cnpj=customer_data["cpf_cnpj"]
         )
         user_created = True
+        user_has_password = False  # Usuário novo não tem senha definida ainda
         logger.info(f"Usuário criado com ID: {user.id}")
+    else:
+        # Verificar se usuário já tem senha definida (não tem password_set_token)
+        user_has_password = not bool(user.password_set_token)
+        logger.info(f"Usuário existente encontrado: {user.id}, tem senha: {user_has_password}")
 
     # Atualizar subscription
     subscription_service = SubscriptionService(SubscriptionRepository(db))
@@ -224,6 +231,58 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
         subscription.last_validation_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(subscription)
+        
+        # Enviar emails apropriados
+        from app.services.email_service import EmailService
+        email_service = EmailService()
+        user_name = customer_data.get("name") or user.name or "Usuário"
+        
+        if user_created:
+            # Usuário novo: email já foi enviado pelo register_from_cakto
+            # Mas vamos garantir que foi enviado
+            logger.info(f"Email de boas-vindas já enviado para novo usuário: {email}")
+        else:
+            # Usuário existente: enviar email de reativação
+            if user_has_password:
+                # Usuário tem senha: enviar email de reativação (bem-vindo de volta)
+                try:
+                    email_sent = email_service.send_welcome_back_email(
+                        user_email=email,
+                        user_name=user_name
+                    )
+                    if email_sent:
+                        logger.info(f"Email de reativação enviado para: {email}")
+                    else:
+                        logger.error(f"Falha ao enviar email de reativação para: {email}")
+                except Exception as e:
+                    logger.error(f"Erro ao enviar email de reativação para {email}: {e}")
+            else:
+                # Usuário não tem senha: enviar email para definir senha
+                try:
+                    # Gerar novo token se não existir ou expirou
+                    if not user.password_set_token or (user.password_set_token_expires_at and user.password_set_token_expires_at < datetime.now(timezone.utc)):
+                        import secrets
+                        import string
+                        token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+                        expires_at_token = datetime.now(timezone.utc) + timedelta(hours=24)
+                        user.password_set_token = token
+                        user.password_set_token_expires_at = expires_at_token
+                        db.commit()
+                        db.refresh(user)
+                    else:
+                        token = user.password_set_token
+                    
+                    email_sent = email_service.send_set_password_email(
+                        user_email=email,
+                        user_name=user_name,
+                        token=token
+                    )
+                    if email_sent:
+                        logger.info(f"Email de definir senha enviado para usuário existente: {email}")
+                    else:
+                        logger.error(f"Falha ao enviar email de definir senha para: {email}")
+                except Exception as e:
+                    logger.error(f"Erro ao enviar email de definir senha para {email}: {e}")
 
     logger.info(f"Subscription atualizada para user {user.id}: active={subscription.is_active}")
 
@@ -260,7 +319,7 @@ def get_plans():
 
 @router.get("/checkout-url")
 def get_checkout_url(
-    email: str = Query(..., description="Email do usuário"),
+    email: str = Query(None, description="Email do usuário (opcional)"),
     name: str = Query(None, description="Nome do usuário"),
     cpf_cnpj: str = Query(None, description="CPF/CNPJ do usuário"),
     plan: str = Query("principal", description="ID do plano (principal, trimestral, anual)"),
@@ -269,7 +328,7 @@ def get_checkout_url(
     Gera URL de checkout do Cakto com parâmetros pré-preenchidos.
     
     Args:
-        email: Email do usuário (obrigatório)
+        email: Email do usuário (opcional - pode ser omitido para usuários não logados)
         name: Nome do usuário (opcional)
         cpf_cnpj: CPF/CNPJ do usuário (opcional)
         plan: ID do plano desejado. Valores aceitos: "principal", "trimestral", "anual". Default: "principal"

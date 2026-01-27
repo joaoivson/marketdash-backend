@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 
 class PlanInfo(BaseModel):
@@ -16,3 +16,10 @@ class PlanInfo(BaseModel):
 class PlansResponse(BaseModel):
     """Resposta com lista de planos disponíveis."""
     plans: List[PlanInfo]
+
+
+class CancelSubscriptionResponse(BaseModel):
+    """Resposta ao cancelar assinatura."""
+    message: str
+    subscription_cancelled: bool
+    note: Optional[str] = None

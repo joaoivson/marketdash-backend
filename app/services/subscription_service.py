@@ -107,3 +107,35 @@ class SubscriptionService:
             "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
             "cakto_customer_id": subscription.cakto_customer_id,
         }
+    
+    def cancel_subscription(self, user_id: int) -> bool:
+        """
+        Cancela a assinatura do usuário.
+        
+        Desativa a assinatura no nosso sistema. O cancelamento real na Cakto
+        deve ser feito pelo usuário na plataforma Cakto. Quando o cancelamento
+        for processado pela Cakto, o webhook atualizará automaticamente.
+        
+        Returns:
+            True se a assinatura foi cancelada, False se não havia assinatura ativa
+        """
+        subscription = self.repo.get_by_user_id(user_id)
+        
+        if not subscription:
+            logger.info(f"Tentativa de cancelar assinatura para usuário {user_id} sem subscription")
+            return False
+        
+        if not subscription.is_active:
+            logger.info(f"Assinatura do usuário {user_id} já estava inativa")
+            return False
+        
+        # Desativar assinatura e mudar para plano free
+        subscription.is_active = False
+        subscription.plan = "free"
+        
+        # Fazer commit
+        self.repo.db.commit()
+        self.repo.db.refresh(subscription)
+        
+        logger.info(f"Assinatura cancelada para usuário {user_id}")
+        return True
