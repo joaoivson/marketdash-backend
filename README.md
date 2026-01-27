@@ -460,6 +460,7 @@ alembic upgrade head
 | `JWT_SECRET` | Chave secreta para JWT | - |
 | `JWT_ALGORITHM` | Algoritmo JWT | HS256 |
 | `JWT_EXPIRATION_HOURS` | Horas de expiração do token | 24 |
+| `CAKTO_WEBHOOK_SECRET` | Chave secreta para validação de webhooks Cakto | - |
 
 ## 🚀 Próximos Passos
 

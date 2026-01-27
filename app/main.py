@@ -58,6 +58,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Include routers (v1 only)
 app.include_router(api_v1_router, prefix=settings.API_V1_STR)
 
+# Rota alternativa para webhook Cakto (sem prefixo /api/v1)
+# Permite que o webhook funcione em /cakto/webhook além de /api/v1/cakto/webhook
+from app.api.v1.routes import cakto as cakto_v1
+app.include_router(cakto_v1.router, prefix="/cakto", tags=["cakto"])
+
 
 @app.get("/")
 def root():

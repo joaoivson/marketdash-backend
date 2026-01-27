@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     CAKTO_API_BASE: str = "https://api.cakto.com.br"
     CAKTO_CLIENT_ID: Optional[str] = None
     CAKTO_CLIENT_SECRET: Optional[str] = None
-    CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = None  # CSV of product IDs
+    CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = "8e9qxyg_742442"  # Product ID from Cakto
+    CAKTO_CHECKOUT_URL: str = "https://pay.cakto.com.br/8e9qxyg_742442"
     CAKTO_ENFORCE_SUBSCRIPTION: bool = False
     CAKTO_WEBHOOK_SECRET: Optional[str] = None
     

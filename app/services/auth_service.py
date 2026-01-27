@@ -69,3 +69,31 @@ class AuthService:
             expires_delta=access_token_expires,
         )
         return {"access_token": access_token, "token_type": "bearer", "user": user}
+
+    def register_from_cakto(self, email: str, name: str = None, cpf_cnpj: str = None) -> User:
+        """Cria usuário a partir dos dados do webhook do Cakto. Gera senha temporária."""
+        existing = self.user_repo.get_by_email(email)
+        if existing:
+            return existing  # Usuário já existe, retornar existente
+        
+        # Gerar senha temporária segura
+        import secrets
+        import string
+        temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
+        hashed = get_password_hash(temp_password)
+        
+        new_user = User(
+            name=name,
+            cpf_cnpj=cpf_cnpj,
+            email=email,
+            hashed_password=hashed,
+            is_active=True,
+        )
+        user = self.user_repo.create(new_user)
+        
+        # Log da senha temporária (em produção, enviar por email)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Usuário criado do Cakto: {email}, senha temporária: {temp_password}")
+        
+        return user

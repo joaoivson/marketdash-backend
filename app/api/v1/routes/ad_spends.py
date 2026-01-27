@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import openpyxl
 from openpyxl import Workbook
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, require_active_subscription
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.ad_spend_repository import AdSpendRepository
@@ -48,7 +48,7 @@ class BulkAdSpendPayload(BaseModel):
 @router.post("", response_model=AdSpendResponse, status_code=status.HTTP_201_CREATED)
 def create_ad_spend(
     payload: AdSpendCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = AdSpendService(AdSpendRepository(db))
@@ -58,7 +58,7 @@ def create_ad_spend(
 @router.post("/bulk", response_model=List[AdSpendResponse], status_code=status.HTTP_201_CREATED)
 def bulk_create_ad_spend(
     payload: BulkAdSpendPayload,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = AdSpendService(AdSpendRepository(db))
@@ -71,7 +71,7 @@ def list_ad_spends(
     end_date: date | None = Query(None),
     limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = AdSpendService(AdSpendRepository(db))
@@ -82,7 +82,7 @@ def list_ad_spends(
 def update_ad_spend(
     ad_spend_id: int,
     payload: AdSpendUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = AdSpendService(AdSpendRepository(db))
@@ -92,7 +92,7 @@ def update_ad_spend(
 
 @router.delete("/all", status_code=status.HTTP_200_OK)
 def delete_all_ad_spends(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     """Deleta todos os ad_spends do usuário autenticado."""
@@ -103,7 +103,7 @@ def delete_all_ad_spends(
 @router.delete("/{ad_spend_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_ad_spend(
     ad_spend_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = AdSpendService(AdSpendRepository(db))
@@ -114,7 +114,7 @@ def delete_ad_spend(
 
 @router.get("/template")
 def download_template(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
 ):
     """
     Download do template Excel para importação de investimentos em ads.
