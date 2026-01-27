@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 from app.repositories.subscription_repository import SubscriptionRepository
@@ -42,7 +42,7 @@ class SubscriptionService:
             return True  # Nunca validou
         
         # Verificar se passou mais de 30 dias
-        days_since_validation = (datetime.utcnow() - subscription.last_validation_at).days
+        days_since_validation = (datetime.now(timezone.utc) - subscription.last_validation_at).days
         return days_since_validation >= 30
 
     def check_and_update_subscription(self, user_id: int, user_email: str) -> bool:
@@ -61,13 +61,13 @@ class SubscriptionService:
             
             # Atualizar status e data de validação
             subscription.is_active = has_access
-            subscription.last_validation_at = datetime.utcnow()
+            subscription.last_validation_at = datetime.now(timezone.utc)
             
             if has_access:
                 subscription.plan = "marketdash"
                 # Se não tem expires_at, definir para 30 dias a partir de agora
                 if not subscription.expires_at:
-                    subscription.expires_at = datetime.utcnow() + timedelta(days=30)
+                    subscription.expires_at = datetime.now(timezone.utc) + timedelta(days=30)
             else:
                 subscription.plan = "free"
             

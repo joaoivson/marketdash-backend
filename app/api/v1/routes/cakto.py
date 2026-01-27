@@ -1,5 +1,5 @@
 from typing import Any, Dict, Optional, Set
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
@@ -208,7 +208,7 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     expires_at = None
     if action == "activate":
         # Definir expiração para 30 dias a partir de agora
-        expires_at = datetime.utcnow() + timedelta(days=30)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     
     subscription = subscription_service.set_active(
         user_id=user.id,
@@ -221,7 +221,7 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     
     # Atualizar last_validation_at quando ativar
     if action == "activate":
-        subscription.last_validation_at = datetime.utcnow()
+        subscription.last_validation_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(subscription)
 
