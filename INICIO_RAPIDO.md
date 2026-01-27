@@ -1,4 +1,4 @@
-# 🚀 Início Rápido - DashAds Backend
+# 🚀 Início Rápido - MarketDash Backend
 
 ## ⚠️ PROBLEMA ATUAL: Docker Desktop não está rodando
 
@@ -79,12 +79,12 @@ Se preferir testar sem Docker agora:
    ```
 
 2. **Configurar PostgreSQL:**
-   - Crie banco: `dashads_db`
-   - Crie usuário: `dashads_user` / senha: `dashads_password`
+   - Crie banco: `marketdash_db`
+   - Crie usuário: `marketdash_user` / senha: `marketdash_password`
 
 3. **Criar arquivo `.env`:**
    ```env
-   DATABASE_URL=postgresql://dashads_user:dashads_password@localhost:5432/dashads_db
+   DATABASE_URL=postgresql://marketdash_user:marketdash_password@localhost:5432/marketdash_db
    JWT_SECRET=your-secret-key-change-in-production-min-32-chars
    ```
 

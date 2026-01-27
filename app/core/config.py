@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import Optional, Dict
 
 
 class Settings(BaseSettings):
@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     
     # App Configuration
     API_V1_STR: str = "/api/v1"
-    PROJECT_NAME: str = "DashAds Backend"
+    PROJECT_NAME: str = "MarketDash Backend"
     ENVIRONMENT: str = "development"
 
     # Cache / Redis
@@ -29,9 +29,49 @@ class Settings(BaseSettings):
     CAKTO_API_BASE: str = "https://api.cakto.com.br"
     CAKTO_CLIENT_ID: Optional[str] = None
     CAKTO_CLIENT_SECRET: Optional[str] = None
-    CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = None  # CSV of product IDs
+    # IDs de produtos separados por vírgula (todos os planos aceitos)
+    CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = "8e9qxyg_742442,hi5cerw,6bpwn57"
     CAKTO_ENFORCE_SUBSCRIPTION: bool = False
     CAKTO_WEBHOOK_SECRET: Optional[str] = None
+    
+    # Planos Cakto disponíveis
+    CAKTO_PLANS: Dict[str, Dict[str, str]] = {
+        "principal": {
+            "id": "8e9qxyg_742442",
+            "name": "Oferta Principal",
+            "checkout_url": "https://pay.cakto.com.br/8e9qxyg_742442",
+            "period": "mensal"
+        },
+        "trimestral": {
+            "id": "hi5cerw",
+            "name": "MarketDash Trimestral",
+            "checkout_url": "https://pay.cakto.com.br/hi5cerw",
+            "period": "trimestral"
+        },
+        "anual": {
+            "id": "6bpwn57",
+            "name": "MarketDash Anual",
+            "checkout_url": "https://pay.cakto.com.br/6bpwn57",
+            "period": "anual"
+        }
+    }
+    
+    def get_cakto_plan(self, plan_id: str) -> Optional[Dict[str, str]]:
+        """Retorna informações de um plano específico ou None se não existir."""
+        return self.CAKTO_PLANS.get(plan_id)
+    
+    def get_all_cakto_plans(self) -> Dict[str, Dict[str, str]]:
+        """Retorna todos os planos disponíveis."""
+        return self.CAKTO_PLANS.copy()
+    
+    # Email / SMTP Configuration
+    SMTP_HOST: str = "smtp.hostinger.com"
+    SMTP_PORT: int = 465
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_FROM_NAME: str = "MarketDash"
+    FRONTEND_URL: str = "https://marketdash.com.br"
     
     # CORS Configuration
     # Por padrão, apenas HTTPS é permitido em produção/homologação

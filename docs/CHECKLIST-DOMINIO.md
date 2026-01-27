@@ -15,7 +15,7 @@ Todos os arquivos do backend foram atualizados com o novo domínio:
 
 Você precisa atualizar no Supabase Dashboard:
 
-### 1. Produção (dashads-prod)
+### 1. Produção (marketdash-prod)
 
 Acesse: https://supabase.com/dashboard/project/rsejwvxealraianensoz
 

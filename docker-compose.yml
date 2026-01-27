@@ -1,24 +1,24 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: dashads_db
+    container_name: marketdash_db
     environment:
-      POSTGRES_USER: dashads_user
-      POSTGRES_PASSWORD: dashads_password
-      POSTGRES_DB: dashads_db
+      POSTGRES_USER: marketdash_user
+      POSTGRES_PASSWORD: marketdash_password
+      POSTGRES_DB: marketdash_db
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dashads_user -d dashads_db"]
+      test: ["CMD-SHELL", "pg_isready -U marketdash_user -d marketdash_db"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   app:
     build: .
-    container_name: dashads_app
+    container_name: marketdash_app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - .:/app
@@ -37,7 +37,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: dashads_redis
+    container_name: marketdash_redis
     ports:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]

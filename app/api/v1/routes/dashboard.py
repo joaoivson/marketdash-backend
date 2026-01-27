@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, require_active_subscription
 from app.db.session import get_db
 from app.schemas.dashboard import DashboardFilters, DashboardResponse
 from app.services.dashboard_service import DashboardService
@@ -19,7 +19,7 @@ def get_dashboard(
     product: Optional[str] = Query(None, description="Filtrar por produto (busca parcial)"),
     min_value: Optional[float] = Query(None, description="Valor mínimo"),
     max_value: Optional[float] = Query(None, description="Valor máximo"),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     filters = DashboardFilters(

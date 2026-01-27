@@ -1,4 +1,4 @@
-# 🏗️ Arquitetura de Serviços - DashAds
+# 🏗️ Arquitetura de Serviços - MarketDash
 
 ## 📋 Visão Geral
 

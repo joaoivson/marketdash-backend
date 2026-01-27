@@ -159,8 +159,9 @@ class DatasetService:
     def list_datasets(self, user_id: int):
         return self.dataset_repo.list_by_user(user_id)
 
-    def get_dataset(self, dataset_id: int):
-        dataset = self.dataset_repo.get_by_id(dataset_id)
+    def get_dataset(self, dataset_id: int, user_id: int):
+        """Busca dataset por ID, sempre filtrando por user_id PRIMEIRO para garantir isolamento de dados."""
+        dataset = self.dataset_repo.get_by_id(dataset_id, user_id)
         if not dataset:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset não encontrado")
         return dataset
@@ -168,6 +169,7 @@ class DatasetService:
     def list_dataset_rows(
         self,
         dataset_id: int,
+        user_id: int,
         start_date: datetime.date,
         end_date: datetime.date,
         include_raw_data: bool,
@@ -177,7 +179,8 @@ class DatasetService:
         if (end_date - start_date).days > 90:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="O intervalo máximo permitido é de 90 dias.")
         # Cache removido - frontend gerencia via localStorage
-        rows = self.row_repo.list_by_dataset(dataset_id, start_date, end_date, None, 0)
+        # Sempre filtrar por user_id PRIMEIRO para garantir isolamento de dados
+        rows = self.row_repo.list_by_dataset(dataset_id, user_id, start_date, end_date, None, 0)
         payload = [self.serialize_row(r, include_raw_data=include_raw_data) for r in rows]
         return payload
 
@@ -248,7 +251,11 @@ class DatasetService:
         if not latest:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Nenhum dataset encontrado para o usuário")
 
-        rows_query = db_session.query(DatasetRow).filter(DatasetRow.dataset_id == latest.id)
+        # Sempre filtrar por user_id PRIMEIRO para garantir isolamento de dados
+        rows_query = db_session.query(DatasetRow).filter(
+            DatasetRow.user_id == user_id,
+            DatasetRow.dataset_id == latest.id
+        )
         if sub_id1:
             rows_query = rows_query.filter(DatasetRow.sub_id1 == sub_id1)
 
@@ -285,3 +292,10 @@ class DatasetService:
             "sub_id1": sub_id1,
             "amount": amount,
         }
+
+    def delete_all(self, user_id: int) -> dict:
+        """Deleta todos os datasets de um usuário e retorna a quantidade deletada."""
+        count = self.dataset_repo.delete_all_by_user(user_id)
+        # As linhas (DatasetRow) serão deletadas automaticamente via CASCADE
+        # Cache removido - frontend gerencia via localStorage
+        return {"deleted": count}

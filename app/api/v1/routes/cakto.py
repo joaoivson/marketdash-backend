@@ -1,13 +1,22 @@
 from typing import Any, Dict, Optional, Set
+from datetime import datetime, timedelta
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import get_password_hash
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
+from app.repositories.user_repository import UserRepository
 from app.services.subscription_service import SubscriptionService
+from app.services.auth_service import AuthService
+from app.services.cakto_service import create_checkout_url
+from app.schemas.subscription import PlansResponse, PlanInfo
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["cakto"])
 
@@ -54,6 +63,35 @@ def _extract_email(payload: Dict[str, Any]) -> Optional[str]:
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
     return None
+
+
+def _extract_customer_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Extrai dados do cliente do payload do webhook."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    customer = data.get("customer") or data.get("buyer") or {}
+    
+    if not isinstance(customer, dict):
+        customer = {}
+    
+    return {
+        "email": customer.get("email") or data.get("email"),
+        "name": customer.get("name") or customer.get("full_name") or data.get("name"),
+        "cpf_cnpj": customer.get("docNumber") or customer.get("cpf_cnpj") or data.get("cpf_cnpj"),
+        "customer_id": customer.get("id") or data.get("customer_id"),
+        "phone": customer.get("phone") or data.get("phone"),
+    }
+
+
+def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Extrai dados da transação do payload do webhook."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    
+    return {
+        "transaction_id": data.get("id") or data.get("transaction_id"),
+        "amount": data.get("amount"),
+        "status": data.get("status"),
+        "payment_method": data.get("paymentMethod") or data.get("payment_method"),
+    }
 
 
 def _extract_product_id(payload: Dict[str, Any]) -> Optional[str]:
@@ -107,23 +145,36 @@ def _infer_action(payload: Dict[str, Any], event: str) -> Optional[str]:
 
 @router.post("/webhook")
 async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
+    """Webhook do Cakto para processar eventos de assinatura."""
+    logger.info("Webhook Cakto recebido")
+    
+    # Validação do secret
     if settings.CAKTO_WEBHOOK_SECRET:
         secret = (
             request.headers.get("x-cakto-secret")
             or request.headers.get("x-webhook-secret")
             or request.headers.get("x-cakto-signature")
         )
-        if secret != settings.CAKTO_WEBHOOK_SECRET:
+        # Também verificar no payload (fallback conforme documentação)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload inválido")
+        
+        payload_secret = payload.get("secret")
+        if secret != settings.CAKTO_WEBHOOK_SECRET and payload_secret != settings.CAKTO_WEBHOOK_SECRET:
+            logger.warning(f"Webhook não autorizado. Secret esperado: {settings.CAKTO_WEBHOOK_SECRET[:10]}...")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook não autorizado")
-
-    payload = await request.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload inválido")
+    else:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload inválido")
 
     event = _extract_event(payload)
     email = _extract_email(payload)
     product_id = _extract_product_id(payload)
     action = _infer_action(payload, event)
+
+    logger.info(f"Evento processado: {event}, email: {email}, action: {action}")
 
     if not email:
         return {"status": "ignored", "reason": "email_not_found"}
@@ -132,20 +183,111 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     if not action:
         return {"status": "ignored", "reason": "event_not_mapped"}
 
+    # Extrair dados do cliente e transação
+    customer_data = _extract_customer_data(payload)
+    transaction_data = _extract_transaction_data(payload)
+    
+    # Buscar ou criar usuário
     user = db.query(User).filter(User.email.ilike(email)).first()
+    user_created = False
     if not user:
-        return {"status": "ignored", "reason": "user_not_found"}
+        # Criar usuário a partir dos dados do Cakto
+        logger.info(f"Criando novo usuário do Cakto: {email}")
+        auth_service = AuthService(UserRepository(db))
+        user = auth_service.register_from_cakto(
+            email=customer_data["email"],
+            name=customer_data["name"],
+            cpf_cnpj=customer_data["cpf_cnpj"]
+        )
+        user_created = True
+        logger.info(f"Usuário criado com ID: {user.id}")
 
+    # Atualizar subscription
     subscription_service = SubscriptionService(SubscriptionRepository(db))
+    
+    expires_at = None
+    if action == "activate":
+        # Definir expiração para 30 dias a partir de agora
+        expires_at = datetime.utcnow() + timedelta(days=30)
+    
     subscription = subscription_service.set_active(
         user_id=user.id,
         plan="marketdash" if action == "activate" else "free",
         is_active=(action == "activate"),
+        cakto_customer_id=customer_data.get("customer_id"),
+        cakto_transaction_id=transaction_data.get("transaction_id"),
+        expires_at=expires_at,
     )
+    
+    # Atualizar last_validation_at quando ativar
+    if action == "activate":
+        subscription.last_validation_at = datetime.utcnow()
+        db.commit()
+        db.refresh(subscription)
+
+    logger.info(f"Subscription atualizada para user {user.id}: active={subscription.is_active}")
 
     return {
         "status": "ok",
         "action": action,
         "user_id": user.id,
         "subscription_active": subscription.is_active,
+        "user_created": user_created,
     }
+
+
+@router.get("/plans", response_model=PlansResponse)
+def get_plans():
+    """
+    Retorna lista de todos os planos de assinatura disponíveis.
+    
+    Permite que o frontend exiba as opções de planos para o usuário escolher.
+    """
+    all_plans = settings.get_all_cakto_plans()
+    
+    plans_list = [
+        PlanInfo(
+            id=plan_id,
+            name=plan_data["name"],
+            checkout_url=plan_data["checkout_url"],
+            period=plan_data["period"]
+        )
+        for plan_id, plan_data in all_plans.items()
+    ]
+    
+    return PlansResponse(plans=plans_list)
+
+
+@router.get("/checkout-url")
+def get_checkout_url(
+    email: str = Query(..., description="Email do usuário"),
+    name: str = Query(None, description="Nome do usuário"),
+    cpf_cnpj: str = Query(None, description="CPF/CNPJ do usuário"),
+    plan: str = Query("principal", description="ID do plano (principal, trimestral, anual)"),
+):
+    """
+    Gera URL de checkout do Cakto com parâmetros pré-preenchidos.
+    
+    Args:
+        email: Email do usuário (obrigatório)
+        name: Nome do usuário (opcional)
+        cpf_cnpj: CPF/CNPJ do usuário (opcional)
+        plan: ID do plano desejado. Valores aceitos: "principal", "trimestral", "anual". Default: "principal"
+    
+    Returns:
+        URL de checkout do Cakto para o plano especificado
+    """
+    # Validar se o plano existe
+    if plan not in settings.CAKTO_PLANS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plano '{plan}' não encontrado. Planos disponíveis: {', '.join(settings.CAKTO_PLANS.keys())}"
+        )
+    
+    checkout_url = create_checkout_url(
+        email=email, 
+        name=name, 
+        cpf_cnpj=cpf_cnpj,
+        plan_id=plan
+    )
+    return {"checkout_url": checkout_url}

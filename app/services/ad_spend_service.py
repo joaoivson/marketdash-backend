@@ -69,8 +69,22 @@ class AdSpendService:
         return ad_spend
 
     def delete(self, user_id: int, ad_spend_id: int) -> None:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Tentando deletar ad_spend_id={ad_spend_id} para user_id={user_id}")
+        
+        # Sempre filtrar por user_id PRIMEIRO para garantir isolamento de dados
         ad_spend = self.repo.get_by_id(ad_spend_id, user_id)
         if not ad_spend:
+            logger.warning(f"Ad_spend {ad_spend_id} não encontrado para user_id={user_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro não encontrado")
+        
+        logger.info(f"Deletando ad_spend_id={ad_spend_id} do user_id={user_id}")
         self.repo.delete(ad_spend)
         # Cache removido - frontend gerencia via localStorage
+
+    def delete_all(self, user_id: int) -> dict:
+        """Deleta todos os ad_spends de um usuário e retorna a quantidade deletada."""
+        count = self.repo.delete_all_by_user(user_id)
+        # Cache removido - frontend gerencia via localStorage
+        return {"deleted": count}

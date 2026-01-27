@@ -1,4 +1,4 @@
-# DashAds Backend - SaaS de Análise de Dados
+# MarketDash Backend - SaaS de Análise de Dados
 
 Backend completo para um SaaS de análise de dados, focado em ingestão de CSV, armazenamento acumulativo, agregações analíticas e exposição de APIs para consumo por um frontend React.
 
@@ -110,12 +110,12 @@ backend/
 1. Clone o repositório:
 ```bash
 git clone <repository-url>
-cd dashads
+cd marketdash
 ```
 
 2. Crie um arquivo `.env` na raiz do projeto (opcional, valores padrão no docker-compose.yml):
 ```env
-DATABASE_URL=postgresql://dashads_user:dashads_password@db:5432/dashads_db
+DATABASE_URL=postgresql://marketdash_user:marketdash_password@db:5432/marketdash_db
 JWT_SECRET=your-secret-key-change-in-production-min-32-chars
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
@@ -139,7 +139,7 @@ pip install -r requirements.txt
 
 2. Configure as variáveis de ambiente:
 ```bash
-export DATABASE_URL=postgresql://user:password@localhost:5432/dashads_db
+export DATABASE_URL=postgresql://user:password@localhost:5432/marketdash_db
 export JWT_SECRET=your-secret-key-change-in-production-min-32-chars
 ```
 
@@ -460,6 +460,15 @@ alembic upgrade head
 | `JWT_SECRET` | Chave secreta para JWT | - |
 | `JWT_ALGORITHM` | Algoritmo JWT | HS256 |
 | `JWT_EXPIRATION_HOURS` | Horas de expiração do token | 24 |
+| `CAKTO_WEBHOOK_SECRET` | Chave secreta para validação de webhooks Cakto | - |
+| `CAKTO_SUBSCRIPTION_PRODUCT_IDS` | IDs dos produtos Cakto separados por vírgula | 8e9qxyg_742442,hi5cerw,6bpwn57 |
+| `SMTP_HOST` | Servidor SMTP para envio de emails | smtp.hostinger.com |
+| `SMTP_PORT` | Porta do servidor SMTP | 465 |
+| `SMTP_USER` | Usuário/email para autenticação SMTP | - |
+| `SMTP_PASSWORD` | Senha para autenticação SMTP | - |
+| `SMTP_FROM_EMAIL` | Email remetente dos emails enviados | - |
+| `SMTP_FROM_NAME` | Nome do remetente | MarketDash |
+| `FRONTEND_URL` | URL do frontend (para links nos emails) | https://marketdash.com.br |
 
 ## 🚀 Próximos Passos
 

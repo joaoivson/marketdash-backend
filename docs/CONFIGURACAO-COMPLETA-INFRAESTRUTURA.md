@@ -90,7 +90,7 @@
 # Conexão SSH
 ssh root@31.97.22.173
 # ou
-ssh dashads@31.97.22.173
+ssh marketdash@31.97.22.173
 ```
 
 ### Portas Abertas

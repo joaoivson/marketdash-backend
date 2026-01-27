@@ -5,8 +5,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
+from app.core.config import settings
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
+from app.repositories.subscription_repository import SubscriptionRepository
+from app.services.subscription_service import SubscriptionService
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
@@ -112,3 +116,48 @@ def get_current_user(
     logger.info(f"User IDs únicos no banco - dataset_rows: {all_row_user_ids}, ad_spends: {all_ad_spend_user_ids}")
     
     return user
+
+
+def require_active_subscription(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    Dependency que verifica se o usuário tem assinatura ativa.
+    Se passou mais de 30 dias desde a última validação, valida com Cakto.
+    Retorna 403 se assinatura não estiver ativa.
+    """
+    if not settings.CAKTO_ENFORCE_SUBSCRIPTION:
+        # Se não está habilitado, permite acesso
+        return current_user
+    
+    subscription_service = SubscriptionService(SubscriptionRepository(db))
+    
+    # Verificar se precisa validar (passou mais de 30 dias)
+    needs_validation = subscription_service.needs_validation(current_user.id)
+    
+    if needs_validation:
+        # Validar com Cakto
+        logger.info(f"Validando assinatura do usuário {current_user.id} (passou mais de 30 dias)")
+        is_active = subscription_service.check_and_update_subscription(
+            current_user.id, 
+            current_user.email
+        )
+        
+        if not is_active:
+            logger.warning(f"Usuário {current_user.id} não tem assinatura ativa")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Assinatura não está ativa. Por favor, renove sua assinatura.",
+            )
+    else:
+        # Usar cache (verificar is_active no banco)
+        subscription = subscription_service.repo.get_by_user_id(current_user.id)
+        if not subscription or not subscription.is_active:
+            logger.warning(f"Usuário {current_user.id} não tem assinatura ativa (cache)")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Assinatura não está ativa. Por favor, renove sua assinatura.",
+            )
+    
+    return current_user

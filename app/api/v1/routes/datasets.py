@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, require_active_subscription
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
@@ -24,7 +24,7 @@ class AdSpendPayload(BaseModel):
 @router.post("/upload", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
 async def upload_csv(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     file_content = await file.read()
@@ -35,7 +35,7 @@ async def upload_csv(
 @router.post("/latest/ad_spend", response_model=AdSpendResponse)
 def set_ad_spend(
     payload: AdSpendPayload,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
@@ -49,7 +49,7 @@ def list_latest_rows(
     include_raw_data: bool = Query(True, description="Incluir campo raw_data na resposta"),
     limit: int | None = Query(None, ge=1, description="Quantidade máxima de linhas (opcional)"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
@@ -63,7 +63,7 @@ def list_all_rows(
     include_raw_data: bool = Query(True, description="Incluir campo raw_data na resposta"),
     limit: int | None = Query(None, ge=1, description="Quantidade máxima de linhas (opcional)"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
@@ -72,11 +72,21 @@ def list_all_rows(
 
 @router.get("", response_model=List[DatasetResponse])
 def list_datasets(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
     return service.list_datasets(current_user.id)
+
+
+@router.delete("/all", status_code=status.HTTP_200_OK)
+def delete_all_datasets(
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    """Deleta todos os datasets do usuário autenticado."""
+    service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
+    return service.delete_all(current_user.id)
 
 
 @router.get("/{dataset_id}/rows", response_model=List[DatasetRowResponse])
@@ -84,47 +94,31 @@ def list_dataset_rows(
     dataset_id: int,
     start_date: date = Query(..., description="Data inicial (obrigatória)"),
     end_date: date = Query(..., description="Data final (obrigatória)"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    # Verificar se o dataset pertence ao usuário
-    dataset = service.get_dataset(dataset_id)
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem permissão para acessar este dataset"
-        )
-    return service.list_dataset_rows(dataset_id, start_date, end_date, True)
+    # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
+    return service.list_dataset_rows(dataset_id, current_user.id, start_date, end_date, True)
 
 
 @router.get("/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(
     dataset_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    dataset = service.get_dataset(dataset_id)
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem permissão para acessar este dataset"
-        )
-    return dataset
+    # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
+    return service.get_dataset(dataset_id, current_user.id)
 
 
 @router.post("/{dataset_id}/refresh", response_model=DatasetResponse)
 async def refresh_dataset(
     dataset_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    dataset = service.get_dataset(dataset_id)
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem permissão para acessar este dataset"
-        )
-    return dataset
+    # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
+    return service.get_dataset(dataset_id, current_user.id)

@@ -107,3 +107,106 @@ def check_active_subscription(email: str) -> Tuple[bool, Optional[str]]:
             return True, None
 
     return False, "Assinatura ativa não encontrada"
+
+
+def get_customer_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Busca informações do cliente na Cakto pelo email."""
+    try:
+        token = _get_token()
+        url = f"{settings.CAKTO_API_BASE}/public_api/orders/"
+        params = {"email": email}
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        if resp.status_code >= 400:
+            raise CaktoError(f"Cakto orders error: {resp.status_code}")
+
+        payload = resp.json() if resp.content else {}
+        orders = _extract_orders(payload)
+        
+        if orders:
+            # Retornar dados do primeiro pedido (cliente)
+            order = orders[0]
+            customer = order.get("customer") or {}
+            return {
+                "customer_id": customer.get("id") or order.get("customer_id"),
+                "email": email,
+                "name": customer.get("name") or customer.get("full_name"),
+                "cpf_cnpj": customer.get("docNumber") or customer.get("cpf_cnpj"),
+                "phone": customer.get("phone"),
+            }
+        return None
+    except Exception as e:
+        raise CaktoError(f"Error getting customer: {str(e)}")
+
+
+def get_subscription_status(customer_id: str) -> Dict[str, Any]:
+    """Verifica status da assinatura do cliente na Cakto."""
+    try:
+        token = _get_token()
+        url = f"{settings.CAKTO_API_BASE}/public_api/orders/"
+        params = {"customer_id": customer_id, "type": "subscription"}
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        if resp.status_code >= 400:
+            raise CaktoError(f"Cakto orders error: {resp.status_code}")
+
+        payload = resp.json() if resp.content else {}
+        orders = _extract_orders(payload)
+        allowed_ids = _parse_product_ids()
+
+        for order in orders:
+            if _is_subscription(order) and _matches_product(order, allowed_ids):
+                return {
+                    "is_active": _is_active(order),
+                    "status": order.get("status"),
+                    "subscription_status": order.get("subscription_status"),
+                    "payment_status": order.get("payment_status"),
+                    "transaction_id": order.get("id"),
+                    "expires_at": order.get("expires_at") or order.get("next_billing_date"),
+                }
+        
+        return {"is_active": False, "status": "not_found"}
+    except Exception as e:
+        raise CaktoError(f"Error getting subscription status: {str(e)}")
+
+
+def create_checkout_url(
+    email: str, 
+    name: str = None, 
+    cpf_cnpj: str = None,
+    plan_id: str = "principal"
+) -> str:
+    """
+    Gera URL de checkout do Cakto com parâmetros pré-preenchidos.
+    
+    Args:
+        email: Email do usuário
+        name: Nome do usuário (opcional)
+        cpf_cnpj: CPF/CNPJ do usuário (opcional)
+        plan_id: ID do plano ("principal", "trimestral", "anual"). Default: "principal"
+    
+    Returns:
+        URL de checkout do Cakto para o plano especificado
+    """
+    # Buscar informações do plano
+    plan = settings.get_cakto_plan(plan_id)
+    
+    # Se plano não existir, usar plano principal como fallback
+    if not plan:
+        plan = settings.get_cakto_plan("principal")
+        if not plan:
+            raise CaktoError(f"Plano '{plan_id}' não encontrado e plano principal não configurado")
+    
+    base_url = plan["checkout_url"]
+    params = []
+    
+    if email:
+        params.append(f"email={email}")
+    if name:
+        params.append(f"name={name}")
+    if cpf_cnpj:
+        params.append(f"cpf_cnpj={cpf_cnpj}")
+    
+    if params:
+        return f"{base_url}?{'&'.join(params)}"
+    return base_url

@@ -1,4 +1,4 @@
-# 🚀 Guia de Deploy - DashAds Backend
+# 🚀 Guia de Deploy - MarketDash Backend
 
 ## Deploy no Coolify
 

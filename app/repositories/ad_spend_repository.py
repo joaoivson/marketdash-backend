@@ -72,3 +72,10 @@ class AdSpendRepository:
     def delete(self, ad_spend: AdSpend) -> None:
         self.db.delete(ad_spend)
         self.db.commit()
+
+    def delete_all_by_user(self, user_id: int) -> int:
+        """Deleta todos os ad_spends de um usuário e retorna a quantidade deletada."""
+        count = self.db.query(AdSpend).filter(AdSpend.user_id == user_id).count()
+        self.db.query(AdSpend).filter(AdSpend.user_id == user_id).delete()
+        self.db.commit()
+        return count
