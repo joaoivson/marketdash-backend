@@ -1,4 +1,4 @@
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 
 from fastapi import HTTPException, status
 
@@ -83,7 +83,7 @@ class AuthService:
         token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
         
         # Definir expiração (24 horas)
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         
         # Criar hash temporário (será substituído quando usuário definir senha)
         # Usar token como senha temporária para garantir que não possa fazer login sem definir senha
@@ -135,7 +135,7 @@ class AuthService:
             )
         
         # Verificar se token não expirou
-        if user.password_set_token_expires_at and user.password_set_token_expires_at < datetime.utcnow():
+        if user.password_set_token_expires_at and user.password_set_token_expires_at < datetime.now(timezone.utc):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Token inválido ou expirado"
@@ -187,7 +187,7 @@ class AuthService:
         token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
         
         # Definir expiração (24 horas)
-        expires_at = datetime.utcnow() + timedelta(hours=24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
         
         # Atualizar token no usuário
         user.password_set_token = token

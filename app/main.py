@@ -9,7 +9,7 @@ from app.core.errors import register_exception_handlers
 from app.api.v1.routes import router as api_v1_router
 from app.db.base import init_db
 from app.db.session import SessionLocal
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 # Configure logging
@@ -84,7 +84,7 @@ def health_check():
     health_status = {
         "status": "healthy",
         "environment": settings.ENVIRONMENT,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         "database": "unknown",
         "redis": "not_configured"
     }
