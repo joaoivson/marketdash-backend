@@ -212,3 +212,54 @@ Equipe MarketDash
         except Exception as e:
             logger.error(f"Erro ao enviar email de reset de senha para {user_email}: {e}")
             return False
+    
+    def send_welcome_back_email(self, user_email: str, user_name: str) -> bool:
+        """Envia email de reativação/bem-vindo de volta para usuário existente."""
+        try:
+            # Gerar URL de login
+            login_url = f"{self.frontend_url}/login"
+            
+            # Carregar logo
+            logo_base64 = self._load_logo_base64()
+            
+            # Contexto para o template
+            context = {
+                "user_name": user_name or "Usuário",
+                "login_url": login_url,
+                "logo_base64": logo_base64,
+                "frontend_url": self.frontend_url,
+            }
+            
+            # Renderizar template
+            html_content = self._render_template("welcome_back.html", context)
+            
+            # Conteúdo texto alternativo
+            text_content = f"""
+Olá {user_name or 'Usuário'},
+
+Ótimas notícias! Sua assinatura do MarketDash foi reativada com sucesso!
+
+Você já pode acessar a plataforma usando suas credenciais:
+
+{login_url}
+
+Bem-vindo de volta! Estamos felizes em tê-lo novamente conosco.
+
+Atenciosamente,
+Equipe MarketDash
+"""
+            
+            # Enviar email
+            subject = "Bem-vindo de volta ao MarketDash - Assinatura Reativada"
+            success = self._send_email(
+                to=user_email,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content
+            )
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Erro ao enviar email de reativação para {user_email}: {e}")
+            return False
