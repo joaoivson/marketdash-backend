@@ -43,15 +43,15 @@ class Settings(BaseSettings):
             "period": "mensal"
         },
         "trimestral": {
-            "id": "hi5cerw",
+            "id": "3frhhks",
             "name": "MarketDash Trimestral",
-            "checkout_url": "https://pay.cakto.com.br/hi5cerw",
+            "checkout_url": "https://pay.cakto.com.br/3frhhks",
             "period": "trimestral"
         },
         "anual": {
-            "id": "6bpwn57",
+            "id": "ebrg3ir",
             "name": "MarketDash Anual",
-            "checkout_url": "https://pay.cakto.com.br/6bpwn57",
+            "checkout_url": "https://pay.cakto.com.br/ebrg3ir",
             "period": "anual"
         }
     }
