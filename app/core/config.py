@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     CAKTO_WEBHOOK_SECRET: Optional[str] = "476ebb07-50c3-47ab-8bc6-f0e39f9e965d"
     
     # Planos Cakto disponíveis
-    CAKTO_PLANS: Dict[str, Dict[str, str]] = {
+     CAKTO_PLANS: Dict[str, Dict[str, str]] = {
         "principal": {
             "id": "8e9qxyg_742442",
             "name": "Oferta Principal",
@@ -43,15 +43,15 @@ class Settings(BaseSettings):
             "period": "mensal"
         },
         "trimestral": {
-            "id": "hi5cerw",
+            "id": "3frhhks",
             "name": "MarketDash Trimestral",
-            "checkout_url": "https://pay.cakto.com.br/hi5cerw",
+            "checkout_url": "https://pay.cakto.com.br/3frhhks",
             "period": "trimestral"
         },
         "anual": {
-            "id": "6bpwn57",
+            "id": "ebrg3ir",
             "name": "MarketDash Anual",
-            "checkout_url": "https://pay.cakto.com.br/6bpwn57",
+            "checkout_url": "https://pay.cakto.com.br/ebrg3ir",
             "period": "anual"
         }
     }
