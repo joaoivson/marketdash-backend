@@ -1,21 +1,4 @@
 services:
-  db:
-    image: postgres:15-alpine
-    container_name: marketdash_db
-    environment:
-      POSTGRES_USER: marketdash_user
-      POSTGRES_PASSWORD: marketdash_password
-      POSTGRES_DB: marketdash_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U marketdash_user -d marketdash_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   app:
     build: .
     container_name: marketdash_app
@@ -30,8 +13,6 @@ services:
       JWT_SECRET: marketdash-secret-dev-32chars
       REDIS_URL: redis://redis:6379/0
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_started
 
@@ -42,6 +23,4 @@ services:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
 
-volumes:
-  postgres_data:
 
