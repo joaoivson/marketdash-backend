@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # IDs de produtos separados por vírgula (todos os planos aceitos)
     CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = "8e9qxyg_742442,hi5cerw,6bpwn57"
     CAKTO_ENFORCE_SUBSCRIPTION: bool = False
-    CAKTO_WEBHOOK_SECRET: Optional[str] = None
+    CAKTO_WEBHOOK_SECRET: Optional[str] = "476ebb07-50c3-47ab-8bc6-f0e39f9e965d"
     
     # Planos Cakto disponíveis
     CAKTO_PLANS: Dict[str, Dict[str, str]] = {
@@ -43,15 +43,15 @@ class Settings(BaseSettings):
             "period": "mensal"
         },
         "trimestral": {
-            "id": "3frhhks",
+            "id": "hi5cerw",
             "name": "MarketDash Trimestral",
-            "checkout_url": "https://pay.cakto.com.br/3frhhks",
+            "checkout_url": "https://pay.cakto.com.br/hi5cerw",
             "period": "trimestral"
         },
         "anual": {
-            "id": "ebrg3ir",
+            "id": "6bpwn57",
             "name": "MarketDash Anual",
-            "checkout_url": "https://pay.cakto.com.br/ebrg3ir",
+            "checkout_url": "https://pay.cakto.com.br/6bpwn57",
             "period": "anual"
         }
     }
