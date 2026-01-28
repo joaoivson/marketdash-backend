@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     CAKTO_WEBHOOK_SECRET: Optional[str] = "476ebb07-50c3-47ab-8bc6-f0e39f9e965d"
     
     # Planos Cakto disponíveis
-     CAKTO_PLANS: Dict[str, Dict[str, str]] = {
+    CAKTO_PLANS: Dict[str, Dict[str, str]] = {
         "principal": {
             "id": "8e9qxyg_742442",
             "name": "Oferta Principal",
