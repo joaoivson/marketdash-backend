@@ -16,6 +16,7 @@ ALIASES = {
     "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao"},
     "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido"},
     "product": {"product", "produto", "idpedido", "id_do_pedido", "id_dopedido", "id_pagamento", "idpagamento", "produto_nome", "product_name", "nome_do_item"},
+    "platform": {"platform", "plataforma", "canal", "channel", "origem", "origem_do_pedido"},
     "revenue": {
         "revenue", "receita", "valor", "valorvenda", "valor_receita", "valor_venda", "gross_value", "total",
         "valor_de_c", "valor_de_compra", "valor_de_compra_r", "valor_de_compra_rs", "valor_compra", "faturamento",
@@ -152,10 +153,11 @@ class CSVService:
                     out[target] = 0
                     errors.append(f"Coluna '{target}' ausente; preenchendo com 0.")
 
-            # Status, categoria, sub_id1
+            # Status, categoria, sub_id1, plataforma
             out["status"] = df[col_map["status"]].astype(str).str.strip() if "status" in col_map else None
             out["category"] = df[col_map["category"]].astype(str).str.strip() if "category" in col_map else None
             out["sub_id1"] = df[col_map["sub_id1"]].astype(str).str.strip() if "sub_id1" in col_map else None
+            out["platform"] = df[col_map["platform"]].astype(str).str.strip() if "platform" in col_map else None
 
             # Limpezas - converter date para datetime primeiro
             out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
