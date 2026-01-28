@@ -29,18 +29,7 @@ def init_db():
             # Test connection
             with engine.begin() as conn:
                 conn.execute(text("SELECT 1"))
-                # Ensure optional new columns exist (backward compatible)
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS name VARCHAR(255)"))
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS cpf_cnpj VARCHAR(32)"))
-                conn.execute(text("ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ"))
-                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS users_cpf_cnpj_key ON users (cpf_cnpj) WHERE cpf_cnpj IS NOT NULL"))
-                # Dataset rows new columns
-                conn.execute(text("ALTER TABLE IF EXISTS dataset_rows ADD COLUMN IF NOT EXISTS time TIME"))
-                conn.execute(text("ALTER TABLE IF EXISTS dataset_rows ADD COLUMN IF NOT EXISTS status VARCHAR(255)"))
-                conn.execute(text("ALTER TABLE IF EXISTS dataset_rows ADD COLUMN IF NOT EXISTS category VARCHAR(255)"))
-                conn.execute(text("ALTER TABLE IF EXISTS dataset_rows ADD COLUMN IF NOT EXISTS sub_id1 VARCHAR(255)"))
-                conn.execute(text("ALTER TABLE IF EXISTS dataset_rows ADD COLUMN IF NOT EXISTS mes_ano VARCHAR(20)"))
-                conn.execute(text("ALTER TABLE IF EXISTS dataset_rows ADD COLUMN IF NOT EXISTS raw_data JSONB"))
+                logger.info("Database connection successful")
             # If connection successful, create tables (no-op for existing)
             Base.metadata.create_all(bind=engine)
             logger.info("Database tables created/updated successfully")

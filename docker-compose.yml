@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     environment:
       # Senha contém '@', por isso está URL-encodada (%40). Ajustado para usar o Session Pooler (porta 6543).
-      DATABASE_URL: postgresql://postgres:K%40pilc%402804%40@db.rsejwvxealraianensoz.supabase.co:6543/postgres?sslmode=require
+      DATABASE_URL: postgresql://postgres:K%40pilc%402804%40@db.rsejwvxealraianensoz.supabase.co:5432/postgres?sslmode=require
       JWT_SECRET: marketdash-secret-dev-32chars
       REDIS_URL: redis://redis:6379/0
     depends_on:
