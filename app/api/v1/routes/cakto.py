@@ -94,6 +94,19 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _get_allowed_products() -> set[str]:
+    raw = settings.CAKTO_SUBSCRIPTION_PRODUCT_IDS or ""
+    if not raw:
+        return set()
+    normalized = raw.replace("[", "").replace("]", "")
+    allowed = set()
+    for piece in normalized.split(","):
+        cleaned = piece.strip().strip("'\"")
+        if cleaned:
+            allowed.add(cleaned)
+    return allowed
+
+
 def _extract_product_id(payload: Dict[str, Any]) -> Optional[str]:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
 
@@ -136,24 +149,34 @@ def _extract_product_id(payload: Dict[str, Any]) -> Optional[str]:
             seen.add(candidate)
             deduped.append(candidate)
 
-    raw = settings.CAKTO_SUBSCRIPTION_PRODUCT_IDS or ""
-    allowed = {item.strip() for item in raw.split(",") if item.strip()}
+    allowed = _get_allowed_products()
     if allowed:
         for candidate in deduped:
-            if candidate in allowed:
-                return candidate
+            for allowed_id in allowed:
+                if (
+                    candidate == allowed_id
+                    or candidate.startswith(allowed_id)
+                    or allowed_id.startswith(candidate)
+                ):
+                    return candidate
 
     return deduped[0] if deduped else None
 
 
 def _product_allowed(product_id: Optional[str]) -> bool:
-    raw = settings.CAKTO_SUBSCRIPTION_PRODUCT_IDS or ""
-    allowed = {item.strip() for item in raw.split(",") if item.strip()}
+    allowed = _get_allowed_products()
     if not allowed:
         return True
     if not product_id:
         return False
-    return product_id in allowed
+    for allowed_id in allowed:
+        if (
+            product_id == allowed_id
+            or product_id.startswith(allowed_id)
+            or allowed_id.startswith(product_id)
+        ):
+            return True
+    return False
 
 
 def _infer_action(payload: Dict[str, Any], event: str) -> Optional[str]:
