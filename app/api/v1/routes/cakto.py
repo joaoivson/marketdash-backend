@@ -76,7 +76,11 @@ def _extract_customer_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "email": customer.get("email") or data.get("email"),
         "name": customer.get("name") or customer.get("full_name") or data.get("name"),
-        "cpf_cnpj": customer.get("docNumber") or customer.get("cpf_cnpj") or data.get("cpf_cnpj"),
+        "cpf_cnpj": _sanitize_document(
+            customer.get("docNumber")
+            or customer.get("cpf_cnpj")
+            or data.get("cpf_cnpj")
+        ),
         "customer_id": customer.get("id") or data.get("customer_id"),
         "phone": customer.get("phone") or data.get("phone"),
     }
@@ -94,7 +98,14 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _get_allowed_products() -> set[str]:
+def _sanitize_document(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return digits or None
+
+
+def _get_allowed_products() -> Set[str]:
     raw = settings.CAKTO_SUBSCRIPTION_PRODUCT_IDS or ""
     if not raw:
         return set()
@@ -241,16 +252,24 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     # Extrair dados do cliente e transação
     customer_data = _extract_customer_data(payload)
     transaction_data = _extract_transaction_data(payload)
-    
+
     # Buscar ou criar usuário
-    user = db.query(User).filter(User.email.ilike(email)).first()
+    user_repo = UserRepository(db)
+    user = user_repo.get_by_email(email) if email else None
+    if not user:
+        doc_id = customer_data.get("cpf_cnpj")
+        user = user_repo.get_by_cpf(doc_id)
+        if user and email and user.email.strip().lower() != email:
+            user.email = email
+            db.commit()
+            db.refresh(user)
     user_created = False
     user_has_password = False
     
     if not user:
         # Criar usuário a partir dos dados do Cakto
         logger.info(f"Criando novo usuário do Cakto: {email}")
-        auth_service = AuthService(UserRepository(db))
+        auth_service = AuthService(user_repo)
         user = auth_service.register_from_cakto(
             email=customer_data["email"],
             name=customer_data["name"],

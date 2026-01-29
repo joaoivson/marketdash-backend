@@ -1,5 +1,6 @@
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.user import User
@@ -10,7 +11,20 @@ class UserRepository:
         self.db = db
 
     def get_by_email(self, email: str) -> Optional[User]:
-        return self.db.query(User).filter(User.email == email).first()
+        if not email:
+            return None
+        normalized = email.strip().lower()
+        return (
+            self.db.query(User)
+            .filter(func.lower(User.email) == normalized)
+            .first()
+        )
+
+    def get_by_cpf(self, cpf_cnpj: str) -> Optional[User]:
+        if not cpf_cnpj:
+            return None
+        normalized = cpf_cnpj.strip()
+        return self.db.query(User).filter(User.cpf_cnpj == normalized).first()
 
     def get_by_id(self, user_id: int) -> Optional[User]:
         return self.db.query(User).filter(User.id == user_id).first()
