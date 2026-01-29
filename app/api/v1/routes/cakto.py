@@ -96,22 +96,54 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _extract_product_id(payload: Dict[str, Any]) -> Optional[str]:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    candidates = []
-    for key in ("product_id", "offer_product_id"):
-        value = data.get(key)
-        if value is not None:
-            candidates.append(str(value))
+
+    def _add_candidate(value: Any, bucket: List[str]) -> None:
+        if value is None:
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        bucket.append(text)
+
+    candidates: List[str] = []
+    for key in ("product_id", "offer_product_id", "product_code"):
+        _add_candidate(data.get(key), candidates)
+
     product = data.get("product") or {}
-    if isinstance(product, dict) and product.get("id") is not None:
-        candidates.append(str(product.get("id")))
+    if isinstance(product, dict):
+        _add_candidate(product.get("id"), candidates)
+
     offer = data.get("offer") or {}
+    offer_id = None
     if isinstance(offer, dict):
-        if offer.get("product_id") is not None:
-            candidates.append(str(offer.get("product_id")))
+        offer_id = offer.get("id")
+        _add_candidate(offer_id, candidates)
+        _add_candidate(offer.get("product_id"), candidates)
         offer_product = offer.get("product") or {}
-        if isinstance(offer_product, dict) and offer_product.get("id") is not None:
-            candidates.append(str(offer_product.get("id")))
-    return candidates[0] if candidates else None
+        if isinstance(offer_product, dict):
+            _add_candidate(offer_product.get("id"), candidates)
+
+    checkout = data.get("checkout") or data.get("checkout_id")
+    if offer_id and checkout:
+        _add_candidate(f"{offer_id}_{checkout}", candidates)
+    if isinstance(product, dict) and product.get("id") and checkout:
+        _add_candidate(f"{product.get('id')}_{checkout}", candidates)
+
+    seen = set()
+    deduped: List[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            deduped.append(candidate)
+
+    raw = settings.CAKTO_SUBSCRIPTION_PRODUCT_IDS or ""
+    allowed = {item.strip() for item in raw.split(",") if item.strip()}
+    if allowed:
+        for candidate in deduped:
+            if candidate in allowed:
+                return candidate
+
+    return deduped[0] if deduped else None
 
 
 def _product_allowed(product_id: Optional[str]) -> bool:
