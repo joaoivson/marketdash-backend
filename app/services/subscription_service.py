@@ -72,9 +72,13 @@ class SubscriptionService:
         else:
             normalized_payment_method = cakto_payment_method
 
-        is_active_value = is_active
-        if normalized_status is not None:
-            is_active_value = normalized_status == "active"
+        if normalized_due_date is not None and normalized_due_date.tzinfo is None:
+            normalized_due_date = normalized_due_date.replace(tzinfo=timezone.utc)
+
+        now_utc = datetime.now(timezone.utc)
+        is_active_value = False
+        if normalized_due_date is not None:
+            is_active_value = normalized_due_date >= now_utc
 
         subscription = self.repo.upsert(
             user_id=user_id, 
@@ -120,10 +124,15 @@ class SubscriptionService:
                 )
             
             # Atualizar status e data de validação
-            if subscription.cakto_status:
-                subscription.is_active = subscription.cakto_status.strip().lower() == "active"
+            now_utc = datetime.now(timezone.utc)
+            due_date = subscription.cakto_due_date
+            if due_date and due_date.tzinfo is None:
+                due_date = due_date.replace(tzinfo=timezone.utc)
+
+            if due_date and due_date >= now_utc:
+                subscription.is_active = True
             else:
-                subscription.is_active = has_access
+                subscription.is_active = False
             subscription.last_validation_at = datetime.now(timezone.utc)
             
             if subscription.cakto_offer_name:
