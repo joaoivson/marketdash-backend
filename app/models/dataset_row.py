@@ -23,6 +23,7 @@ class DatasetRow(Base):
     category = Column(String, nullable=True, index=True)  # Categoria Global L1
     sub_id1 = Column(String, nullable=True, index=True)
     mes_ano = Column(String, nullable=True, index=True)  # formato YYYY-MM
+    row_hash = Column(String(32), nullable=True, index=True)  # Hash MD5 para deduplicação
     raw_data = Column(JSON, nullable=True)  # dados completos da linha
     
     # Métricas financeiras (campos originais para compatibilidade)

@@ -1,5 +1,6 @@
 import datetime
 import math
+import hashlib
 from decimal import Decimal
 from typing import List, Optional
 
@@ -20,6 +21,27 @@ class DatasetService:
         self.dataset_repo = dataset_repo
         self.row_repo = row_repo
 
+    @staticmethod
+    def _generate_row_hash(row_data: dict) -> str:
+        """
+        Gera um hash MD5 determinístico para uma linha do dataset baseando-se em campos chave.
+        Isso permite identificar duplicatas mesmo em uploads diferentes.
+        """
+        # Campos que definem a unicidade de uma transação
+        components = [
+            str(row_data.get("date") or ""),
+            str(row_data.get("time") or ""),
+            str(row_data.get("product") or ""),
+            str(row_data.get("revenue") or "0"),
+            str(row_data.get("commission") or "0"),
+            str(row_data.get("platform") or ""),
+            str(row_data.get("status") or ""),
+            str(row_data.get("sub_id1") or ""),
+        ]
+        # Juntar com um separador e gerar hash
+        row_str = "|".join(components)
+        return hashlib.md5(row_str.encode()).hexdigest()
+
     def upload_csv(self, file_content: bytes, filename: str, user_id: int) -> Dataset:
         if not filename.endswith(".csv"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
@@ -34,6 +56,18 @@ class DatasetService:
         dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename))
 
         rows_data = CSVService.dataframe_to_dict_list(df)
+        
+        # Identificar intervalo de datas para buscar hashes existentes (otimização)
+        all_dates = df['date'].unique()
+        min_csv_date = min(all_dates) if len(all_dates) > 0 else None
+        
+        # Buscar hashes existentes no banco para este usuário
+        # Limitamos a busca a partir da data mínima presente no CSV (ou 90 dias atrás por segurança)
+        if min_csv_date:
+            lookback_date = min_csv_date - datetime.timedelta(days=7) # Pequena margem de segurança
+            existing_hashes = self.row_repo.get_existing_hashes(user_id, min_date=lookback_date)
+        else:
+            existing_hashes = set()
 
         def _sanitize(value):
             if value is None:
@@ -95,6 +129,16 @@ class DatasetService:
                 text = str(value).strip()
                 return text or None
 
+            # Gerar hash para a linha atual
+            row_hash = self._generate_row_hash(row_data)
+            
+            # Pular se já existir no banco (deduplicação)
+            if row_hash in existing_hashes:
+                continue
+                
+            # Adicionar ao set de hashes existentes para evitar duplicatas dentro do próprio CSV
+            existing_hashes.add(row_hash)
+
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
@@ -116,9 +160,17 @@ class DatasetService:
                     commission_value=safe_numeric(row_data.get("commission_value")),
                     net_value=safe_numeric(row_data.get("net_value")),
                     quantity=safe_int(row_data.get("quantity"), 1),  # Default 1 se não existir
+                    row_hash=row_hash,
                     raw_data=raw_data_json,
                 )
             )
+
+        # Se todas as linhas foram filtradas como duplicadas
+        if not dataset_rows and len(rows_data) > 0:
+            # Poderíamos deletar o dataset vazio ou apenas informar
+            # Por enquanto, vamos manter o dataset mas ele não terá linhas
+            logger.info(f"Todas as {len(rows_data)} linhas do arquivo {filename} são duplicadas e foram ignoradas.")
+            # Opcional: raise HTTPException(status_code=400, detail="Todas as linhas do arquivo já existem no banco de dados.")
 
         # bulk_create faz commit, então o dataset também será commitado
         self.row_repo.bulk_create(dataset_rows)

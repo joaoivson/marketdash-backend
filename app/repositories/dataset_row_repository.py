@@ -44,6 +44,7 @@ class DatasetRowRepository:
                 'commission_value': row.commission_value,
                 'net_value': row.net_value,
                 'quantity': row.quantity,
+                'row_hash': row.row_hash,
             }
             mappings.append(mapping)
         
@@ -107,3 +108,15 @@ class DatasetRowRepository:
         results = query.all()
         logger.info(f"Registros retornados após filtros: {len(results)}")
         return results
+
+    def get_existing_hashes(self, user_id: int, min_date: Optional[date] = None) -> set:
+        """Retorna um conjunto de hashes existentes para um usuário."""
+        query = self.db.query(DatasetRow.row_hash).filter(
+            DatasetRow.user_id == user_id,
+            DatasetRow.row_hash.isnot(None)
+        )
+        if min_date:
+            query = query.filter(DatasetRow.date >= min_date)
+        
+        hashes = {r[0] for r in query.all()}
+        return hashes
