@@ -19,16 +19,80 @@ class SubscriptionService:
         is_active: bool,
         cakto_customer_id: Optional[str] = None,
         cakto_transaction_id: Optional[str] = None,
-        expires_at: Optional[datetime] = None
+        expires_at: Optional[datetime] = None,
+        cakto_status: Optional[str] = None,
+        cakto_offer_name: Optional[str] = None,
+        cakto_due_date: Optional[datetime] = None,
+        cakto_subscription_status: Optional[str] = None,
+        cakto_payment_status: Optional[str] = None,
+        cakto_payment_method: Optional[str] = None,
     ):
         """Atualiza ou cria subscription com dados do Cakto."""
+        normalized_offer_name = None
+        if isinstance(cakto_offer_name, str):
+            stripped_offer = cakto_offer_name.strip()
+            normalized_offer_name = stripped_offer or None
+        
+        normalized_plan = None
+        if isinstance(plan, str):
+            stripped_plan = plan.strip()
+            normalized_plan = stripped_plan or None
+        
+        plan_value = normalized_offer_name or normalized_plan or "free"
+
+        normalized_due_date = cakto_due_date  # Due date pode ser None e deve refletir diretamente em expires_at
+
+        normalized_status = None
+        if isinstance(cakto_status, str):
+            stripped_status = cakto_status.strip()
+            if stripped_status:
+                normalized_status = stripped_status.lower()
+                cakto_status = stripped_status
+            else:
+                cakto_status = None
+        
+        normalized_subscription_status = None
+        if isinstance(cakto_subscription_status, str):
+            stripped_sub_status = cakto_subscription_status.strip()
+            normalized_subscription_status = stripped_sub_status or None
+        else:
+            normalized_subscription_status = cakto_subscription_status
+
+        normalized_payment_status = None
+        if isinstance(cakto_payment_status, str):
+            stripped_payment_status = cakto_payment_status.strip()
+            normalized_payment_status = stripped_payment_status or None
+        else:
+            normalized_payment_status = cakto_payment_status
+
+        normalized_payment_method = None
+        if isinstance(cakto_payment_method, str):
+            stripped_payment_method = cakto_payment_method.strip()
+            normalized_payment_method = stripped_payment_method or None
+        else:
+            normalized_payment_method = cakto_payment_method
+
+        if normalized_due_date is not None and normalized_due_date.tzinfo is None:
+            normalized_due_date = normalized_due_date.replace(tzinfo=timezone.utc)
+
+        now_utc = datetime.now(timezone.utc)
+        is_active_value = False
+        if normalized_due_date is not None:
+            is_active_value = normalized_due_date >= now_utc
+
         subscription = self.repo.upsert(
             user_id=user_id, 
-            plan=plan, 
-            is_active=is_active,
+            plan=plan_value, 
+            is_active=is_active_value,
             cakto_customer_id=cakto_customer_id,
             cakto_transaction_id=cakto_transaction_id,
-            expires_at=expires_at
+            expires_at=normalized_due_date,
+            cakto_status=cakto_status,
+            cakto_offer_name=normalized_offer_name,
+            cakto_due_date=normalized_due_date,
+            cakto_subscription_status=normalized_subscription_status,
+            cakto_payment_status=normalized_payment_status,
+            cakto_payment_method=normalized_payment_method,
         )
         return subscription
 
@@ -60,16 +124,28 @@ class SubscriptionService:
                 )
             
             # Atualizar status e data de validação
-            subscription.is_active = has_access
+            now_utc = datetime.now(timezone.utc)
+            due_date = subscription.cakto_due_date
+            if due_date and due_date.tzinfo is None:
+                due_date = due_date.replace(tzinfo=timezone.utc)
+
+            if due_date and due_date >= now_utc:
+                subscription.is_active = True
+            else:
+                subscription.is_active = False
             subscription.last_validation_at = datetime.now(timezone.utc)
             
-            if has_access:
-                subscription.plan = "marketdash"
-                # Se não tem expires_at, definir para 30 dias a partir de agora
-                if not subscription.expires_at:
-                    subscription.expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+            if subscription.cakto_offer_name:
+                subscription.plan = subscription.cakto_offer_name
+            elif subscription.plan:
+                subscription.plan = subscription.plan
             else:
                 subscription.plan = "free"
+
+            if subscription.cakto_due_date:
+                subscription.expires_at = subscription.cakto_due_date
+            elif not subscription.is_active:
+                subscription.expires_at = None
             
             # Fazer commit das alterações
             self.repo.db.commit()
@@ -106,6 +182,12 @@ class SubscriptionService:
             "last_validation_at": subscription.last_validation_at.isoformat() if subscription.last_validation_at else None,
             "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
             "cakto_customer_id": subscription.cakto_customer_id,
+            "cakto_status": subscription.cakto_status,
+            "cakto_offer_name": subscription.cakto_offer_name,
+            "cakto_due_date": subscription.cakto_due_date.isoformat() if subscription.cakto_due_date else None,
+            "cakto_subscription_status": subscription.cakto_subscription_status,
+            "cakto_payment_status": subscription.cakto_payment_status,
+            "cakto_payment_method": subscription.cakto_payment_method,
         }
     
     def cancel_subscription(self, user_id: int) -> bool:

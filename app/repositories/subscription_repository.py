@@ -19,7 +19,13 @@ class SubscriptionRepository:
         is_active: bool,
         cakto_customer_id: str = None,
         cakto_transaction_id: str = None,
-        expires_at = None
+        expires_at = None,
+        cakto_status: str = None,
+        cakto_offer_name: str = None,
+        cakto_due_date = None,
+        cakto_subscription_status: str = None,
+        cakto_payment_status: str = None,
+        cakto_payment_method: str = None,
     ) -> Subscription:
         subscription = self.get_by_user_id(user_id)
         if not subscription:
@@ -29,7 +35,13 @@ class SubscriptionRepository:
                 is_active=is_active,
                 cakto_customer_id=cakto_customer_id,
                 cakto_transaction_id=cakto_transaction_id,
-                expires_at=expires_at
+                expires_at=expires_at,
+                cakto_status=cakto_status,
+                cakto_offer_name=cakto_offer_name,
+                cakto_due_date=cakto_due_date,
+                cakto_subscription_status=cakto_subscription_status,
+                cakto_payment_status=cakto_payment_status,
+                cakto_payment_method=cakto_payment_method,
             )
             self.db.add(subscription)
         else:
@@ -41,6 +53,18 @@ class SubscriptionRepository:
                 subscription.cakto_transaction_id = cakto_transaction_id
             if expires_at is not None:
                 subscription.expires_at = expires_at
+            if cakto_status is not None:
+                subscription.cakto_status = cakto_status
+            if cakto_offer_name is not None:
+                subscription.cakto_offer_name = cakto_offer_name
+            if cakto_due_date is not None:
+                subscription.cakto_due_date = cakto_due_date
+            if cakto_subscription_status is not None:
+                subscription.cakto_subscription_status = cakto_subscription_status
+            if cakto_payment_status is not None:
+                subscription.cakto_payment_status = cakto_payment_status
+            if cakto_payment_method is not None:
+                subscription.cakto_payment_method = cakto_payment_method
         self.db.commit()
         self.db.refresh(subscription)
         return subscription
