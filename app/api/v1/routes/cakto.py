@@ -86,15 +86,62 @@ def _extract_customer_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        parsed_input = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        try:
+            return datetime.fromisoformat(parsed_input)
+        except ValueError:
+            # Tentar substituir espaço por 'T' em alguns formatos
+            try:
+                return datetime.fromisoformat(parsed_input.replace(" ", "T"))
+            except ValueError:
+                logger.warning(f"Não foi possível converter data Cakto: {text}")
+                return None
+    return None
+
+
 def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extrai dados da transação do payload do webhook."""
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    
+
+    offer = data.get("offer") if isinstance(data.get("offer"), dict) else {}
+    product = data.get("product") if isinstance(data.get("product"), dict) else {}
+    subscription = data.get("subscription") if isinstance(data.get("subscription"), dict) else {}
+
+    due_date_raw = (
+        data.get("due_date")
+        or subscription.get("next_payment_date")
+        or subscription.get("due_date")
+    )
+
+    offer_name = None
+    if isinstance(offer, dict):
+        offer_name = offer.get("name")
+    if not offer_name and isinstance(product, dict):
+        offer_name = product.get("name")
+
+    status = data.get("status")
+    subscription_status = subscription.get("status") if isinstance(subscription, dict) else None
+    payment_status = data.get("payment_status") or subscription.get("payment_status") if isinstance(subscription, dict) else None
+
     return {
         "transaction_id": data.get("id") or data.get("transaction_id"),
         "amount": data.get("amount"),
-        "status": data.get("status"),
+        "status": status,
+        "subscription_status": subscription_status,
+        "payment_status": payment_status,
         "payment_method": data.get("paymentMethod") or data.get("payment_method"),
+        "due_date": _parse_datetime(due_date_raw),
+        "due_date_present": due_date_raw is not None,
+        "offer_name": offer_name,
     }
 
 
@@ -298,6 +345,14 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
         cakto_customer_id=customer_data.get("customer_id"),
         cakto_transaction_id=transaction_data.get("transaction_id"),
         expires_at=expires_at,
+        cakto_status=transaction_data.get("subscription_status")
+        or transaction_data.get("status")
+        or transaction_data.get("payment_status"),
+        cakto_offer_name=transaction_data.get("offer_name"),
+        cakto_due_date=transaction_data.get("due_date"),
+        cakto_subscription_status=transaction_data.get("subscription_status"),
+        cakto_payment_status=transaction_data.get("payment_status"),
+        cakto_payment_method=transaction_data.get("payment_method"),
     )
     
     # Atualizar last_validation_at quando ativar

@@ -15,6 +15,12 @@ class Subscription(Base):
     cakto_customer_id = Column(String(255), nullable=True, index=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     cakto_transaction_id = Column(String(255), nullable=True)
+    cakto_status = Column(String(64), nullable=True)
+    cakto_offer_name = Column(String(255), nullable=True)
+    cakto_due_date = Column(DateTime(timezone=True), nullable=True)
+    cakto_subscription_status = Column(String(64), nullable=True)
+    cakto_payment_status = Column(String(64), nullable=True)
+    cakto_payment_method = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
