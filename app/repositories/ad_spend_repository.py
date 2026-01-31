@@ -47,7 +47,7 @@ class AdSpendRepository:
         
         query = (
             self.db.query(AdSpend)
-            .options(load_only(AdSpend.id, AdSpend.date, AdSpend.amount, AdSpend.sub_id))
+            .options(load_only(AdSpend.id, AdSpend.date, AdSpend.amount, AdSpend.sub_id, AdSpend.clicks))
             .filter(AdSpend.user_id == user_id)
         )
         if start_date:

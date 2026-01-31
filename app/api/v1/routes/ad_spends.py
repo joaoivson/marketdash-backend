@@ -23,12 +23,14 @@ class AdSpendCreate(BaseModel):
     date: date
     amount: float = Field(..., gt=0)
     sub_id: Optional[str] = None
+    clicks: Optional[int] = 0
 
 
 class AdSpendUpdate(BaseModel):
     date: Optional[date] = None
     amount: Optional[float] = Field(None, gt=0)
     sub_id: Optional[str] = None
+    clicks: Optional[int] = None
 
 
 class AdSpendResponse(BaseModel):
@@ -36,6 +38,7 @@ class AdSpendResponse(BaseModel):
     date: date
     amount: float
     sub_id: Optional[str]
+    clicks: Optional[int] = 0
 
     class Config:
         from_attributes = True
@@ -52,7 +55,7 @@ def create_ad_spend(
     db: Session = Depends(get_db),
 ):
     service = AdSpendService(AdSpendRepository(db))
-    return service.create(current_user.id, payload.date, payload.amount, payload.sub_id)
+    return service.create(current_user.id, payload.date, payload.amount, payload.sub_id, payload.clicks)
 
 
 @router.post("/bulk", response_model=List[AdSpendResponse], status_code=status.HTTP_201_CREATED)
@@ -127,17 +130,18 @@ def download_template(
         ws.title = "Modelo"
         
         # Adicionar cabeçalhos
-        ws.append(["Data", "SubId", "ValorGasto"])
+        ws.append(["Data", "SubId", "ValorGasto", "Cliques"])
         
         # Adicionar dados de exemplo
         today = datetime.now().strftime("%Y-%m-%d")
-        ws.append([today, "ASPRADOR02", "120,50"])
-        ws.append([today, "", "300,00"])
+        ws.append([today, "ASPRADOR02", "120,50", "100"])
+        ws.append([today, "", "300,00", "0"])
         
         # Ajustar largura das colunas
         ws.column_dimensions['A'].width = 12  # Data
         ws.column_dimensions['B'].width = 15  # SubId
         ws.column_dimensions['C'].width = 12  # ValorGasto
+        ws.column_dimensions['D'].width = 10  # Cliques
         
         # Salvar em buffer
         buffer = io.BytesIO()
