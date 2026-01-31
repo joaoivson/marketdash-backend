@@ -14,6 +14,7 @@ class DatasetCreate(DatasetBase):
 class DatasetResponse(DatasetBase):
     id: int
     user_id: int
+    type: str
     uploaded_at: datetime
 
     class Config:

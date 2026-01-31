@@ -1,4 +1,5 @@
 import datetime
+import logging
 import math
 import hashlib
 from decimal import Decimal
@@ -14,6 +15,8 @@ from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.services.csv_service import CSVService
 from app.utils.serialization import normalize_raw_data, serialize_value, clean_number
 # Cache removido - agora é gerenciado pelo frontend via localStorage
+
+logger = logging.getLogger(__name__)
 
 
 class DatasetService:
