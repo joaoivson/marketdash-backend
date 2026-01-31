@@ -22,12 +22,10 @@ class ClickRowRepository:
                 'dataset_id': row.dataset_id,
                 'user_id': row.user_id,
                 'date': row.date,
-                'time': row.time,
                 'channel': row.channel,
                 'sub_id': row.sub_id,
                 'clicks': row.clicks,
                 'row_hash': row.row_hash,
-                'raw_data': row.raw_data,
             }
             mappings.append(mapping)
         

@@ -22,19 +22,17 @@ class ClickService:
 
     @staticmethod
     def _generate_click_hash(row_data: dict) -> str:
-        """Gera hash para deduplicação de cliques."""
+        """Gera hash determinístico para deduplicação (Data + Canal + Sub ID)."""
         components = [
             str(row_data.get("date") or ""),
-            str(row_data.get("time") or ""),
-            str(row_data.get("channel") or ""),
-            str(row_data.get("clicks") or "0"),
-            str(row_data.get("sub_id") or ""),
+            str(row_data.get("channel") or "Desconhecido").strip().lower(),
+            str(row_data.get("sub_id") or "nan").strip().lower(),
         ]
         row_str = "|".join(components)
         return hashlib.md5(row_str.encode()).hexdigest()
 
     def upload_click_csv(self, file_content: bytes, filename: str, user_id: int) -> Dataset:
-        """Processa upload de CSV de cliques."""
+        """Processa upload de CSV de cliques com agrupamento por dia/canal/subid."""
         if not filename.endswith(".csv"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
@@ -45,53 +43,54 @@ class ClickService:
                 detail=f"Erro ao processar CSV de cliques: {'; '.join(errors)}",
             )
 
-        # Criar registro de dataset do tipo 'click'
+        # 1. Agrupamento (Groupby)
+        # Garantir que sub_id nulo seja tratado uniformemente para o groupby
+        df['sub_id'] = df['sub_id'].fillna('nan')
+        
+        # Agrupar por data, canal e subid, somando os cliques
+        df_grouped = df.groupby(['date', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
+
+        # Criar registro de dataset
         dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename, type="click"))
 
-        rows_data = CSVService.dataframe_to_dict_list(df)
-        
-        # Otimização de busca de hashes
-        all_dates = df['date'].unique()
-        min_csv_date = min(all_dates) if len(all_dates) > 0 else None
-        
-        if min_csv_date:
-            lookback_date = min_csv_date - datetime.timedelta(days=7)
-            existing_hashes = self.click_repo.get_existing_hashes(user_id, min_date=lookback_date)
-        else:
-            existing_hashes = set()
+        # 2. Deduplicação e Inserção
+        # Buscar hashes existentes (nos últimos 90 dias por performance)
+        lookback_date = datetime.date.today() - datetime.timedelta(days=90)
+        existing_hashes = self.click_repo.get_existing_hashes(user_id, min_date=lookback_date)
 
         click_rows = []
+        rows_data = df_grouped.to_dict('records')
+        
         for row_data in rows_data:
+            # Normalizar sub_id para salvar no banco
+            sub_id = None if row_data["sub_id"] == 'nan' else row_data["sub_id"]
+            row_data["sub_id"] = sub_id
+            
             row_hash = self._generate_click_hash(row_data)
             
             if row_hash in existing_hashes:
+                # Se já existe o registro para este dia/canal/subid, poderíamos somar, 
+                # mas conforme solicitado vamos apenas ignorar duplicatas.
                 continue
                 
             existing_hashes.add(row_hash)
-
-            raw_data = row_data.get("raw_data")
-            raw_data_json = normalize_raw_data(raw_data) if raw_data is not None else None
 
             click_rows.append(
                 ClickRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=row_data["date"],
-                    time=row_data.get("time"),
-                    channel=row_data.get("channel") or "Desconhecido",
-                    sub_id=row_data.get("sub_id"),
-                    clicks=int(row_data.get("clicks", 0)),
+                    channel=row_data["channel"],
+                    sub_id=sub_id,
+                    clicks=int(row_data["clicks"]),
                     row_hash=row_hash,
-                    raw_data=raw_data_json,
                 )
             )
 
-        if not click_rows and len(rows_data) > 0:
-            logger.info(f"Todos os cliques do arquivo {filename} são duplicados.")
-
-        self.click_repo.bulk_create(click_rows)
-        self.dataset_repo.db.refresh(dataset)
+        if click_rows:
+            self.click_repo.bulk_create(click_rows)
         
+        self.dataset_repo.db.refresh(dataset)
         return dataset
 
     def list_latest_clicks(
@@ -144,9 +143,7 @@ class ClickService:
             "dataset_id": row.dataset_id,
             "user_id": row.user_id,
             "date": row.date,
-            "time": row.time.isoformat() if row.time else None,
             "channel": row.channel,
             "clicks": row.clicks,
             "sub_id": row.sub_id,
-            "raw_data": row.raw_data,
         }

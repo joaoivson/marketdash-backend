@@ -5,11 +5,9 @@ from typing import Optional, Any
 
 class ClickRowBase(BaseModel):
     date: date
-    time: Optional[str] = None
     channel: str
     sub_id: Optional[str] = None
     clicks: int
-    raw_data: Optional[Any] = None
 
 
 class ClickRowResponse(ClickRowBase):
