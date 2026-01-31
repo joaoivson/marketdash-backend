@@ -10,6 +10,7 @@ class AdSpend(Base):
     date = Column(Date, nullable=False, index=True)
     sub_id = Column(String, nullable=True, index=True)  # ex: dispenser01
     amount = Column(Float, nullable=False)
+    clicks = Column(Integer, nullable=True, default=0)
 
     # Relationships
     user = relationship("User", back_populates="ad_spends")

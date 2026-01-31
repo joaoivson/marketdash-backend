@@ -1,8 +1,9 @@
 from typing import Any, Dict, Optional, Set, List
 from datetime import datetime, timedelta, timezone
 import logging
-
+import traceback
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -110,39 +111,53 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
 
 def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Extrai dados da transação do payload do webhook."""
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    try:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
 
-    offer = data.get("offer") if isinstance(data.get("offer"), dict) else {}
-    product = data.get("product") if isinstance(data.get("product"), dict) else {}
-    subscription = data.get("subscription") if isinstance(data.get("subscription"), dict) else {}
+        offer = data.get("offer") if isinstance(data.get("offer"), dict) else {}
+        product = data.get("product") if isinstance(data.get("product"), dict) else {}
+        subscription = data.get("subscription") if isinstance(data.get("subscription"), dict) else {}
 
-    due_date_raw = (
-        data.get("due_date")
-        or subscription.get("next_payment_date")
-        or subscription.get("due_date")
-    )
+        due_date_raw = (
+            data.get("due_date")
+            or subscription.get("next_payment_date")
+            or subscription.get("due_date")
+        )
 
-    offer_name = None
-    if isinstance(offer, dict):
-        offer_name = offer.get("name")
-    if not offer_name and isinstance(product, dict):
-        offer_name = product.get("name")
+        offer_name = None
+        if isinstance(offer, dict):
+            offer_name = offer.get("name")
+        if not offer_name and isinstance(product, dict):
+            offer_name = product.get("name")
 
-    status = data.get("status")
-    subscription_status = subscription.get("status") if isinstance(subscription, dict) else None
-    payment_status = data.get("payment_status") or subscription.get("payment_status") if isinstance(subscription, dict) else None
+        status = data.get("status")
+        subscription_status = subscription.get("status") if isinstance(subscription, dict) else None
+        payment_status = data.get("payment_status") or subscription.get("payment_status") if isinstance(subscription, dict) else None
 
-    return {
-        "transaction_id": data.get("id") or data.get("transaction_id"),
-        "amount": data.get("amount"),
-        "status": status,
-        "subscription_status": subscription_status,
-        "payment_status": payment_status,
-        "payment_method": data.get("paymentMethod") or data.get("payment_method"),
-        "due_date": _parse_datetime(due_date_raw),
-        "due_date_present": due_date_raw is not None,
-        "offer_name": offer_name,
-    }
+        return {
+            "transaction_id": data.get("id") or data.get("transaction_id"),
+            "amount": data.get("amount"),
+            "status": status,
+            "subscription_status": subscription_status,
+            "payment_status": payment_status,
+            "payment_method": data.get("paymentMethod") or data.get("payment_method"),
+            "due_date": _parse_datetime(due_date_raw),
+            "due_date_present": due_date_raw is not None,
+            "offer_name": offer_name,
+        }
+    except Exception as e:
+        logger.error(f"Erro ao extrair transaction_data: {str(e)}")
+        return {
+            "transaction_id": None,
+            "amount": 0,
+            "status": None,
+            "subscription_status": None,
+            "payment_status": None,
+            "payment_method": None,
+            "due_date": None,
+            "due_date_present": False,
+            "offer_name": None,
+        }
 
 
 def _sanitize_document(value: Any) -> Optional[str]:
@@ -211,12 +226,14 @@ def _extract_product_id(payload: Dict[str, Any]) -> Optional[str]:
     if allowed:
         for candidate in deduped:
             for allowed_id in allowed:
+                # Se houver match exato ou parcial (um contendo o outro)
                 if (
                     candidate == allowed_id
-                    or candidate.startswith(allowed_id)
-                    or allowed_id.startswith(candidate)
+                    or (len(candidate) >= 5 and allowed_id.startswith(candidate))
+                    or (len(allowed_id) >= 5 and candidate.startswith(allowed_id))
                 ):
-                    return candidate
+                    logger.info(f"Produto identificado: {allowed_id} (match com {candidate})")
+                    return allowed_id
 
     return deduped[0] if deduped else None
 
@@ -227,11 +244,12 @@ def _product_allowed(product_id: Optional[str]) -> bool:
         return True
     if not product_id:
         return False
+        
     for allowed_id in allowed:
         if (
             product_id == allowed_id
-            or product_id.startswith(allowed_id)
-            or allowed_id.startswith(product_id)
+            or (len(product_id) >= 5 and allowed_id.startswith(product_id))
+            or (len(allowed_id) >= 5 and product_id.startswith(allowed_id))
         ):
             return True
     return False
@@ -259,169 +277,180 @@ def _infer_action(payload: Dict[str, Any], event: str) -> Optional[str]:
 @router.post("/webhook")
 async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
     """Webhook do Cakto para processar eventos de assinatura."""
-    logger.info("Webhook Cakto recebido")
-    
-    # Validação do secret
-    if settings.CAKTO_WEBHOOK_SECRET:
-        secret = (
-            request.headers.get("x-cakto-secret")
-            or request.headers.get("x-webhook-secret")
-            or request.headers.get("x-cakto-signature")
-        )
-        # Também verificar no payload (fallback conforme documentação)
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload inválido")
+    try:
+        logger.info("Webhook Cakto recebido")
         
-        payload_secret = payload.get("secret")
-        if secret != settings.CAKTO_WEBHOOK_SECRET and payload_secret != settings.CAKTO_WEBHOOK_SECRET:
-            logger.warning(f"Webhook não autorizado. Secret esperado: {settings.CAKTO_WEBHOOK_SECRET[:10]}...")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook não autorizado")
-    else:
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payload inválido")
+        # Obter payload bruto primeiro para log em caso de erro de JSON
+        body = await request.body()
+        try:
+            payload = await request.json()
+        except Exception as json_err:
+            logger.error(f"Erro ao decodificar JSON do webhook: {str(json_err)}")
+            logger.error(f"Corpo recebido: {body.decode('utf-8', errors='replace')}")
+            return {"status": "error", "reason": "invalid_json"}
 
-    event = _extract_event(payload)
-    email = _extract_email(payload)
-    product_id = _extract_product_id(payload)
-    action = _infer_action(payload, event)
+        # Validação do secret
+        if settings.CAKTO_WEBHOOK_SECRET:
+            secret = (
+                request.headers.get("x-cakto-secret")
+                or request.headers.get("x-webhook-secret")
+                or request.headers.get("x-cakto-signature")
+            )
+            
+            payload_secret = payload.get("secret")
+            if secret != settings.CAKTO_WEBHOOK_SECRET and payload_secret != settings.CAKTO_WEBHOOK_SECRET:
+                logger.warning(f"Webhook não autorizado. Secret esperado: {settings.CAKTO_WEBHOOK_SECRET[:10]}...")
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook não autorizado")
 
-    logger.info(f"Evento processado: {event}, email: {email}, action: {action}")
+        event = _extract_event(payload)
+        email = _extract_email(payload)
+        product_id = _extract_product_id(payload)
+        action = _infer_action(payload, event)
 
-    if not email:
-        return {"status": "ignored", "reason": "email_not_found"}
-    if not _product_allowed(product_id):
-        return {"status": "ignored", "reason": "product_not_allowed"}
-    if not action:
-        return {"status": "ignored", "reason": "event_not_mapped"}
+        logger.info(f"Webhook processando - Evento: {event}, Email: {email}, Ação: {action}, Produto: {product_id}")
 
-    # Extrair dados do cliente e transação
-    customer_data = _extract_customer_data(payload)
-    transaction_data = _extract_transaction_data(payload)
+        if not email:
+            logger.warning(f"Email não encontrado no payload. Evento: {event}")
+            return {"status": "ignored", "reason": "email_not_found"}
+            
+        if not _product_allowed(product_id):
+            logger.warning(f"Produto não autorizado: {product_id}. IDs permitidos: {settings.CAKTO_SUBSCRIPTION_PRODUCT_IDS}")
+            return {"status": "ignored", "reason": "product_not_allowed", "product_id": product_id}
+            
+        if not action:
+            logger.info(f"Evento {event} ignorado (nenhuma ação ativa/desativa mapeada)")
+            return {"status": "ignored", "reason": "event_not_mapped", "event": event}
 
-    # Buscar ou criar usuário
-    user_repo = UserRepository(db)
-    user = user_repo.get_by_email(email) if email else None
-    if not user:
-        doc_id = customer_data.get("cpf_cnpj")
-        user = user_repo.get_by_cpf(doc_id)
-        if user and email and user.email.strip().lower() != email:
-            user.email = email
-            db.commit()
-            db.refresh(user)
-    user_created = False
-    user_has_password = False
-    
-    if not user:
-        # Criar usuário a partir dos dados do Cakto
-        logger.info(f"Criando novo usuário do Cakto: {email}")
-        auth_service = AuthService(user_repo)
-        user = auth_service.register_from_cakto(
-            email=customer_data["email"],
-            name=customer_data["name"],
-            cpf_cnpj=customer_data["cpf_cnpj"]
-        )
-        user_created = True
-        user_has_password = False  # Usuário novo não tem senha definida ainda
-        logger.info(f"Usuário criado com ID: {user.id}")
-    else:
-        # Verificar se usuário já tem senha definida (não tem password_set_token)
-        user_has_password = not bool(user.password_set_token)
-        logger.info(f"Usuário existente encontrado: {user.id}, tem senha: {user_has_password}")
+        # Extrair dados do cliente e transação com segurança
+        try:
+            customer_data = _extract_customer_data(payload)
+            transaction_data = _extract_transaction_data(payload)
+        except Exception as extract_err:
+            logger.error(f"Erro ao extrair dados do payload Cakto: {str(extract_err)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro na extração de dados")
 
-    # Atualizar subscription
-    subscription_service = SubscriptionService(SubscriptionRepository(db))
-    
-    expires_at = None
-    if action == "activate":
-        # Definir expiração para 30 dias a partir de agora
-        expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-    
-    subscription = subscription_service.set_active(
-        user_id=user.id,
-        plan="marketdash" if action == "activate" else "free",
-        is_active=(action == "activate"),
-        cakto_customer_id=customer_data.get("customer_id"),
-        cakto_transaction_id=transaction_data.get("transaction_id"),
-        expires_at=expires_at,
-        cakto_status=transaction_data.get("subscription_status")
-        or transaction_data.get("status")
-        or transaction_data.get("payment_status"),
-        cakto_offer_name=transaction_data.get("offer_name"),
-        cakto_due_date=transaction_data.get("due_date"),
-        cakto_subscription_status=transaction_data.get("subscription_status"),
-        cakto_payment_status=transaction_data.get("payment_status"),
-        cakto_payment_method=transaction_data.get("payment_method"),
-    )
-    
-    # Atualizar last_validation_at quando ativar
-    if action == "activate":
-        subscription.last_validation_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(subscription)
+        # Buscar ou criar usuário
+        user_repo = UserRepository(db)
+        user = user_repo.get_by_email(email)
         
-        # Enviar emails apropriados
-        from app.services.email_service import EmailService
-        email_service = EmailService()
-        user_name = customer_data.get("name") or user.name or "Usuário"
+        if not user:
+            # Tentar buscar por CPF/CNPJ se disponível
+            doc_id = customer_data.get("cpf_cnpj")
+            if doc_id:
+                user = user_repo.get_by_cpf(doc_id)
+                if user:
+                    logger.info(f"Usuário ID {user.id} encontrado por documento. Atualizando email para {email}")
+                    user.email = email
+                    db.commit()
+                    db.refresh(user)
         
-        if user_created:
-            # Usuário novo: email já foi enviado pelo register_from_cakto
-            # Mas vamos garantir que foi enviado
-            logger.info(f"Email de boas-vindas já enviado para novo usuário: {email}")
+        user_created = False
+        user_has_password = False
+        
+        if not user:
+            # Criar novo usuário
+            logger.info(f"Criando novo usuário do Cakto: {email}")
+            auth_service = AuthService(user_repo)
+            try:
+                user = auth_service.register_from_cakto(
+                    email=customer_data["email"],
+                    name=customer_data["name"],
+                    cpf_cnpj=customer_data["cpf_cnpj"]
+                )
+                user_created = True
+                user_has_password = False
+                logger.info(f"Usuário {email} criado com ID {user.id}")
+            except Exception as reg_err:
+                logger.error(f"Erro ao registrar usuário via webhook: {str(reg_err)}")
+                logger.error(traceback.format_exc())
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erro ao criar usuário")
         else:
-            # Usuário existente: enviar email de reativação
-            if user_has_password:
-                # Usuário tem senha: enviar email de reativação (bem-vindo de volta)
+            # Usuário existente: verificar se já tem senha
+            user_has_password = not bool(user.password_set_token)
+            logger.info(f"Usuário {user.id} já existe. Tem senha: {user_has_password}")
+
+        # Atualizar assinatura
+        subscription_service = SubscriptionService(SubscriptionRepository(db))
+        
+        # Calcular expiração
+        expires_at = transaction_data.get("due_date")
+        if not expires_at and action == "activate":
+            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+            
+        try:
+            logger.info(f"Atualizando assinatura para usuário {user.id} (ação: {action})")
+            subscription = subscription_service.set_active(
+                user_id=user.id,
+                plan="marketdash" if action == "activate" else "free",
+                is_active=(action == "activate"),
+                cakto_customer_id=customer_data.get("customer_id"),
+                cakto_transaction_id=transaction_data.get("transaction_id"),
+                expires_at=expires_at,
+                cakto_status=transaction_data.get("subscription_status") or transaction_data.get("status"),
+                cakto_offer_name=transaction_data.get("offer_name"),
+                cakto_due_date=transaction_data.get("due_date"),
+                cakto_subscription_status=transaction_data.get("subscription_status"),
+                cakto_payment_status=transaction_data.get("payment_status"),
+                cakto_payment_method=transaction_data.get("payment_method"),
+            )
+            
+            # Commit final do status da assinatura
+            if action == "activate":
+                subscription.last_validation_at = datetime.now(timezone.utc)
+                db.commit()
+                db.refresh(subscription)
+                
+                # --- Lógica de E-mail (Totalmente Isolada) ---
                 try:
-                    email_sent = email_service.send_welcome_back_email(
-                        user_email=email,
-                        user_name=user_name
-                    )
-                    if email_sent:
-                        logger.info(f"Email de reativação enviado para: {email}")
-                    else:
-                        logger.error(f"Falha ao enviar email de reativação para: {email}")
-                except Exception as e:
-                    logger.error(f"Erro ao enviar email de reativação para {email}: {e}")
-            else:
-                # Usuário não tem senha: enviar email para definir senha
-                try:
-                    # Gerar novo token se não existir ou expirou
-                    if not user.password_set_token or (user.password_set_token_expires_at and user.password_set_token_expires_at < datetime.now(timezone.utc)):
-                        import secrets
-                        import string
-                        token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-                        expires_at_token = datetime.now(timezone.utc) + timedelta(hours=24)
-                        user.password_set_token = token
-                        user.password_set_token_expires_at = expires_at_token
-                        db.commit()
-                        db.refresh(user)
-                    else:
-                        token = user.password_set_token
+                    from app.services.email_service import EmailService
+                    email_service = EmailService()
+                    user_name = customer_data.get("name") or user.name or "Usuário"
                     
-                    email_sent = email_service.send_set_password_email(
-                        user_email=email,
-                        user_name=user_name,
-                        token=token
-                    )
-                    if email_sent:
-                        logger.info(f"Email de definir senha enviado para usuário existente: {email}")
+                    if user_created:
+                        logger.info(f"Usuário novo: Email de boas-vindas já deve ter sido enviado via register_from_cakto")
                     else:
-                        logger.error(f"Falha ao enviar email de definir senha para: {email}")
-                except Exception as e:
-                    logger.error(f"Erro ao enviar email de definir senha para {email}: {e}")
+                        if user_has_password:
+                            logger.info(f"Enviando e-mail de reativação para {email}")
+                            email_service.send_welcome_back_email(user_email=email, user_name=user_name)
+                        else:
+                            logger.info(f"Usuário sem senha: Enviando link de definição para {email}")
+                            token = user.password_set_token
+                            if not token:
+                                import secrets
+                                import string
+                                token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+                                user.password_set_token = token
+                                user.password_set_token_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+                                db.commit()
+                            email_service.send_set_password_email(user_email=email, user_name=user_name, token=token)
+                except Exception as email_err:
+                    logger.error(f"FALHA NO ENVIO DE E-MAIL: {str(email_err)}")
+                    # Não relançamos o erro de e-mail para não falhar o webhook
 
-    logger.info(f"Subscription atualizada para user {user.id}: active={subscription.is_active}")
+            logger.info(f"Webhook processado com sucesso para {email}")
+            return {
+                "status": "ok",
+                "action": action,
+                "user_id": user.id,
+                "subscription_active": subscription.is_active,
+                "user_created": user_created
+            }
 
-    return {
-        "status": "ok",
-        "action": action,
-        "user_id": user.id,
-        "subscription_active": subscription.is_active,
-        "user_created": user_created,
-    }
+        except Exception as sub_err:
+            logger.error(f"Erro no processamento da assinatura: {str(sub_err)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(sub_err))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"ERRO CRÍTICO NÃO TRATADO NO WEBHOOK: {str(e)}")
+        logger.error(traceback.format_exc())
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"Erro interno: {str(e)}"}
+        )
 
 
 @router.get("/plans", response_model=PlansResponse)

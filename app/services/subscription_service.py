@@ -76,7 +76,9 @@ class SubscriptionService:
             normalized_due_date = normalized_due_date.replace(tzinfo=timezone.utc)
 
         now_utc = datetime.now(timezone.utc)
-        is_active_value = False
+        is_active_value = is_active # Usar o valor passado como base
+        
+        # Se temos data de expiração, ela tem a palavra final sobre o status
         if normalized_due_date is not None:
             is_active_value = normalized_due_date >= now_utc
 

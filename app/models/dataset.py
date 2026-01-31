@@ -10,6 +10,7 @@ class Dataset(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename = Column(String, nullable=False)
+    type = Column(String(32), default="transaction", index=True)  # transaction, click
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

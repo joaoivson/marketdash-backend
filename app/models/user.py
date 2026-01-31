@@ -21,5 +21,6 @@ class User(Base):
     # Relationships
     datasets = relationship("Dataset", back_populates="user", cascade="all, delete-orphan")
     dataset_rows = relationship("DatasetRow", back_populates="user", cascade="all, delete-orphan")
+    click_rows = relationship("ClickRow", back_populates="user", cascade="all, delete-orphan")
     ad_spends = relationship("AdSpend", back_populates="user", cascade="all, delete-orphan")
 

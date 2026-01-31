@@ -13,8 +13,8 @@ TARGET_COLUMNS = ["date", "product", "revenue", "cost", "commission"]
 
 # Mapeamento flexível de aliases (normalizados: minúsculo, sem acentos, sem espaços/pontuação)
 ALIASES = {
-    "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao"},
-    "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido"},
+    "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao", "tempo_dos_cliques"},
+    "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido", "tempo_dos_cliques"},
     "product": {"product", "produto", "idpedido", "id_do_pedido", "id_dopedido", "id_pagamento", "idpagamento", "produto_nome", "product_name", "nome_do_item"},
     "platform": {"platform", "plataforma", "canal", "channel", "origem", "origem_do_pedido"},
     "revenue": {
@@ -36,6 +36,9 @@ ALIASES = {
     "status": {"status", "status_do_pedido", "status_pedido"},
     "category": {"categoria", "categoria_global", "categoria_global_l1"},
     "sub_id1": {"sub_id1", "subid1"},
+    "channel": {"channel", "canal", "origem", "origem_do_pedido", "plataforma", "platform", "referenciador", "referrer"},
+    "clicks": {"clicks", "cliques", "total_de_cliques", "cliques_por_canal", "cliques_por_hora", "quantidade_cliques", "cliques_count"},
+    "sub_id": {"sub_id", "subid", "subid1", "subid2", "id_sub", "referencia"},
 }
 
 
@@ -205,6 +208,101 @@ class CSVService:
         except Exception as e:
             logger.error(f"Erro ao processar CSV: {str(e)}")
             errors.append(f"Erro ao processar arquivo CSV: {str(e)}")
+            return None, errors
+
+    @staticmethod
+    def validate_click_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
+        """
+        Valida e processa CSV de cliques.
+        Retorna dataframe com date, time, channel, clicks, sub_id, raw_data.
+        """
+        errors = []
+
+        try:
+            df = None
+            df_orig = None
+            for encoding in ['utf-8', 'latin-1', 'iso-8859-1']:
+                try:
+                    df = pd.read_csv(BytesIO(file_content), encoding=encoding)
+                    df_orig = df.copy()
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if df is None:
+                errors.append("Não foi possível decodificar o arquivo CSV de cliques.")
+                return None, errors
+
+            if df.empty:
+                errors.append("O arquivo CSV de cliques está vazio.")
+                return None, errors
+
+            original_cols = df.columns.tolist()
+            col_map = {}
+            for target, alias_set in ALIASES.items():
+                found = find_column(original_cols, alias_set)
+                if found:
+                    col_map[target] = found
+
+            out = pd.DataFrame()
+
+            # Date e time (lógica similar ao original)
+            if "date" in col_map:
+                parsed_date = pd.to_datetime(df[col_map["date"]], errors="coerce", dayfirst=True)
+            else:
+                parsed_date = None
+                for col in original_cols:
+                    candidate = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+                    if candidate.notna().any():
+                        parsed_date = candidate
+                        break
+                if parsed_date is None:
+                    parsed_date = pd.Timestamp("today")
+                    errors.append("Data ausente no arquivo de cliques; usando hoje.")
+
+            out["date"] = pd.to_datetime(parsed_date, errors="coerce").dt.date
+
+            if "time" in col_map:
+                parsed_time = pd.to_datetime(df[col_map["time"]], errors="coerce")
+                out["time"] = parsed_time.dt.time
+            else:
+                out["time"] = None
+
+            # Canal / Platform
+            if "channel" in col_map:
+                out["channel"] = df[col_map["channel"]].astype(str).str.strip()
+            elif "platform" in col_map:
+                out["channel"] = df[col_map["platform"]].astype(str).str.strip()
+            else:
+                out["channel"] = "Desconhecido"
+                errors.append("Coluna de canal não encontrada; usando 'Desconhecido'.")
+
+            # Cliques
+            if "clicks" in col_map:
+                out["clicks"] = pd.to_numeric(df[col_map["clicks"]], errors="coerce").fillna(0).astype(int)
+            else:
+                # Se não houver coluna de cliques, assume 1 clique por linha (cada linha é um evento)
+                out["clicks"] = 1
+                logger.info("Coluna de cliques não encontrada; assumindo 1 por linha.")
+
+            # Sub ID
+            if "sub_id" in col_map:
+                out["sub_id"] = df[col_map["sub_id"]].astype(str).str.strip()
+            elif "sub_id1" in col_map:
+                out["sub_id"] = df[col_map["sub_id1"]].astype(str).str.strip()
+            else:
+                out["sub_id"] = None
+
+            # raw_data
+            if df_orig is not None:
+                rows_raw = df_orig.iloc[out.index].replace({np.nan: None})
+                out["raw_data"] = rows_raw.to_dict("records")
+
+            return out.reset_index(drop=True), errors
+
+        except Exception as e:
+            logger.error(f"Erro ao processar CSV de cliques: {str(e)}")
+            errors.append(f"Erro ao processar CSV de cliques: {str(e)}")
             return None, errors
 
     @staticmethod

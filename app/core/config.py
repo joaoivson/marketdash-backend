@@ -30,14 +30,14 @@ class Settings(BaseSettings):
     CAKTO_CLIENT_ID: Optional[str] = None
     CAKTO_CLIENT_SECRET: Optional[str] = None
     # IDs de produtos separados por vírgula (todos os planos aceitos)
-    CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = "8e9qxyg_742442,hi5cerw,6bpwn57"
+    CAKTO_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = "8e9qxyg,8e9qxyg_742442,hi5cerw,6bpwn57"
     CAKTO_ENFORCE_SUBSCRIPTION: bool = False
     CAKTO_WEBHOOK_SECRET: Optional[str] = "476ebb07-50c3-47ab-8bc6-f0e39f9e965d"
     
     # Planos Cakto disponíveis
     CAKTO_PLANS: Dict[str, Dict[str, str]] = {
         "principal": {
-            "id": "8e9qxyg_742442",
+            "id": "8e9qxyg",
             "name": "Oferta Principal",
             "checkout_url": "https://pay.cakto.com.br/8e9qxyg_742442",
             "period": "mensal"

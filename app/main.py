@@ -111,13 +111,17 @@ def health_check():
     if settings.REDIS_URL:
         try:
             import redis
-            redis_client = redis.from_url(settings.REDIS_URL)
+            # Detectar se a URL já tem senha ou se precisamos adicionar
+            redis_client = redis.from_url(settings.REDIS_URL, socket_timeout=2)
             redis_client.ping()
             health_status["redis"] = "connected"
         except ImportError:
             health_status["redis"] = "library_not_installed"
+        except redis.exceptions.AuthenticationError:
+            logger.warning("Redis health check: Autenticação necessária (verifique REDIS_URL)")
+            health_status["redis"] = "auth_required"
         except Exception as e:
-            logger.warning(f"Redis health check failed: {e}")
+            logger.warning(f"Redis health check failed: {str(e)}")
             health_status["redis"] = "disconnected"
     
     # Return appropriate status code

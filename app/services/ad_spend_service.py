@@ -16,13 +16,14 @@ class AdSpendService:
             "date": item.date,
             "amount": item.amount,
             "sub_id": item.sub_id,
+            "clicks": item.clicks or 0,
         }
     def __init__(self, repo: AdSpendRepository):
         self.repo = repo
 
-    def create(self, user_id: int, date: date, amount: float, sub_id: Optional[str]) -> AdSpend:
+    def create(self, user_id: int, date: date, amount: float, sub_id: Optional[str], clicks: Optional[int] = 0) -> AdSpend:
         sub_id_val = None if sub_id in ["", "__all__"] else sub_id
-        ad_spend = AdSpend(user_id=user_id, date=date, sub_id=sub_id_val, amount=amount)
+        ad_spend = AdSpend(user_id=user_id, date=date, sub_id=sub_id_val, amount=amount, clicks=clicks or 0)
         created = self.repo.create(ad_spend)
         # Cache removido - frontend gerencia via localStorage
         return created
@@ -34,7 +35,7 @@ class AdSpendService:
         for item in items:
             sub_id_val = None if item.sub_id in ["", "__all__"] else item.sub_id
             ad_spends.append(
-                AdSpend(user_id=user_id, date=item.date, sub_id=sub_id_val, amount=item.amount)
+                AdSpend(user_id=user_id, date=item.date, sub_id=sub_id_val, amount=item.amount, clicks=getattr(item, 'clicks', 0) or 0)
             )
         created = self.repo.bulk_create(ad_spends)
         # Cache removido - frontend gerencia via localStorage
@@ -61,6 +62,8 @@ class AdSpendService:
             ad_spend.date = payload.date
         if payload.amount is not None:
             ad_spend.amount = payload.amount
+        if payload.clicks is not None:
+            ad_spend.clicks = payload.clicks
         if payload.sub_id is not None:
             ad_spend.sub_id = None if payload.sub_id in ["", "__all__"] else payload.sub_id
         self.repo.db.commit()

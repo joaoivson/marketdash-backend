@@ -23,8 +23,17 @@ class UserRepository:
     def get_by_cpf(self, cpf_cnpj: str) -> Optional[User]:
         if not cpf_cnpj:
             return None
-        normalized = cpf_cnpj.strip()
-        return self.db.query(User).filter(User.cpf_cnpj == normalized).first()
+        # Sanitizar entrada: apenas dígitos
+        digits = "".join(ch for ch in str(cpf_cnpj) if ch.isdigit())
+        if not digits:
+            return None
+            
+        # Buscar comparando apenas os dígitos (usando regexp_replace do PostgreSQL)
+        return (
+            self.db.query(User)
+            .filter(func.regexp_replace(User.cpf_cnpj, r"\D", "", "g") == digits)
+            .first()
+        )
 
     def get_by_id(self, user_id: int) -> Optional[User]:
         return self.db.query(User).filter(User.id == user_id).first()
