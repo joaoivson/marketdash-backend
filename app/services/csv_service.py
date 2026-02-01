@@ -20,19 +20,23 @@ ALIASES = {
     "revenue": {
         "revenue", "receita", "valor", "valorvenda", "valor_receita", "valor_venda", "gross_value", "total",
         "valor_de_c", "valor_de_compra", "valor_de_compra_r", "valor_de_compra_rs", "valor_compra", "faturamento",
-        "preco_r", "preco_rs", "preco", "preco_r$", "preco_rs$", "preco$"
+        "preco_r", "preco_rs", "preco", "preco_r$", "preco_rs$", "preco$", "valor_de_compra_r_s", "valor_de_compra_r"
     },
     "cost": {"cost", "custo", "valorcusto", "custo_total", "valor_do_r", "valor_gasto", "valor_gasto_anuncios", "gasto_anuncios"},
     "commission": {
         "commission", "comissao", "comissão", "taxa", "fee", "commission_value", "taxa_de_cc", "taxa_de_cartao",
         "comissao_liquido", "comissao_liquido_do_afiliado_rs", "comissao_liquido_do_afiliado_r",
+        "comissao_liquida", "comissao_liquida_do_afiliado_rs", "comissao_liquida_do_afiliado_r",
+        "comissao_liquida_do_afiliado", "comissao_liquida_do_afiliado_r_s", "comissao_liquida_do_afiliado_r",
+        "comissao_liquida_do_afiliado_r",
         # Shopee / afiliados variações
-        "comissao_shopee_r", "comissao_shopee_rs", "comissao_shopee_r$", "comissao_shopee_rs$",
         "comissao_total_do_item_r", "comissao_total_do_item_rs", "comissao_total_do_item_r$",
         "comissao_total_do_pedido_r", "comissao_total_do_pedido_rs", "comissao_total_do_pedido_r$",
         "taxa_de_comissao_shopee_do_item", "taxa_de_comissao_do_vendedor_do_item",
-        "comissao_do_item_da_shopee_r", "comissao_do_item_da_marca_r", "comissao_do_vendedor_r"
+        "comissao_do_item_da_shopee_r", "comissao_do_item_da_marca_r", "comissao_do_vendedor_r",
+        "comissao_shopee_r", "comissao_shopee_rs", "comissao_shopee_r$", "comissao_shopee_rs$"
     },
+
     "status": {"status", "status_do_pedido", "status_pedido"},
     "category": {"categoria", "categoria_global", "categoria_global_l1"},
     "sub_id1": {"sub_id1", "subid1"},
@@ -45,12 +49,36 @@ ALIASES = {
 def normalize_name(name: str) -> str:
     nfkd = unicodedata.normalize("NFKD", name)
     only_ascii = "".join(c for c in nfkd if not unicodedata.combining(c))
+    # Substituir qualquer caractere não alfanumérico por underscore, mas preservar o underscore se já existir
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in only_ascii.lower())
+    # Remover underscores duplicados e das extremidades
     cleaned = "_".join(filter(None, cleaned.split("_")))
+    
+    # Log para debug (opcional, habilitar se necessário)
+    # print(f"DEBUG: '{name}' -> '{cleaned}'")
+    
     return cleaned
 
 
 def find_column(df_cols: List[str], aliases: set) -> str:
+    # Priorizar correspondências exatas de substrings importantes para evitar captura errada de taxas
+    priority_order = [
+        "comissao_liquida_do_afiliado_r", 
+        "comissao_liquido_do_afiliado_r",
+        "valor_de_compra_r",
+        "valor_venda",
+        "revenue",
+        "commission"
+    ]
+    
+    # 1. Tentar encontrar as colunas prioritárias primeiro
+    for priority in priority_order:
+        if priority in aliases:
+            for col in df_cols:
+                if normalize_name(col) == priority:
+                    return col
+                    
+    # 2. Se não encontrar prioritária, usar a lógica original de busca no set
     for col in df_cols:
         norm = normalize_name(col)
         if norm in aliases:
@@ -69,15 +97,45 @@ class CSVService:
     @staticmethod
     def _clean_numeric_series(series: pd.Series) -> pd.Series:
         """
-        Limpa strings com R$, espaços, separadores de milhar e converte vírgula decimal para ponto.
+        Limpa strings com R$, espaços e converte para numérico de forma robusta.
+        Detecta automaticamente se o separador decimal é ponto ou vírgula.
         """
-        cleaned = (
-            series.astype(str)
-            .str.replace(r"[R$\s]", "", regex=True)
-            .str.replace(".", "", regex=False)  # remove separador de milhar
-            .str.replace(",", ".", regex=False)  # vírgula -> ponto
-        )
-        return pd.to_numeric(cleaned, errors="coerce")
+        def clean_value(val):
+            if pd.isna(val) or val is None:
+                return np.nan
+            
+            # Converter para string e limpar
+            s = str(val).replace("R$", "").replace(" ", "").strip()
+            
+            # Remover caracteres invisíveis ou de codificação se houver
+            s = "".join(ch for ch in s if ch.isdigit() or ch in ".,-")
+            
+            if not s:
+                return np.nan
+                
+            # Se houver vírgula e ponto, assume formato 1.234,56 (Padrão BR)
+            if "," in s and "." in s:
+                s = s.replace(".", "").replace(",", ".")
+            # Se houver apenas vírgula, assume que é o decimal: 1234,56 -> 1234.56
+            elif "," in s:
+                s = s.replace(",", ".")
+            # Se houver apenas ponto:
+            elif "." in s:
+                # Se houver múltiplos pontos, remove todos (milhar): 1.000.000 -> 1000000
+                if s.count(".") > 1:
+                    s = s.replace(".", "")
+                # Se houver apenas um ponto, mas a parte decimal tiver 2 ou 3 dígitos, 
+                # e o número for pequeno, é quase certo que é decimal (ex: 1.197 ou 1.19)
+                # Se o número for "1.000", é ambíguo, mas float(s) trata como 1.0.
+            
+            try:
+                result = float(s)
+                # print(f"DEBUG_CLEAN: '{val}' -> '{s}' -> {result}") # Habilitar se necessário
+                return result
+            except ValueError:
+                return np.nan
+
+        return series.apply(clean_value)
 
     @staticmethod
     def validate_csv(file_content: bytes, filename: str) -> Tuple[pd.DataFrame, List[str]]:
