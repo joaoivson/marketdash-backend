@@ -60,6 +60,7 @@ class ClickService:
 
         click_rows = []
         rows_data = df_grouped.to_dict('records')
+        ignored_count = 0
         
         for row_data in rows_data:
             # Normalizar sub_id para salvar no banco
@@ -69,8 +70,7 @@ class ClickService:
             row_hash = self._generate_click_hash(row_data)
             
             if row_hash in existing_hashes:
-                # Se já existe o registro para este dia/canal/subid, poderíamos somar, 
-                # mas conforme solicitado vamos apenas ignorar duplicatas.
+                ignored_count += 1
                 continue
                 
             existing_hashes.add(row_hash)
@@ -87,8 +87,14 @@ class ClickService:
                 )
             )
 
+        if ignored_count > 0:
+            logger.info(f"Deduplicação: {ignored_count} grupos de cliques foram ignorados pois já existem no banco para o usuário {user_id}.")
+
         if click_rows:
             self.click_repo.bulk_create(click_rows)
+        else:
+            if len(rows_data) > 0:
+                logger.warning(f"Nenhum novo clique foi inserido para o arquivo {filename}. Todas as linhas já existiam no banco.")
         
         self.dataset_repo.db.refresh(dataset)
         return dataset

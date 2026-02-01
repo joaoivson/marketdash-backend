@@ -1,42 +1,32 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, Time, ForeignKey, Index, JSON
+from sqlalchemy import Column, Integer, String, Numeric, Date, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
 
 class DatasetRow(Base):
-    __tablename__ = "dataset_rows"
+    __tablename__ = "dataset_rows_v2"
 
     id = Column(Integer, primary_key=True, index=True)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # Campos temporais
+    # Dimensões (Campos de agrupamento)
     date = Column(Date, nullable=False, index=True)
-    transaction_date = Column(Date, nullable=True, index=True)  # Alias para date, mantém compatibilidade
-    time = Column(Time, nullable=True, index=True)  # Horário separado
-    
-    # Dimensões
-    product = Column(String, nullable=False, index=True)
-    product_name = Column(String, nullable=True, index=True)  # Alias para product
     platform = Column(String, nullable=True, index=True)
-    status = Column(String, nullable=True, index=True)  # Status do pedido
-    category = Column(String, nullable=True, index=True)  # Categoria Global L1
+    category = Column(String, nullable=True, index=True)
+    product = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=True, index=True)
     sub_id1 = Column(String, nullable=True, index=True)
-    mes_ano = Column(String, nullable=True, index=True)  # formato YYYY-MM
-    row_hash = Column(String(32), nullable=True, index=True)  # Hash MD5 para deduplicação
-    raw_data = Column(JSON, nullable=True)  # dados completos da linha
     
-    # Métricas financeiras (campos originais para compatibilidade)
-    revenue = Column(Numeric(12, 2), nullable=True)
-    cost = Column(Numeric(12, 2), nullable=True)
-    commission = Column(Numeric(12, 2), nullable=True)
-    profit = Column(Numeric(12, 2), nullable=True)
+    # Métricas (Somadas no agrupamento)
+    revenue = Column(Numeric(12, 2), nullable=True, default=0)
+    commission = Column(Numeric(12, 2), nullable=True, default=0)
+    cost = Column(Numeric(12, 2), nullable=True, default=0) # Custo de anúncios aplicado
+    profit = Column(Numeric(12, 2), nullable=True, default=0)
+    quantity = Column(Integer, nullable=True, default=1)
     
-    # Métricas analíticas (campos do Power BI)
-    gross_value = Column(Numeric(12, 2), nullable=True, index=True)  # Total de vendas
-    commission_value = Column(Numeric(12, 2), nullable=True, index=True)  # Valor da comissão
-    net_value = Column(Numeric(12, 2), nullable=True, index=True)  # Valor líquido
-    quantity = Column(Integer, nullable=True, default=1)  # Quantidade de vendas
+    # Identificador único para deduplicação (Data + Plataforma + Categoria + Produto + Status + SubID)
+    row_hash = Column(String(32), nullable=True, unique=True, index=True)
 
     # Relationships
     dataset = relationship("Dataset", back_populates="rows")
@@ -44,13 +34,7 @@ class DatasetRow(Base):
 
     # Composite indexes for analytics queries (otimização para BI)
     __table_args__ = (
-        Index('idx_user_date', 'user_id', 'date'),
-        Index('idx_user_product', 'user_id', 'product'),
-        Index('idx_user_date_product', 'user_id', 'date', 'product'),
-        Index('idx_user_platform', 'user_id', 'platform'),
-        Index('idx_user_transaction_date', 'user_id', 'transaction_date'),
-        Index('idx_user_product_platform', 'user_id', 'product', 'platform'),
-        Index('idx_date_platform', 'date', 'platform'),
-        Index('idx_user_sub_id_date', 'user_id', 'sub_id1', 'date'),
+        Index('idx_dataset_rows_user_report', 'user_id', 'date', 'platform', 'product'),
+        Index('idx_dataset_rows_user_category', 'user_id', 'category'),
+        Index('idx_dataset_rows_user_sub_id', 'user_id', 'sub_id1'),
     )
-

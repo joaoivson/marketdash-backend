@@ -4,7 +4,7 @@ from app.db.base import Base
 
 
 class ClickRow(Base):
-    __tablename__ = "click_rows"
+    __tablename__ = "click_rows_v2"
 
     id = Column(Integer, primary_key=True, index=True)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)

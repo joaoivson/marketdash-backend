@@ -46,28 +46,26 @@ def set_ad_spend(
 def list_latest_rows(
     start_date: date | None = Query(None, description="Data inicial (opcional)"),
     end_date: date | None = Query(None, description="Data final (opcional)"),
-    include_raw_data: bool = Query(True, description="Incluir campo raw_data na resposta"),
     limit: int | None = Query(None, ge=1, description="Quantidade máxima de linhas (opcional)"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    return service.list_latest_rows(current_user.id, start_date, end_date, include_raw_data, limit, offset)
+    return service.list_latest_rows(current_user.id, start_date, end_date, limit, offset)
 
 
 @router.get("/all/rows", response_model=List[DatasetRowResponse])
 def list_all_rows(
     start_date: date | None = Query(None, description="Data inicial (opcional)"),
     end_date: date | None = Query(None, description="Data final (opcional)"),
-    include_raw_data: bool = Query(True, description="Incluir campo raw_data na resposta"),
     limit: int | None = Query(None, ge=1, description="Quantidade máxima de linhas (opcional)"),
     offset: int = Query(0, ge=0, description="Deslocamento para paginação"),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    return service.list_all_rows(current_user.id, start_date, end_date, include_raw_data, limit, offset)
+    return service.list_all_rows(current_user.id, start_date, end_date, limit, offset)
 
 
 @router.get("", response_model=List[DatasetResponse])
@@ -99,7 +97,7 @@ def list_dataset_rows(
 ):
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
     # O service já valida se o dataset pertence ao usuário (filtra por user_id primeiro)
-    return service.list_dataset_rows(dataset_id, current_user.id, start_date, end_date, True)
+    return service.list_dataset_rows(dataset_id, current_user.id, start_date, end_date)
 
 
 @router.get("/{dataset_id}", response_model=DatasetResponse)
