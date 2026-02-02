@@ -11,7 +11,9 @@ class ClickRowRepository:
         self.db = db
 
     def bulk_create(self, rows: Iterable[ClickRow]) -> None:
-        """Inserção em lote de cliques."""
+        """
+        Inserção em lote de cliques com ON CONFLICT DO NOTHING.
+        """
         rows_list = list(rows)
         if not rows_list:
             return
@@ -29,7 +31,13 @@ class ClickRowRepository:
             }
             mappings.append(mapping)
         
-        self.db.bulk_insert_mappings(ClickRow, mappings)
+        # Usar inserção com ON CONFLICT DO NOTHING via SQLAlchemy Core (PostgreSQL)
+        from sqlalchemy.dialects.postgresql import insert
+        
+        stmt = insert(ClickRow).values(mappings)
+        stmt = stmt.on_conflict_do_nothing(index_elements=['row_hash'])
+        
+        self.db.execute(stmt)
         self.db.commit()
 
     def list_by_dataset(
@@ -75,13 +83,14 @@ class ClickRowRepository:
         return query.all()
 
     def get_existing_hashes(self, user_id: int, min_date: Optional[date] = None) -> set:
-        """Retorna hashes existentes para deduplicação."""
+        """Retorna hashes existentes para deduplicação (sem limite de data)."""
         query = self.db.query(ClickRow.row_hash).filter(
             ClickRow.user_id == user_id,
             ClickRow.row_hash.isnot(None)
         )
-        if min_date:
-            query = query.filter(ClickRow.date >= min_date)
+        # Removido limite de data para garantir deduplicação completa
+        # if min_date:
+        #     query = query.filter(ClickRow.date >= min_date)
         
         return {r[0] for r in query.all()}
 

@@ -70,6 +70,7 @@ def check_subscription_status(
         "subscription_activated": recently_activated,
         "is_active": subscription.is_active,
         "last_validation_at": subscription.last_validation_at.isoformat() if subscription.last_validation_at else None,
+        "next_payment_date": subscription.cakto_due_date.isoformat() if subscription.cakto_due_date else None,
         "message": "Assinatura ativada recentemente" if recently_activated else "Assinatura não foi ativada recentemente"
     }
 

@@ -434,6 +434,7 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
                 "action": action,
                 "user_id": user.id,
                 "subscription_active": subscription.is_active,
+                "next_payment_date": subscription.cakto_due_date.isoformat() if subscription.cakto_due_date else None,
                 "user_created": user_created
             }
 
