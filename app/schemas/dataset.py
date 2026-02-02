@@ -21,6 +21,12 @@ class DatasetResponse(DatasetBase):
         from_attributes = True
 
 
+class DatasetUploadResponse(DatasetResponse):
+    total_rows: int = Field(..., description="Total de linhas (grupos) processadas")
+    inserted_rows: int = Field(..., description="Número de linhas novas inseridas")
+    ignored_rows: int = Field(..., description="Número de linhas ignoradas (duplicadas)")
+
+
 class DatasetRowBase(BaseModel):
     date: date
     product: str

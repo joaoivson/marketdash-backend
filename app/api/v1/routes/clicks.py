@@ -10,13 +10,13 @@ from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.click_row_repository import ClickRowRepository
 from app.schemas.dataset import DatasetResponse
-from app.schemas.click import ClickRowResponse
+from app.schemas.click import ClickRowResponse, ClickUploadResponse
 from app.services.click_service import ClickService
 
 router = APIRouter(tags=["clicks"])
 
 
-@router.post("/upload", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=ClickUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_click_csv(
     file: UploadFile = File(...),
     current_user: User = Depends(require_active_subscription),
@@ -25,7 +25,17 @@ async def upload_click_csv(
     """Realiza o upload de um CSV de cliques e processa os dados."""
     file_content = await file.read()
     service = ClickService(DatasetRepository(db), ClickRowRepository(db))
-    return service.upload_click_csv(file_content, file.filename, current_user.id)
+    dataset, metadata = service.upload_click_csv(file_content, file.filename, current_user.id)
+    
+    # Combinar o objeto dataset com os metadados para a resposta
+    return {
+        "id": dataset.id,
+        "filename": dataset.filename,
+        "user_id": dataset.user_id,
+        "type": dataset.type,
+        "uploaded_at": dataset.uploaded_at,
+        **metadata
+    }
 
 
 @router.get("/latest/rows", response_model=List[ClickRowResponse])

@@ -24,12 +24,21 @@ class DatasetService:
         self.row_repo = row_repo
 
     @staticmethod
-    def _generate_row_hash(row_data: dict) -> str:
+    def _generate_row_hash(row_data: dict, user_id: int) -> str:
         """
-        Gera um hash MD5 determinístico para o agrupamento (Data + Plataforma + Categoria + Produto + Status + SubID).
+        Gera um hash MD5 determinístico para o agrupamento.
+        Inclui user_id e normaliza a data para evitar conflitos globais.
         """
+        # Normalizar a data para string ISO format
+        date_val = row_data.get("date")
+        if hasattr(date_val, 'isoformat'):
+            date_str = date_val.isoformat()
+        else:
+            date_str = str(date_val)
+
         components = [
-            str(row_data.get("date") or ""),
+            str(user_id),
+            date_str,
             str(row_data.get("platform") or "nan").strip().lower(),
             str(row_data.get("category") or "nan").strip().lower(),
             str(row_data.get("product") or "nan").strip().lower(),
@@ -39,7 +48,7 @@ class DatasetService:
         row_str = "|".join(components)
         return hashlib.md5(row_str.encode()).hexdigest()
 
-    def upload_csv(self, file_content: bytes, filename: str, user_id: int) -> Dataset:
+    def upload_csv(self, file_content: bytes, filename: str, user_id: int) -> tuple[Dataset, dict]:
         if not filename.endswith(".csv"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
@@ -75,17 +84,15 @@ class DatasetService:
             'quantity': 'sum'
         })
 
-        # Criar registro de dataset
-        dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename))
-
         # 2. Deduplicação e Inserção
         # Buscar hashes existentes (últimos 120 dias para datasets)
         lookback_date = datetime.date.today() - datetime.timedelta(days=120)
         existing_hashes = self.row_repo.get_existing_hashes(user_id, min_date=lookback_date)
 
-        dataset_rows = []
+        dataset_rows_to_create = []
         rows_data = df_grouped.to_dict('records')
         ignored_count = 0
+        total_rows = len(rows_data)
         
         for row_data in rows_data:
             # Restaurar 'nan' para None para salvar no banco
@@ -94,19 +101,41 @@ class DatasetService:
                 val = row_data[col]
                 row_clean[col] = None if val == 'nan' else val
             
-            # Recalcular profit consolidado
-            revenue = float(row_data['revenue'])
-            commission = float(row_data['commission'])
-            cost = float(row_data['cost'])
-            profit = revenue - commission - cost
-
-            row_hash = self._generate_row_hash(row_clean)
+            row_hash = self._generate_row_hash(row_clean, user_id)
             
             if row_hash in existing_hashes:
                 ignored_count += 1
                 continue
                 
             existing_hashes.add(row_hash)
+            
+            # Adicionar aos dados que serão criados depois
+            dataset_rows_to_create.append({
+                "clean_data": row_clean,
+                "metrics": {
+                    "revenue": float(row_data['revenue']),
+                    "commission": float(row_data['commission']),
+                    "cost": float(row_data['cost']),
+                    "quantity": int(row_data["quantity"])
+                },
+                "row_hash": row_hash
+            })
+
+        # Bloqueio se tudo for duplicado
+        if total_rows > 0 and ignored_count == total_rows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="Todos os dados deste arquivo já foram importados anteriormente (100% duplicado)."
+            )
+
+        # Criar registro de dataset apenas se houver o que inserir
+        dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename))
+
+        dataset_rows = []
+        for item in dataset_rows_to_create:
+            row_clean = item["clean_data"]
+            m = item["metrics"]
+            profit = m["revenue"] - m["commission"] - m["cost"]
 
             dataset_rows.append(
                 DatasetRow(
@@ -118,26 +147,29 @@ class DatasetService:
                     category=row_clean["category"],
                     status=row_clean["status"],
                     sub_id1=row_clean["sub_id1"],
-                    revenue=revenue,
-                    commission=commission,
-                    cost=cost,
+                    revenue=m["revenue"],
+                    commission=m["commission"],
+                    cost=m["cost"],
                     profit=profit,
-                    quantity=int(row_data["quantity"]),
-                    row_hash=row_hash,
+                    quantity=m["quantity"],
+                    row_hash=item["row_hash"],
                 )
             )
 
-        if ignored_count > 0:
-            logger.info(f"Deduplicação: {ignored_count} grupos de vendas foram ignorados pois já existem no banco de dados para o usuário {user_id}.")
-
         if dataset_rows:
             self.row_repo.bulk_create(dataset_rows)
-        else:
-            if len(rows_data) > 0:
-                logger.warning(f"Nenhum novo dado foi inserido para o arquivo {filename}. Todas as linhas já existiam no banco.")
-        
+            if ignored_count > 0:
+                logger.info(f"Deduplicação: {ignored_count} grupos de vendas foram ignorados pois já existem no banco.")
+
         self.dataset_repo.db.refresh(dataset)
-        return dataset
+        
+        metadata = {
+            "total_rows": total_rows,
+            "inserted_rows": len(dataset_rows),
+            "ignored_rows": ignored_count
+        }
+        
+        return dataset, metadata
 
     def list_latest_rows(
         self,

@@ -12,14 +12,13 @@ class DatasetRowRepository:
 
     def bulk_create(self, rows: Iterable[DatasetRow]) -> None:
         """
-        Bulk insert usando bulk_insert_mappings para melhor controle de tipos e performance.
+        Bulk insert usando ON CONFLICT DO NOTHING para evitar erros de constraint único.
         """
         rows_list = list(rows)
         if not rows_list:
             return
         
         # Converter objetos DatasetRow para dicionários com apenas os campos necessários
-        # Isso garante que os tipos sejam corretos e a ordem seja respeitada
         mappings = []
         for row in rows_list:
             mapping = {
@@ -40,8 +39,13 @@ class DatasetRowRepository:
             }
             mappings.append(mapping)
         
-        # Usar bulk_insert_mappings para inserção em lote com controle explícito de tipos
-        self.db.bulk_insert_mappings(DatasetRow, mappings)
+        # Usar inserção com ON CONFLICT DO NOTHING via SQLAlchemy Core (PostgreSQL)
+        from sqlalchemy.dialects.postgresql import insert
+        
+        stmt = insert(DatasetRow).values(mappings)
+        stmt = stmt.on_conflict_do_nothing(index_elements=['row_hash'])
+        
+        self.db.execute(stmt)
         self.db.commit()
 
     def list_by_dataset(
@@ -102,13 +106,14 @@ class DatasetRowRepository:
         return results
 
     def get_existing_hashes(self, user_id: int, min_date: Optional[date] = None) -> set:
-        """Retorna um conjunto de hashes existentes para um usuário."""
+        """Retorna um conjunto de hashes existentes para um usuário (sem limite de data)."""
         query = self.db.query(DatasetRow.row_hash).filter(
             DatasetRow.user_id == user_id,
             DatasetRow.row_hash.isnot(None)
         )
-        if min_date:
-            query = query.filter(DatasetRow.date >= min_date)
+        # Removido limite de data para garantir deduplicação completa
+        # if min_date:
+        #     query = query.filter(DatasetRow.date >= min_date)
         
         hashes = {r[0] for r in query.all()}
         return hashes

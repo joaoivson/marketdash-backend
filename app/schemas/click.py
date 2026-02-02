@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime, date
 from typing import Optional, Any
+from app.schemas.dataset import DatasetResponse
 
 
 class ClickRowBase(BaseModel):
@@ -17,3 +18,9 @@ class ClickRowResponse(ClickRowBase):
 
     class Config:
         from_attributes = True
+
+
+class ClickUploadResponse(DatasetResponse):
+    total_rows: int = Field(..., description="Total de linhas (grupos) processadas")
+    inserted_rows: int = Field(..., description="Número de linhas novas inseridas")
+    ignored_rows: int = Field(..., description="Número de linhas ignoradas (duplicadas)")

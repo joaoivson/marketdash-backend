@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
-from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse
+from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetUploadResponse
 from app.services.dataset_service import DatasetService
 
 router = APIRouter(tags=["datasets"])
@@ -21,7 +21,7 @@ class AdSpendPayload(BaseModel):
     sub_id1: str | None = Field(None, description="Sub_id1 opcional para associar o gasto")
 
 
-@router.post("/upload", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=DatasetUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_csv(
     file: UploadFile = File(...),
     current_user: User = Depends(require_active_subscription),
@@ -29,7 +29,17 @@ async def upload_csv(
 ):
     file_content = await file.read()
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    return service.upload_csv(file_content, file.filename, current_user.id)
+    dataset, metadata = service.upload_csv(file_content, file.filename, current_user.id)
+    
+    # Combinar o objeto dataset com os metadados para a resposta
+    return {
+        "id": dataset.id,
+        "filename": dataset.filename,
+        "user_id": dataset.user_id,
+        "type": dataset.type,
+        "uploaded_at": dataset.uploaded_at,
+        **metadata
+    }
 
 
 @router.post("/latest/ad_spend", response_model=AdSpendResponse)

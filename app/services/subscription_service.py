@@ -187,6 +187,7 @@ class SubscriptionService:
             "cakto_status": subscription.cakto_status,
             "cakto_offer_name": subscription.cakto_offer_name,
             "cakto_due_date": subscription.cakto_due_date.isoformat() if subscription.cakto_due_date else None,
+            "cakto_next_payment_date": subscription.cakto_due_date.isoformat() if subscription.cakto_due_date else None,
             "cakto_subscription_status": subscription.cakto_subscription_status,
             "cakto_payment_status": subscription.cakto_payment_status,
             "cakto_payment_method": subscription.cakto_payment_method,
