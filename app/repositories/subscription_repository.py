@@ -61,14 +61,10 @@ class SubscriptionRepository:
                 if cakto_due_date is not None:
                     subscription.cakto_due_date = cakto_due_date
                 
-                # Campos extras que podem não existir na tabela ainda
-                try:
-                    subscription.cakto_subscription_status = cakto_subscription_status
-                    subscription.cakto_payment_status = cakto_payment_status
-                    subscription.cakto_payment_method = cakto_payment_method
-                except Exception:
-                    # Se falhar aqui, ignoramos pois os campos podem estar faltando no banco
-                    pass
+                # Campos da Cakto
+                subscription.cakto_subscription_status = cakto_subscription_status
+                subscription.cakto_payment_status = cakto_payment_status
+                subscription.cakto_payment_method = cakto_payment_method
                     
             self.db.commit()
             self.db.refresh(subscription)

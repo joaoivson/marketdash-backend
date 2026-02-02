@@ -122,6 +122,7 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
             data.get("due_date")
             or subscription.get("next_payment_date")
             or subscription.get("due_date")
+            or data.get("paidAt")
         )
 
         offer_name = None
