@@ -9,7 +9,7 @@ import unicodedata
 logger = logging.getLogger(__name__)
 
 # Colunas alvo
-TARGET_COLUMNS = ["date", "product", "revenue", "cost", "commission"]
+TARGET_COLUMNS = ["date", "product", "revenue", "cost", "commission", "quantity"]
 
 # Mapeamento flexível de aliases (normalizados: minúsculo, sem acentos, sem espaços/pontuação)
 ALIASES = {
@@ -20,7 +20,8 @@ ALIASES = {
     "revenue": {
         "revenue", "receita", "valor", "valorvenda", "valor_receita", "valor_venda", "gross_value", "total",
         "valor_de_c", "valor_de_compra", "valor_de_compra_r", "valor_de_compra_rs", "valor_compra", "faturamento",
-        "preco_r", "preco_rs", "preco", "preco_r$", "preco_rs$", "preco$", "valor_de_compra_r_s", "valor_de_compra_r"
+        "preco_r", "preco_rs", "preco", "preco_r$", "preco_rs$", "preco$", "valor_de_compra_r_s", "valor_de_compra_r",
+        "valor_de_compra_r_s_r"
     },
     "cost": {"cost", "custo", "valorcusto", "custo_total", "valor_do_r", "valor_gasto", "valor_gasto_anuncios", "gasto_anuncios"},
     "commission": {
@@ -28,7 +29,8 @@ ALIASES = {
         "comissao_liquido", "comissao_liquido_do_afiliado_rs", "comissao_liquido_do_afiliado_r",
         "comissao_liquida", "comissao_liquida_do_afiliado_rs", "comissao_liquida_do_afiliado_r",
         "comissao_liquida_do_afiliado", "comissao_liquida_do_afiliado_r_s", "comissao_liquida_do_afiliado_r",
-        "comissao_liquida_do_afiliado_r",
+        "comissao_liquida_do_afiliado_r", "comissao_liquida_do_afiliado_r_s_r",
+        "comissa_o_liquida_do_afiliado_r", "comissa_o_la_quida_do_afiliado_r",
         # Shopee / afiliados variações
         "comissao_total_do_item_r", "comissao_total_do_item_rs", "comissao_total_do_item_r$",
         "comissao_total_do_pedido_r", "comissao_total_do_pedido_rs", "comissao_total_do_pedido_r$",
@@ -36,6 +38,7 @@ ALIASES = {
         "comissao_do_item_da_shopee_r", "comissao_do_item_da_marca_r", "comissao_do_vendedor_r",
         "comissao_shopee_r", "comissao_shopee_rs", "comissao_shopee_r$", "comissao_shopee_rs$"
     },
+    "quantity": {"quantity", "quantidade", "qtd", "item_count", "count", "vendas", "sales_count"},
 
     "status": {"status", "status_do_pedido", "status_pedido"},
     "category": {"categoria", "categoria_global", "categoria_global_l1"},
@@ -65,6 +68,8 @@ def find_column(df_cols: List[str], aliases: set) -> str:
     priority_order = [
         "comissao_liquida_do_afiliado_r", 
         "comissao_liquido_do_afiliado_r",
+        "comissa_o_liquida_do_afiliado_r", 
+        "comissa_o_la_quida_do_afiliado_r",
         "valor_de_compra_r",
         "valor_venda",
         "revenue",
@@ -206,13 +211,16 @@ class CSVService:
                 errors.append("Coluna de produto ausente; usando índice como produto.")
 
             # Numéricas
-            for target in ["revenue", "cost", "commission"]:
+            for target in ["revenue", "cost", "commission", "quantity"]:
                 if target in col_map:
                     numeric_series = CSVService._clean_numeric_series(df[col_map[target]])
                     out[target] = numeric_series.fillna(0)
                 else:
-                    out[target] = 0
-                    errors.append(f"Coluna '{target}' ausente; preenchendo com 0.")
+                    if target == "quantity":
+                        out[target] = 1 # Padrão para quantidade é 1
+                    else:
+                        out[target] = 0
+                        errors.append(f"Coluna '{target}' ausente; preenchendo com 0.")
 
             # Status, categoria, sub_id1, plataforma
             out["status"] = df[col_map["status"]].astype(str).str.strip() if "status" in col_map else None
@@ -241,6 +249,7 @@ class CSVService:
             out["revenue"] = out["revenue"].clip(lower=0)
             out["cost"] = out["cost"].clip(lower=0)
             out["commission"] = out["commission"].clip(lower=0)
+            out["quantity"] = out["quantity"].clip(lower=0)
 
             # Profit
             out["profit"] = out["revenue"] - out["cost"] - out["commission"]
