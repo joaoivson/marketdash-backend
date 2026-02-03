@@ -68,13 +68,16 @@ class DatasetService:
             else:
                 df[col] = 'nan'
 
-        # Garantir métricas numéricas
+        # Garantir métricas numéricas e tipos corretos
         metrics = ['revenue', 'commission', 'cost', 'quantity']
         for col in metrics:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                if col == 'quantity':
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(1).astype(int)
+                else:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             else:
-                df[col] = 0
+                df[col] = 1 if col == 'quantity' else 0
 
         # Agrupar
         df_grouped = df.groupby(group_cols, as_index=False).agg({
