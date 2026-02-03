@@ -17,12 +17,10 @@ class AdSpendRepository:
         return ad_spend
 
     def bulk_create(self, items: List[AdSpend]) -> List[AdSpend]:
-        for item in items:
-            self.db.add(item)
-            self.db.flush()
+        if not items:
+            return []
+        self.db.add_all(items)
         self.db.commit()
-        for item in items:
-            self.db.refresh(item)
         return items
 
     def list_by_user(

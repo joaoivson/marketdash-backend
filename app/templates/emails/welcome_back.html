@@ -4,147 +4,58 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bem-vindo de volta ao MarketDash</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background-color: #f4f4f4;
-            line-height: 1.6;
-        }
-        .email-container {
-            max-width: 600px;
-            margin: 0 auto;
-            background-color: #ffffff;
-        }
-        .email-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 40px 20px;
-            text-align: center;
-        }
-        .logo {
-            max-width: 200px;
-            height: auto;
-            margin-bottom: 20px;
-        }
-        .email-body {
-            padding: 40px 30px;
-            color: #333333;
-        }
-        .email-body h1 {
-            color: #667eea;
-            margin-top: 0;
-            font-size: 28px;
-            font-weight: 600;
-        }
-        .email-body p {
-            color: #666666;
-            font-size: 16px;
-            margin-bottom: 20px;
-        }
-        .cta-button {
-            display: inline-block;
-            padding: 16px 40px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #ffffff !important;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 16px;
-            margin: 30px 0;
-            text-align: center;
-            box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
-        }
-        .cta-button:hover {
-            background: linear-gradient(135deg, #5568d3 0%, #653a8f 100%);
-            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
-        }
-        .link-fallback {
-            margin-top: 20px;
-            padding: 20px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            font-size: 14px;
-            color: #666666;
-            word-break: break-all;
-        }
-        .email-footer {
-            padding: 30px;
-            background-color: #f8f9fa;
-            text-align: center;
-            color: #999999;
-            font-size: 14px;
-        }
-        .email-footer p {
-            margin: 5px 0;
-        }
-        .divider {
-            height: 1px;
-            background-color: #e0e0e0;
-            margin: 30px 0;
-        }
-        .success-badge {
-            background-color: #d4edda;
-            border-left: 4px solid #28a745;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 4px;
-            font-size: 14px;
-            color: #155724;
-        }
-    </style>
 </head>
-<body>
-    <div class="email-container">
-        <div class="email-header">
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f4f4f4; line-height: 1.6;">
+    <div class="email-container" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+        <div class="email-header" style="background-color: #667eea; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 20px; text-align: center;">
             {% if logo_base64 %}
-            <img src="{{ logo_base64 }}" alt="MarketDash" class="logo" />
+            <img src="{{ logo_base64 }}" alt="MarketDash" style="max-width: 200px; height: auto; margin-bottom: 20px;" />
             {% else %}
-            <h1 style="color: #ffffff; margin: 0;">MarketDash</h1>
+            <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">MarketDash</h1>
             {% endif %}
         </div>
         
-        <div class="email-body">
-            <h1>Bem-vindo de volta, {{ user_name }}!</h1>
+        <div class="email-body" style="padding: 40px 30px; color: #333333;">
+            <h1 style="color: #667eea; margin-top: 0; font-size: 28px; font-weight: 600;">Bem-vindo de volta, <strong>{{ user_name }}</strong>!</h1>
             
-            <div class="success-badge">
+            <div class="success-badge" style="background-color: #d4edda; border-left: 4px solid #28a745; padding: 15px; margin: 20px 0; border-radius: 4px; font-size: 14px; color: #155724;">
                 <strong>✅ Assinatura Reativada!</strong> Sua assinatura do MarketDash foi reativada com sucesso.
             </div>
             
-            <p>
+            <p style="color: #666666; font-size: 16px; margin-bottom: 20px;">
                 Estamos muito felizes em tê-lo de volta! Sua conta está ativa e você já pode acessar todas as funcionalidades da plataforma.
             </p>
             
-            <p>
+            <p style="color: #666666; font-size: 16px; margin-bottom: 20px;">
                 Use suas credenciais de login para acessar sua conta e começar a usar o MarketDash novamente.
             </p>
             
-            <div style="text-align: center;">
-                <a href="{{ login_url }}" class="cta-button">
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{{ login_url }}" style="display: inline-block; padding: 16px 40px; background-color: #667eea; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff !important; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; text-align: center; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);">
                     Acessar Minha Conta
                 </a>
             </div>
             
-            <div class="link-fallback">
+            <div class="link-fallback" style="margin-top: 20px; padding: 20px; background-color: #f8f9fa; border-radius: 8px; font-size: 14px; color: #666666; word-break: break-all;">
                 <strong>Não consegue clicar no botão?</strong><br>
                 Copie e cole este link no seu navegador:<br>
-                <a href="{{ login_url }}" style="color: #667eea;">{{ login_url }}</a>
+                <a href="{{ login_url }}" style="color: #667eea; text-decoration: none;">{{ login_url }}</a>
             </div>
             
-            <div class="divider"></div>
+            <div class="divider" style="height: 1px; background-color: #e0e0e0; margin: 30px 0;"></div>
             
-            <p style="margin-top: 30px;">
+            <p style="color: #666666; font-size: 16px; margin-top: 30px;">
                 Se tiver alguma dúvida ou precisar de ajuda, nossa equipe de suporte está pronta para ajudar.
             </p>
             
-            <p>
+            <p style="color: #666666; font-size: 16px;">
                 Esperamos que você aproveite ao máximo todas as funcionalidades do MarketDash!
             </p>
         </div>
         
-        <div class="email-footer">
-            <p><strong>MarketDash</strong></p>
-            <p>Plataforma de Análise de Dados</p>
+        <div class="email-footer" style="padding: 30px; background-color: #f8f9fa; text-align: center; color: #999999; font-size: 14px;">
+            <p style="margin: 5px 0;"><strong>MarketDash</strong></p>
+            <p style="margin: 5px 0;">Plataforma de Análise de Dados</p>
             <p style="margin-top: 20px;">
                 <a href="{{ frontend_url }}" style="color: #667eea; text-decoration: none;">{{ frontend_url }}</a>
             </p>
