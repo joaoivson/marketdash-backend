@@ -17,6 +17,8 @@ class DatasetRow(Base):
     product = Column(String, nullable=False, index=True)
     status = Column(String, nullable=True, index=True)
     sub_id1 = Column(String, nullable=True, index=True)
+    order_id = Column(String, nullable=True, index=True)
+    product_id = Column(String, nullable=True, index=True)
     
     # Métricas (Somadas no agrupamento)
     revenue = Column(Numeric(12, 2), nullable=True, default=0)

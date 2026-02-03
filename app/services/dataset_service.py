@@ -26,24 +26,13 @@ class DatasetService:
     @staticmethod
     def _generate_row_hash(row_data: dict, user_id: int) -> str:
         """
-        Gera um hash MD5 determinístico para o agrupamento.
-        Inclui user_id e normaliza a data para evitar conflitos globais.
+        Gera um hash MD5 determinístico para o registro de venda.
+        Utiliza user_id + order_id + product_id para garantir unicidade por item de pedido.
         """
-        # Normalizar a data para string ISO format
-        date_val = row_data.get("date")
-        if hasattr(date_val, 'isoformat'):
-            date_str = date_val.isoformat()
-        else:
-            date_str = str(date_val)
-
         components = [
             str(user_id),
-            date_str,
-            str(row_data.get("platform") or "nan").strip().lower(),
-            str(row_data.get("category") or "nan").strip().lower(),
-            str(row_data.get("product") or "nan").strip().lower(),
-            str(row_data.get("status") or "nan").strip().lower(),
-            str(row_data.get("sub_id1") or "nan").strip().lower(),
+            str(row_data.get("order_id") or "nan").strip().lower(),
+            str(row_data.get("product_id") or "nan").strip().lower(),
         ]
         row_str = "|".join(components)
         return hashlib.md5(row_str.encode()).hexdigest()
@@ -61,7 +50,7 @@ class DatasetService:
 
         # 1. Agrupamento e Consolidação (Groupby)
         # Tratar nulos para o groupby não descartar linhas
-        group_cols = ['date', 'platform', 'category', 'product', 'status', 'sub_id1']
+        group_cols = ['date', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
         for col in group_cols:
             if col in df.columns:
                 df[col] = df[col].fillna('nan')
@@ -87,14 +76,15 @@ class DatasetService:
             'quantity': 'sum'
         })
 
-        # 2. Deduplicação e Inserção
-        # Buscar hashes existentes (últimos 120 dias para datasets)
-        lookback_date = datetime.date.today() - datetime.timedelta(days=120)
-        existing_hashes = self.row_repo.get_existing_hashes(user_id, min_date=lookback_date)
+        # 2. Deduplicação e Inserção/Atualização
+        # Buscar hashes existentes para identificar o que é novo vs o que será atualizado
+        existing_hashes = self.row_repo.get_existing_hashes(user_id)
 
         dataset_rows_to_create = []
         rows_data = df_grouped.to_dict('records')
-        ignored_count = 0
+        updated_count = 0
+        inserted_count = 0
+        processed_hashes_in_file = set()
         total_rows = len(rows_data)
         
         for row_data in rows_data:
@@ -106,13 +96,18 @@ class DatasetService:
             
             row_hash = self._generate_row_hash(row_clean, user_id)
             
-            if row_hash in existing_hashes:
-                ignored_count += 1
+            # Se já processamos este hash NESTE arquivo, pulamos para evitar conflitos no mesmo lote
+            if row_hash in processed_hashes_in_file:
                 continue
-                
-            existing_hashes.add(row_hash)
             
-            # Adicionar aos dados que serão criados depois
+            processed_hashes_in_file.add(row_hash)
+
+            if row_hash in existing_hashes:
+                updated_count += 1
+            else:
+                inserted_count += 1
+                
+            # Adicionar aos dados que serão criados ou atualizados
             dataset_rows_to_create.append({
                 "clean_data": row_clean,
                 "metrics": {
@@ -124,14 +119,7 @@ class DatasetService:
                 "row_hash": row_hash
             })
 
-        # Bloqueio se tudo for duplicado
-        if total_rows > 0 and ignored_count == total_rows:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Todos os dados deste arquivo já foram importados anteriormente (100% duplicado)."
-            )
-
-        # Criar registro de dataset apenas se houver o que inserir
+        # Criar registro de dataset
         dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename))
 
         dataset_rows = []
@@ -150,6 +138,8 @@ class DatasetService:
                     category=row_clean["category"],
                     status=row_clean["status"],
                     sub_id1=row_clean["sub_id1"],
+                    order_id=row_clean["order_id"],
+                    product_id=row_clean["product_id"],
                     revenue=m["revenue"],
                     commission=m["commission"],
                     cost=m["cost"],
@@ -161,15 +151,15 @@ class DatasetService:
 
         if dataset_rows:
             self.row_repo.bulk_create(dataset_rows)
-            if ignored_count > 0:
-                logger.info(f"Deduplicação: {ignored_count} grupos de vendas foram ignorados pois já existem no banco.")
+            logger.info(f"Processamento concluído: {inserted_count} novas linhas, {updated_count} atualizadas.")
 
         self.dataset_repo.db.refresh(dataset)
         
         metadata = {
             "total_rows": total_rows,
-            "inserted_rows": len(dataset_rows),
-            "ignored_rows": ignored_count
+            "inserted_rows": inserted_count,
+            "updated_rows": updated_count,
+            "ignored_rows": total_rows - (inserted_count + updated_count)
         }
         
         return dataset, metadata
@@ -235,6 +225,8 @@ class DatasetService:
             "category": row.category,
             "status": row.status,
             "sub_id1": row.sub_id1,
+            "order_id": row.order_id,
+            "product_id": row.product_id,
             "revenue": serialize_value(row.revenue),
             "commission": serialize_value(row.commission),
             "cost": serialize_value(row.cost),
