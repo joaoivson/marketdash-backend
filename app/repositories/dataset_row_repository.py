@@ -30,6 +30,8 @@ class DatasetRowRepository:
                 'product': row.product,
                 'status': row.status,
                 'sub_id1': row.sub_id1,
+                'order_id': row.order_id,
+                'product_id': row.product_id,
                 'revenue': row.revenue,
                 'commission': row.commission,
                 'cost': row.cost,
@@ -39,11 +41,26 @@ class DatasetRowRepository:
             }
             mappings.append(mapping)
         
-        # Usar inserção com ON CONFLICT DO NOTHING via SQLAlchemy Core (PostgreSQL)
+        # Usar inserção com UPSERT (ON CONFLICT DO UPDATE) via SQLAlchemy Core (PostgreSQL)
         from sqlalchemy.dialects.postgresql import insert
         
         stmt = insert(DatasetRow).values(mappings)
-        stmt = stmt.on_conflict_do_nothing(index_elements=['row_hash'])
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['row_hash'],
+            set_={
+                'status': stmt.excluded.status,
+                'revenue': stmt.excluded.revenue,
+                'commission': stmt.excluded.commission,
+                'profit': stmt.excluded.profit,
+                'quantity': stmt.excluded.quantity,
+                'date': stmt.excluded.date,
+                'sub_id1': stmt.excluded.sub_id1,
+                'category': stmt.excluded.category,
+                'platform': stmt.excluded.platform,
+                'product': stmt.excluded.product,
+                'dataset_id': stmt.excluded.dataset_id,
+            }
+        )
         
         self.db.execute(stmt)
         self.db.commit()

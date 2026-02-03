@@ -34,6 +34,8 @@ class DatasetRowBase(BaseModel):
     category: Optional[str] = None
     status: Optional[str] = None
     sub_id1: Optional[str] = None
+    order_id: Optional[str] = None
+    product_id: Optional[str] = None
     revenue: float = 0
     commission: float = 0
     cost: float = 0

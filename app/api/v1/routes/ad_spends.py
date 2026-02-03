@@ -1,7 +1,6 @@
-from datetime import date
-from typing import List, Optional
+from datetime import date, datetime
+from typing import List, Optional, Union
 import io
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response

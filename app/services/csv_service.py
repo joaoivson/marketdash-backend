@@ -15,7 +15,9 @@ TARGET_COLUMNS = ["date", "product", "revenue", "cost", "commission", "quantity"
 ALIASES = {
     "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao", "tempo_dos_cliques"},
     "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido", "tempo_dos_cliques"},
-    "product": {"product", "produto", "idpedido", "id_do_pedido", "id_dopedido", "id_pagamento", "idpagamento", "produto_nome", "product_name", "nome_do_item"},
+    "product": {"product", "produto", "produto_nome", "product_name", "nome_do_item"},
+    "order_id": {"order_id", "idpedido", "id_do_pedido", "id_dopedido", "id_pagamento", "idpagamento", "numero_do_pedido", "id_do_pedido"},
+    "product_id": {"product_id", "id_do_item", "id_item", "item_id", "id_do_produto", "product_id"},
     "platform": {"platform", "plataforma", "canal", "channel", "origem", "origem_do_pedido"},
     "revenue": {
         "revenue", "receita", "valor", "valorvenda", "valor_receita", "valor_venda", "gross_value", "total",
@@ -222,11 +224,13 @@ class CSVService:
                         out[target] = 0
                         errors.append(f"Coluna '{target}' ausente; preenchendo com 0.")
 
-            # Status, categoria, sub_id1, plataforma
+            # Status, categoria, sub_id1, plataforma, order_id, product_id
             out["status"] = df[col_map["status"]].astype(str).str.strip() if "status" in col_map else None
             out["category"] = df[col_map["category"]].astype(str).str.strip() if "category" in col_map else None
             out["sub_id1"] = df[col_map["sub_id1"]].astype(str).str.strip() if "sub_id1" in col_map else None
             out["platform"] = df[col_map["platform"]].astype(str).str.strip() if "platform" in col_map else None
+            out["order_id"] = df[col_map["order_id"]].astype(str).str.strip() if "order_id" in col_map else None
+            out["product_id"] = df[col_map["product_id"]].astype(str).str.strip() if "product_id" in col_map else None
 
             # Limpezas - converter date para datetime primeiro
             out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
