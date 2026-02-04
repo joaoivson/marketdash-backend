@@ -4,8 +4,8 @@ from typing import Optional
 
 
 class UserBase(BaseModel):
-    name: str
-    cpf_cnpj: str
+    name: Optional[str] = None
+    cpf_cnpj: Optional[str] = None
     email: EmailStr
 
 
