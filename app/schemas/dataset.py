@@ -15,6 +15,9 @@ class DatasetResponse(DatasetBase):
     id: int
     user_id: int
     type: str
+    status: str
+    error_message: Optional[str] = None
+    row_count: int = 0
     uploaded_at: datetime
 
     class Config:
@@ -22,9 +25,15 @@ class DatasetResponse(DatasetBase):
 
 
 class DatasetUploadResponse(DatasetResponse):
-    total_rows: int = Field(..., description="Total de linhas (grupos) processadas")
-    inserted_rows: int = Field(..., description="Número de linhas novas inseridas")
-    ignored_rows: int = Field(..., description="Número de linhas ignoradas (duplicadas)")
+    total_rows: Optional[int] = Field(None, description="Total de linhas (grupos) processadas")
+    inserted_rows: Optional[int] = Field(None, description="Número de linhas novas inseridas")
+    ignored_rows: Optional[int] = Field(None, description="Número de linhas ignoradas (duplicadas)")
+
+
+class DatasetTaskResponse(BaseModel):
+    task_id: str
+    dataset_id: int
+    status: str
 
 
 class DatasetRowBase(BaseModel):

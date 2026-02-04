@@ -14,6 +14,7 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.services.csv_service import CSVService
 from app.utils.serialization import serialize_value, clean_number
+from app.tasks.csv_tasks import process_csv_task
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,11 @@ class DatasetService:
     def __init__(self, dataset_repo: DatasetRepository, row_repo: DatasetRowRepository):
         self.dataset_repo = dataset_repo
         self.row_repo = row_repo
+
+    def create_dataset(self, user_id: int, filename: str, type: str = "transaction") -> Dataset:
+        """Cria um registro de dataset com status pendente."""
+        dataset = Dataset(user_id=user_id, filename=filename, type=type, status="pending")
+        return self.dataset_repo.create(dataset)
 
     @staticmethod
     def _generate_row_hash(row_data: dict, user_id: int) -> str:
