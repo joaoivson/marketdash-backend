@@ -11,6 +11,9 @@ class Dataset(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename = Column(String, nullable=False)
     type = Column(String(32), default="transaction", index=True)  # transaction, click
+    status = Column(String(20), default="pending", index=True) # pending, processing, completed, error
+    error_message = Column(String, nullable=True)
+    row_count = Column(Integer, default=0)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships

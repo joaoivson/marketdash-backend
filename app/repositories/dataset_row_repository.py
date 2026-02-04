@@ -97,18 +97,7 @@ class DatasetRowRepository:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[DatasetRow]:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Buscando dataset_rows para user_id={user_id}, start_date={start_date}, end_date={end_date}, limit={limit}, offset={offset}")
-        
-        # Verificar total de registros no banco para este user_id
-        total_count = self.db.query(DatasetRow).filter(DatasetRow.user_id == user_id).count()
-        logger.info(f"Total de dataset_rows encontrados para user_id={user_id}: {total_count}")
-        
-        # Verificar todos os user_ids únicos no banco (para debug)
-        all_user_ids = self.db.query(DatasetRow.user_id).distinct().all()
-        logger.info(f"User IDs únicos encontrados no banco: {[uid[0] for uid in all_user_ids]}")
-        
+        """Lista linhas de datasets do usuário, sempre filtrando por user_id para garantir isolamento de dados."""
         query = self.db.query(DatasetRow).filter(DatasetRow.user_id == user_id)
         if start_date:
             query = query.filter(DatasetRow.date >= start_date)
@@ -118,9 +107,7 @@ class DatasetRowRepository:
         if limit:
             query = query.limit(limit).offset(offset)
         
-        results = query.all()
-        logger.info(f"Registros retornados após filtros: {len(results)}")
-        return results
+        return query.all()
 
     def get_existing_hashes(self, user_id: int, min_date: Optional[date] = None) -> set:
         """Retorna um conjunto de hashes existentes para um usuário (sem limite de data)."""

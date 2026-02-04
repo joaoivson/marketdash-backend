@@ -10,8 +10,9 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
-from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetUploadResponse
+from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetUploadResponse, DatasetTaskResponse
 from app.services.dataset_service import DatasetService
+from app.tasks.csv_tasks import process_csv_task
 
 router = APIRouter(tags=["datasets"])
 
@@ -21,25 +22,41 @@ class AdSpendPayload(BaseModel):
     sub_id1: str | None = Field(None, description="Sub_id1 opcional para associar o gasto")
 
 
-@router.post("/upload", response_model=DatasetUploadResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=DatasetTaskResponse, status_code=status.HTTP_201_CREATED)
 async def upload_csv(
     file: UploadFile = File(...),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
+        
     file_content = await file.read()
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    dataset, metadata = service.upload_csv(file_content, file.filename, current_user.id)
     
-    # Combinar o objeto dataset com os metadados para a resposta
+    # 1. Criar registro do dataset inicialmente como 'pending'
+    dataset = service.create_dataset(current_user.id, file.filename)
+    db.commit() # Garantir que o ID seja gerado
+    db.refresh(dataset)
+    
+    # 2. Iniciar a tarefa de processamento em background
+    task = process_csv_task.delay(dataset.id, current_user.id, file_content, file.filename)
+    
     return {
-        "id": dataset.id,
-        "filename": dataset.filename,
-        "user_id": dataset.user_id,
-        "type": dataset.type,
-        "uploaded_at": dataset.uploaded_at,
-        **metadata
+        "task_id": task.id,
+        "dataset_id": dataset.id,
+        "status": "pending"
     }
+
+
+@router.get("/{dataset_id}/status", response_model=DatasetResponse)
+def get_dataset_status(
+    dataset_id: int,
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
+    return service.get_dataset(dataset_id, current_user.id)
 
 
 @router.post("/latest/ad_spend", response_model=AdSpendResponse)
