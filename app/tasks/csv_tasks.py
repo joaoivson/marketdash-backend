@@ -22,9 +22,15 @@ def process_csv_task(self, dataset_id: int, user_id: int, file_content: bytes, f
         # 1. Validate and clean CSV using existing CSVService
         df, errors = CSVService.validate_csv(file_content, filename)
         
-        if not errors:
+        # We only stop if df is None (critical error)
+        # Low-level warnings (missing columns prefilled with 0) shouldn't block ingestion
+        if df is not None:
             # 2. Convert DataFrame to DatasetRow objects
             rows = []
+            
+            # List of valid columns to avoid TypeError (e.g., 'time', 'mes_ano' are not in the model)
+            valid_columns = {c.name for c in DatasetRow.__table__.columns if not c.primary_key}
+
             for _, row_data in df.iterrows():
                 row_dict = row_data.to_dict()
                 
@@ -32,10 +38,13 @@ def process_csv_task(self, dataset_id: int, user_id: int, file_content: bytes, f
                 if isinstance(row_dict.get('date'), str):
                     row_dict['date'] = pd.to_datetime(row_dict['date']).date()
                 
+                # Filter out fields not in the model
+                filtered_row = {k: v for k, v in row_dict.items() if k in valid_columns}
+                
                 rows.append(DatasetRow(
                     dataset_id=dataset_id,
                     user_id=user_id,
-                    **row_dict
+                    **filtered_row
                 ))
             
             # 3. Bulk insert rows using repository

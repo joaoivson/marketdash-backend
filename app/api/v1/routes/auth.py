@@ -12,7 +12,8 @@ from app.schemas.user import (
     SetPasswordRequest, 
     SetPasswordResponse,
     ForgotPasswordRequest,
-    ForgotPasswordResponse
+    ForgotPasswordResponse,
+    LoginRequest
 )
 from app.services.auth_service import AuthService
 from app.repositories.user_repository import UserRepository
@@ -27,11 +28,10 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenWithUser)
 def login(
-    email: str = Form(...),
-    password: str = Form(...),
+    request: LoginRequest,
     db: Session = Depends(get_db),
 ):
-    return AuthService(UserRepository(db)).login(email, password)
+    return AuthService(UserRepository(db)).login(request.email, request.password)
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse, status_code=status.HTTP_200_OK)
@@ -42,12 +42,13 @@ def forgot_password(
     """
     Solicita reset de senha. Envia email com link para redefinir senha.
     
+
     Por segurança, sempre retorna sucesso mesmo se o email não existir,
     para prevenir enumeração de emails cadastrados.
     """
     auth_service = AuthService(UserRepository(db))
     auth_service.forgot_password(request.email)
-    
+
     return ForgotPasswordResponse(
         message="Se o email estiver cadastrado, você receberá um link para redefinir sua senha."
     )
