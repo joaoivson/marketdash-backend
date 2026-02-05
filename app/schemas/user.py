@@ -58,3 +58,8 @@ class ForgotPasswordRequest(BaseModel):
 class ForgotPasswordResponse(BaseModel):
     message: str
 
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+

@@ -3,8 +3,9 @@ import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from supabase import create_client, Client
 
-from app.core.security import decode_access_token
 from app.core.config import settings
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
@@ -15,105 +16,59 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
+# Initialize Supabase client
+supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
 ):
     if credentials is None:
-        logger.warning("Token de autenticação não fornecido - credentials é None")
+        logger.warning("Token de autenticação não fornecido")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token de autenticação não fornecido",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
     token = credentials.credentials
-    if not token or not token.strip():
-        logger.warning(f"Token vazio ou inválido - token: '{token}', type: {type(token)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido ou expirado",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
     
-    # Log detalhado para debug (apenas primeiros e últimos caracteres por segurança)
-    token_preview = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else token
-    logger.info(f"Validando token: {token_preview} (length: {len(token)})")
-    
-    # Verificar se o token começa com "Bearer " e remover se necessário
-    if token.startswith("Bearer "):
-        logger.warning("Token contém prefixo 'Bearer ' - removendo")
-        token = token[7:].strip()
-    
-    payload = decode_access_token(token)
-    if payload is None:
-        logger.error(f"Falha ao decodificar token (token length: {len(token)}, preview: {token_preview})")
-        # Tentar decodificar sem verificação para ver o erro específico
-        try:
-            from jose import jwt
-            from app.core.config import settings
-            # Tentar decodificar sem verificar para ver o erro (precisa passar key mesmo sem verificar)
-            unverified = jwt.decode(token, key="", options={"verify_signature": False, "verify_sub": False})
-            logger.error(f"Token decodificado sem verificação: {unverified}")
-            logger.error(f"Token expirado? exp={unverified.get('exp')}, agora={__import__('time').time()}")
-            logger.error(f"Sub no token: {unverified.get('sub')} (tipo: {type(unverified.get('sub'))})")
-        except Exception as e:
-            logger.error(f"Erro ao decodificar token sem verificação: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido ou expirado",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    logger.info(f"Token decodificado com sucesso. Payload: {list(payload.keys())}")
-    
-    user_id_raw = payload.get("sub")
-    if user_id_raw is None:
-        logger.error(f"Token não contém 'sub' (user_id). Payload keys: {list(payload.keys())}, payload: {payload}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # Validar token com Supabase Auth
     try:
-        user_id = int(user_id_raw)
-        logger.info(f"User ID extraído do token: {user_id}")
-    except (ValueError, TypeError) as e:
-        logger.error(f"Erro ao converter user_id do token: {user_id_raw} (tipo: {type(user_id_raw)}). Erro: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user = UserRepository(db).get_by_id(user_id)
+        user_supabase = supabase.auth.get_user(token)
+        if not user_supabase or not user_supabase.user:
+            raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+        
+        email = user_supabase.user.email
+    except Exception as e:
+        logger.error(f"Erro ao validar token no Supabase: {e}")
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+
+    # Buscar usuário no banco local pelo email (Link por Email)
+    user = UserRepository(db).get_by_email(email)
+    
     if user is None:
-        logger.error(f"Usuário com ID {user_id} não encontrado no banco de dados")
+        logger.error(f"Usuário com email {email} não encontrado no banco local")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuário não encontrado",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Usuário não sincronizado com o dashboard",
         )
+    
     if not user.is_active:
-        logger.warning(f"Usuário {user_id} está inativo")
+        logger.warning(f"Usuário {user.id} está inativo")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário inativo")
-    
-    logger.info(f"Autenticação bem-sucedida para usuário {user_id} ({user.email})")
-    
-    # Log adicional para verificar se há dados no banco para este usuário
-    from app.models.dataset_row import DatasetRow
-    from app.models.ad_spend import AdSpend
-    
-    total_rows = db.query(DatasetRow).filter(DatasetRow.user_id == user_id).count()
-    total_ad_spends = db.query(AdSpend).filter(AdSpend.user_id == user_id).count()
-    
-    logger.info(f"Estatísticas do usuário {user_id}: {total_rows} dataset_rows, {total_ad_spends} ad_spends")
-    
-    # Verificar todos os user_ids únicos no banco (para debug)
-    all_row_user_ids = [uid[0] for uid in db.query(DatasetRow.user_id).distinct().all()]
-    all_ad_spend_user_ids = [uid[0] for uid in db.query(AdSpend.user_id).distinct().all()]
-    logger.info(f"User IDs únicos no banco - dataset_rows: {all_row_user_ids}, ad_spends: {all_ad_spend_user_ids}")
+
+    # --- CRÍTICO PARA SEGURANÇA ---
+    # Injetar o ID do usuário na sessão do PostgreSQL para ativar o RLS
+    try:
+        db.execute(text(f"SET LOCAL app.current_user_id = '{user.id}';"))
+    except Exception as e:
+        logger.error(f"Falha ao configurar contexto RLS para o usuário {user.id}: {e}")
+        # Se falhar a configuração do RLS, bloqueamos o request por segurança
+        raise HTTPException(status_code=500, detail="Erro interno de segurança")
+
+    logger.info(f"Autenticação Supabase OK: {user.email} (ID: {user.id})")
     
     return user
 
