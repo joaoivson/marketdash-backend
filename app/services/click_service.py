@@ -110,6 +110,9 @@ class ClickService:
 
         if click_rows:
             self.click_repo.bulk_create(click_rows)
+            dataset.row_count = len(click_rows)
+            dataset.status = "completed"
+            self.dataset_repo.db.commit()
             if ignored_count > 0:
                 logger.info(f"Deduplicação: {ignored_count} grupos de cliques ignorados para o usuário {user_id}.")
 

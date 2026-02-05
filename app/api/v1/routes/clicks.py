@@ -33,6 +33,8 @@ async def upload_click_csv(
         "filename": dataset.filename,
         "user_id": dataset.user_id,
         "type": dataset.type,
+        "status": dataset.status,
+        "row_count": dataset.row_count,
         "uploaded_at": dataset.uploaded_at,
         **metadata
     }
