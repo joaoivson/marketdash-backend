@@ -16,8 +16,29 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
-# Initialize Supabase client
-supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+# Initialize Supabase client lazily to avoid crash during import if credentials are missing
+_supabase: Optional[Client] = None
+
+
+def get_supabase_client() -> Client:
+    """Gets or initializes the Supabase client."""
+    global _supabase
+    if _supabase is None:
+        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+            logger.error("SUPABASE_URL ou SUPABASE_KEY não configurados")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Configuração do Supabase ausente no servidor"
+            )
+        try:
+            _supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        except Exception as e:
+            logger.error(f"Falha ao inicializar cliente Supabase: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Erro ao conectar com serviço de autenticação"
+            )
+    return _supabase
 
 
 def get_current_user(
@@ -36,6 +57,7 @@ def get_current_user(
     
     # Validar token com Supabase Auth
     try:
+        supabase = get_supabase_client()
         user_supabase = supabase.auth.get_user(token)
         if not user_supabase or not user_supabase.user:
             raise HTTPException(status_code=401, detail="Token inválido ou expirado")
