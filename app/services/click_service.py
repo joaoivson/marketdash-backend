@@ -126,6 +126,75 @@ class ClickService:
         
         return dataset, metadata
 
+    def process_click_csv(self, dataset_id: int, user_id: int, file_content: bytes, filename: str) -> None:
+        """
+        Processa CSV de cliques para um dataset já criado (uso pela task Celery).
+        Atualiza dataset.status e dataset.row_count; em erro de validação ou 100% duplicado define status='error'.
+        """
+        dataset = self.dataset_repo.get_by_id(dataset_id, user_id)
+        if not dataset:
+            logger.warning(f"process_click_csv: dataset {dataset_id} not found for user {user_id}")
+            return
+
+        df, errors = CSVService.validate_click_csv(file_content, filename)
+        if df is None:
+            dataset.status = "error"
+            dataset.error_message = "; ".join(errors[:10]) if errors else "Erro ao validar CSV de cliques"
+            self.dataset_repo.db.commit()
+            logger.error(f"Validation errors for click dataset {dataset_id}: {errors}")
+            return
+
+        df['sub_id'] = df['sub_id'].fillna('nan')
+        df_grouped = df.groupby(['date', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
+
+        lookback_date = datetime.date.today() - datetime.timedelta(days=90)
+        existing_hashes = self.click_repo.get_existing_hashes(user_id, min_date=lookback_date)
+
+        rows_to_create = []
+        rows_data = df_grouped.to_dict('records')
+        ignored_count = 0
+        total_rows = len(rows_data)
+
+        for row_data in rows_data:
+            sub_id = None if row_data["sub_id"] == 'nan' else row_data["sub_id"]
+            row_data_clean = {**row_data, "sub_id": sub_id}
+            row_hash = self._generate_click_hash(row_data_clean, user_id)
+
+            if row_hash in existing_hashes:
+                ignored_count += 1
+                continue
+            existing_hashes.add(row_hash)
+            rows_to_create.append({**row_data_clean, "row_hash": row_hash})
+
+        if total_rows > 0 and ignored_count == total_rows:
+            dataset.status = "error"
+            dataset.error_message = "Todos os cliques deste arquivo já foram importados anteriormente (100% duplicado)."
+            self.dataset_repo.db.commit()
+            logger.info(f"Click dataset {dataset_id}: 100% duplicado, marcado como error.")
+            return
+
+        click_rows = []
+        for item in rows_to_create:
+            click_rows.append(
+                ClickRow(
+                    dataset_id=dataset.id,
+                    user_id=user_id,
+                    date=item["date"],
+                    channel=item["channel"],
+                    sub_id=item["sub_id"],
+                    clicks=int(item["clicks"]),
+                    row_hash=item["row_hash"],
+                )
+            )
+
+        if click_rows:
+            self.click_repo.bulk_create(click_rows)
+            dataset.row_count = len(click_rows)
+            dataset.status = "completed"
+            self.dataset_repo.db.commit()
+            if ignored_count > 0:
+                logger.info(f"Deduplicação: {ignored_count} grupos de cliques ignorados para o usuário {user_id}.")
+
     def list_latest_clicks(
         self,
         user_id: int,

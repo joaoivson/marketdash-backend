@@ -27,6 +27,7 @@ class DatasetResponse(DatasetBase):
 class DatasetUploadResponse(DatasetResponse):
     total_rows: Optional[int] = Field(None, description="Total de linhas (grupos) processadas")
     inserted_rows: Optional[int] = Field(None, description="Número de linhas novas inseridas")
+    updated_rows: Optional[int] = Field(None, description="Número de linhas atualizadas (upsert)")
     ignored_rows: Optional[int] = Field(None, description="Número de linhas ignoradas (duplicadas)")
 
 

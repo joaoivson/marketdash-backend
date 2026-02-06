@@ -1,16 +1,21 @@
+import base64
 from datetime import date
+from pathlib import Path
 from typing import List, Optional
+from uuid import uuid4
 
+import redis.exceptions
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user, require_active_subscription
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
-from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetUploadResponse, DatasetTaskResponse
+from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetTaskResponse
 from app.services.dataset_service import DatasetService
 from app.tasks.csv_tasks import process_csv_task
 
@@ -28,24 +33,72 @@ async def upload_csv(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
+    """Processa CSV de comissão/vendas. Se PROCESS_CSV_SYNC=true, processa na requisição e retorna status completed; senão enfileira via Celery (pending)."""
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
-        
-    file_content = await file.read()
+
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    
-    # 1. Criar registro do dataset inicialmente como 'pending'
     dataset = service.create_dataset(current_user.id, file.filename)
-    db.commit() # Garantir que o ID seja gerado
+    db.commit()
     db.refresh(dataset)
-    
-    # 2. Iniciar a tarefa de processamento em background
-    task = process_csv_task.delay(dataset.id, current_user.id, file_content, file.filename)
-    
+
+    if settings.PROCESS_CSV_SYNC:
+        # Processamento síncrono: sem Celery; dados disponíveis logo após o upload (útil quando não há worker).
+        if settings.UPLOAD_TEMP_DIR:
+            path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                while chunk := await file.read(1024 * 1024):
+                    f.write(chunk)
+            file_content = path.read_bytes()
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        else:
+            file_content = await file.read()
+        service.process_commission_csv(dataset.id, current_user.id, file_content, file.filename)
+        db.refresh(dataset)
+        return {
+            "task_id": f"sync-{dataset.id}",
+            "dataset_id": dataset.id,
+            "status": "completed",
+        }
+
+    try:
+        if settings.UPLOAD_TEMP_DIR:
+            path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                while chunk := await file.read(1024 * 1024):
+                    f.write(chunk)
+            task = process_csv_task.delay(
+                dataset.id, current_user.id, file.filename,
+                file_path=str(path), file_content_b64=None,
+            )
+        else:
+            file_content = await file.read()
+            task = process_csv_task.delay(
+                dataset.id, current_user.id, file.filename,
+                file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+            )
+    except redis.exceptions.AuthenticationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis: autenticação inválida. Configure REDIS_PASSWORD no ambiente com a senha do Redis, ou use REDIS_URL no formato redis://:SENHA@host:6379/0.",
+        )
+    except RuntimeError as e:
+        if "reconnect" in str(e).lower() and "redis" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Redis: falha de conexão/autenticação. Verifique REDIS_URL e REDIS_PASSWORD no ambiente e reinicie a aplicação.",
+            )
+        raise
+
     return {
         "task_id": task.id,
         "dataset_id": dataset.id,
-        "status": "pending"
+        "status": "pending",
     }
 
 

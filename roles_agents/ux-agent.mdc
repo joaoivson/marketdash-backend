@@ -1,7 +1,6 @@
 ---
-applyToFiles: ["**/features/**/pages/**/*.tsx", "**/components/**/*.tsx"]
+alwaysApply: true
 ---
-
 # UX Agent - MarketDash
 
 ## Overview

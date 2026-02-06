@@ -1,7 +1,6 @@
 ---
-applyIntelligently: true
+alwaysApply: true
 ---
-
 # Refatorador Agent - MarketDash
 
 ## Overview

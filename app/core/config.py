@@ -27,12 +27,25 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     CACHE_TTL_SECONDS: int = 300
 
+    # Upload de arquivos grandes (ex.: CSV 500k+ linhas)
+    # Se definido, o arquivo é gravado em disco e apenas o caminho é enviado ao Celery (evita Redis com payload gigante).
+    # API e worker precisam enxergar o mesmo diretório (ex.: volume compartilhado). Ex.: /app/uploads
+    UPLOAD_TEMP_DIR: Optional[str] = None
+
+    # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
+    # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
+    PROCESS_CSV_SYNC: bool = False
+
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
         if self.REDIS_PASSWORD and self.REDIS_URL:
+            # Se a URL já contiver senha (ex: :password@...), não fazemos nada
+            if "@" in self.REDIS_URL:
+                return self
+                
             import urllib.parse
             # Se a URL não tem senha mas temos REDIS_PASSWORD, injetamos
-            if "@" not in self.REDIS_URL and "redis://" in self.REDIS_URL:
+            if "redis://" in self.REDIS_URL:
                 # URL Encode a senha para garantir que caracteres especiais não quebrem a URL
                 encoded_pwd = urllib.parse.quote_plus(self.REDIS_PASSWORD)
                 # Formato: redis://:PASSWORD@HOST:PORT/DB

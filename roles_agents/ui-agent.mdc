@@ -1,7 +1,6 @@
 ---
-applyToFiles: ["**/components/**/*.tsx", "**/features/**/pages/**/*.tsx"]
+alwaysApply: true
 ---
-
 # UI Agent - MarketDash
 
 ## Overview

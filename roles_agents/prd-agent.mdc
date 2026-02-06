@@ -1,7 +1,6 @@
 ---
-applyManually: true
+alwaysApply: true
 ---
-
 # PRD Agent - MarketDash
 
 ## Overview
