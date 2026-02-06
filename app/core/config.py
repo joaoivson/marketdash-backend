@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # API e worker precisam enxergar o mesmo diretório (ex.: volume compartilhado). Ex.: /app/uploads
     UPLOAD_TEMP_DIR: Optional[str] = None
 
+    # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
+    # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
+    PROCESS_CSV_SYNC: bool = False
+
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
         if self.REDIS_PASSWORD and self.REDIS_URL:
