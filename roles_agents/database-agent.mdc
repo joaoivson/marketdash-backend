@@ -1,7 +1,6 @@
 ---
-applyIntelligently: true
+alwaysApply: true
 ---
-
 # Database Agent - MarketDash
 
 ## Overview

@@ -1,7 +1,6 @@
 ---
-applyIntelligently: true
+alwaysApply: true
 ---
-
 # Fullstack Agent - MarketDash
 
 ## Overview

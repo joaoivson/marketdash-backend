@@ -14,7 +14,6 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.services.csv_service import CSVService
 from app.utils.serialization import serialize_value, clean_number
-from app.tasks.csv_tasks import process_csv_task
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,117 @@ class DatasetService:
         ]
         row_str = "|".join(components)
         return hashlib.md5(row_str.encode()).hexdigest()
+
+    def process_commission_csv(self, dataset_id: int, user_id: int, file_content: bytes, filename: str) -> None:
+        """
+        Processa CSV de comissão para um dataset já criado (uso pela task Celery).
+        Atualiza dataset.status e dataset.row_count; em erro de validação define status='error'.
+        """
+        dataset = self.dataset_repo.get_by_id(dataset_id, user_id)
+        if not dataset:
+            logger.warning(f"process_commission_csv: dataset {dataset_id} not found for user {user_id}")
+            return
+
+        df, errors = CSVService.validate_csv(file_content, filename)
+        if df is None:
+            dataset.status = "error"
+            dataset.error_message = "; ".join(errors[:10]) if errors else "Erro ao validar CSV"
+            self.dataset_repo.db.commit()
+            logger.error(f"Validation errors for dataset {dataset_id}: {errors}")
+            return
+
+        # 1. Agrupamento e Consolidação (Groupby)
+        group_cols = ['date', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        for col in group_cols:
+            if col in df.columns:
+                df[col] = df[col].fillna('nan')
+            else:
+                df[col] = 'nan'
+
+        metrics = ['revenue', 'commission', 'cost', 'quantity']
+        for col in metrics:
+            if col in df.columns:
+                if col == 'quantity':
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(1).astype(int)
+                else:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            else:
+                df[col] = 1 if col == 'quantity' else 0
+
+        df_grouped = df.groupby(group_cols, as_index=False).agg({
+            'revenue': 'sum',
+            'commission': 'sum',
+            'cost': 'sum',
+            'quantity': 'sum'
+        })
+
+        # 2. Deduplicação e Inserção/Atualização
+        existing_hashes = self.row_repo.get_existing_hashes(user_id)
+        dataset_rows_to_create = []
+        rows_data = df_grouped.to_dict('records')
+        inserted_count = 0
+        updated_count = 0
+        processed_hashes_in_file = set()
+
+        for row_data in rows_data:
+            row_clean = {}
+            for col in group_cols:
+                val = row_data[col]
+                row_clean[col] = None if val == 'nan' else val
+
+            row_hash = self._generate_row_hash(row_clean, user_id)
+            if row_hash in processed_hashes_in_file:
+                continue
+            processed_hashes_in_file.add(row_hash)
+
+            if row_hash in existing_hashes:
+                updated_count += 1
+            else:
+                inserted_count += 1
+
+            dataset_rows_to_create.append({
+                "clean_data": row_clean,
+                "metrics": {
+                    "revenue": float(row_data['revenue']),
+                    "commission": float(row_data['commission']),
+                    "cost": float(row_data['cost']),
+                    "quantity": int(row_data["quantity"])
+                },
+                "row_hash": row_hash
+            })
+
+        dataset_rows = []
+        for item in dataset_rows_to_create:
+            row_clean = item["clean_data"]
+            m = item["metrics"]
+            profit = m["revenue"] - m["commission"] - m["cost"]
+            dataset_rows.append(
+                DatasetRow(
+                    dataset_id=dataset.id,
+                    user_id=user_id,
+                    date=row_clean["date"],
+                    product=row_clean["product"],
+                    platform=row_clean["platform"],
+                    category=row_clean["category"],
+                    status=row_clean["status"],
+                    sub_id1=row_clean["sub_id1"],
+                    order_id=row_clean["order_id"],
+                    product_id=row_clean["product_id"],
+                    revenue=m["revenue"],
+                    commission=m["commission"],
+                    cost=m["cost"],
+                    profit=profit,
+                    quantity=m["quantity"],
+                    row_hash=item["row_hash"],
+                )
+            )
+
+        if dataset_rows:
+            self.row_repo.bulk_create(dataset_rows)
+            dataset.row_count = len(dataset_rows)
+            dataset.status = "completed"
+            self.dataset_repo.db.commit()
+            logger.info(f"Processamento concluído: {inserted_count} novas linhas, {updated_count} atualizadas para dataset {dataset_id}.")
 
     def upload_csv(self, file_content: bytes, filename: str, user_id: int) -> tuple[Dataset, dict]:
         if not filename.endswith(".csv"):
@@ -157,6 +267,9 @@ class DatasetService:
 
         if dataset_rows:
             self.row_repo.bulk_create(dataset_rows)
+            dataset.row_count = len(dataset_rows)
+            dataset.status = "completed"
+            self.dataset_repo.db.commit()
             logger.info(f"Processamento concluído: {inserted_count} novas linhas, {updated_count} atualizadas.")
 
         self.dataset_repo.db.refresh(dataset)

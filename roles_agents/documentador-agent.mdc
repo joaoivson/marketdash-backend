@@ -1,7 +1,6 @@
 ---
-applyIntelligently: true
+alwaysApply: true
 ---
-
 # Documentador Agent - MarketDash
 
 ## Overview

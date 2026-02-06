@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
-from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetUploadResponse, DatasetTaskResponse
+from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetTaskResponse
 from app.services.dataset_service import DatasetService
 from app.tasks.csv_tasks import process_csv_task
 
@@ -28,24 +28,22 @@ async def upload_csv(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
+    """Enfileira processamento de CSV de comissão/vendas via Celery; retorna task_id e dataset_id para polling de status."""
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
-        
+
     file_content = await file.read()
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
-    
-    # 1. Criar registro do dataset inicialmente como 'pending'
     dataset = service.create_dataset(current_user.id, file.filename)
-    db.commit() # Garantir que o ID seja gerado
+    db.commit()
     db.refresh(dataset)
-    
-    # 2. Iniciar a tarefa de processamento em background
+
     task = process_csv_task.delay(dataset.id, current_user.id, file_content, file.filename)
-    
+
     return {
         "task_id": task.id,
         "dataset_id": dataset.id,
-        "status": "pending"
+        "status": "pending",
     }
 
 

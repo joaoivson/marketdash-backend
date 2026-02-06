@@ -1,42 +1,46 @@
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import require_active_subscription
 from app.db.session import get_db
+from app.models.dataset import Dataset
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.click_row_repository import ClickRowRepository
-from app.schemas.dataset import DatasetResponse
-from app.schemas.click import ClickRowResponse, ClickUploadResponse
+from app.schemas.click import ClickRowResponse, ClickTaskResponse
 from app.services.click_service import ClickService
+from app.tasks.csv_tasks import process_click_csv_task
 
 router = APIRouter(tags=["clicks"])
 
 
-@router.post("/upload", response_model=ClickUploadResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=ClickTaskResponse, status_code=status.HTTP_201_CREATED)
 async def upload_click_csv(
     file: UploadFile = File(...),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Realiza o upload de um CSV de cliques e processa os dados."""
+    """Enfileira processamento de CSV de cliques via Celery; retorna task_id e dataset_id para polling em GET /datasets/{dataset_id}/status."""
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
+
     file_content = await file.read()
-    service = ClickService(DatasetRepository(db), ClickRowRepository(db))
-    dataset, metadata = service.upload_click_csv(file_content, file.filename, current_user.id)
-    
-    # Combinar o objeto dataset com os metadados para a resposta
+    dataset_repo = DatasetRepository(db)
+    dataset = dataset_repo.create(
+        Dataset(user_id=current_user.id, filename=file.filename, type="click", status="pending")
+    )
+    db.commit()
+    db.refresh(dataset)
+
+    task = process_click_csv_task.delay(dataset.id, current_user.id, file_content, file.filename)
+
     return {
-        "id": dataset.id,
-        "filename": dataset.filename,
-        "user_id": dataset.user_id,
-        "type": dataset.type,
-        "status": dataset.status,
-        "row_count": dataset.row_count,
-        "uploaded_at": dataset.uploaded_at,
-        **metadata
+        "task_id": task.id,
+        "dataset_id": dataset.id,
+        "status": "pending",
     }
 
 
