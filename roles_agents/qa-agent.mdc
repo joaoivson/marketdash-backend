@@ -1,7 +1,6 @@
 ---
-applyIntelligently: true
+alwaysApply: true
 ---
-
 # QA Agent - MarketDash
 
 ## Overview

@@ -1,7 +1,6 @@
 ---
-applyIntelligently: true
+alwaysApply: true
 ---
-
 # Backend Agent - MarketDash
 
 ## Overview

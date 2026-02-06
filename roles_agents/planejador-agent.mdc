@@ -1,7 +1,6 @@
 ---
-applyManually: true
+alwaysApply: true
 ---
-
 # Planejador Agent - MarketDash
 
 ## Overview
