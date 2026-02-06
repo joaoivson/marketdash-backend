@@ -1,11 +1,15 @@
+import base64
 from datetime import date
+from pathlib import Path
 from typing import List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user, require_active_subscription
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
@@ -32,13 +36,28 @@ async def upload_csv(
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
-    file_content = await file.read()
     service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
     dataset = service.create_dataset(current_user.id, file.filename)
     db.commit()
     db.refresh(dataset)
 
-    task = process_csv_task.delay(dataset.id, current_user.id, file_content, file.filename)
+    if settings.UPLOAD_TEMP_DIR:
+        # Arquivo grande: grava em disco e envia só o caminho ao Celery (evita payload gigante no Redis).
+        path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                f.write(chunk)
+        task = process_csv_task.delay(
+            dataset.id, current_user.id, file.filename,
+            file_path=str(path), file_content_b64=None,
+        )
+    else:
+        file_content = await file.read()
+        task = process_csv_task.delay(
+            dataset.id, current_user.id, file.filename,
+            file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+        )
 
     return {
         "task_id": task.id,
