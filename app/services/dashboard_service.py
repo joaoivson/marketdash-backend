@@ -3,6 +3,7 @@ from sqlalchemy import func, and_, or_
 from datetime import date, datetime
 from typing import Optional, List
 from decimal import Decimal
+import hashlib
 
 from app.models.dataset_row import DatasetRow
 from app.schemas.dashboard import (
@@ -12,6 +13,7 @@ from app.schemas.dashboard import (
     ProductAggregation,
     DashboardResponse
 )
+from app.core.cache import cache_get, cache_set, cache_delete_prefix
 
 
 class DashboardService:
@@ -161,13 +163,34 @@ class DashboardService:
         filters: DashboardFilters
     ) -> DashboardResponse:
         """Get complete dashboard data with KPIs and aggregations."""
+        # Generate cache key based on user_id and filters
+        filters_dict = filters.dict(exclude_none=True)
+        filters_hash = hashlib.md5(str(sorted(filters_dict.items())).encode()).hexdigest()
+        cache_key = f"dashboard:user:{user_id}:filters:{filters_hash}"
+        
+        # Try to get from cache
+        cached_data = cache_get(cache_key)
+        if cached_data:
+            return DashboardResponse(**cached_data)
+        
+        # Cache miss - query database
         kpis = DashboardService.get_kpis(db, user_id, filters)
         period_aggregations = DashboardService.get_period_aggregations(db, user_id, filters)
         product_aggregations = DashboardService.get_product_aggregations(db, user_id, filters)
         
-        return DashboardResponse(
+        response = DashboardResponse(
             kpis=kpis,
             period_aggregations=period_aggregations,
             product_aggregations=product_aggregations
         )
+        
+        # Cache the response (5 minutes TTL)
+        cache_set(cache_key, response.dict(), ttl=300)
+        
+        return response
+    
+    @staticmethod
+    def invalidate_user_cache(user_id: int) -> None:
+        """Invalidate all cached dashboard data for a user."""
+        cache_delete_prefix(f"dashboard:user:{user_id}:")
 

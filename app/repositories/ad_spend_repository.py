@@ -31,18 +31,7 @@ class AdSpendRepository:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[AdSpend]:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Buscando ad_spends para user_id={user_id}, start_date={start_date}, end_date={end_date}, limit={limit}, offset={offset}")
-        
-        # Verificar total de registros no banco para este user_id
-        total_count = self.db.query(AdSpend).filter(AdSpend.user_id == user_id).count()
-        logger.info(f"Total de ad_spends encontrados para user_id={user_id}: {total_count}")
-        
-        # Verificar todos os user_ids únicos no banco (para debug)
-        all_user_ids = self.db.query(AdSpend.user_id).distinct().all()
-        logger.info(f"User IDs únicos encontrados no banco (ad_spends): {[uid[0] for uid in all_user_ids]}")
-        
+        """Lista gastos com anúncios do usuário, sempre filtrando por user_id para garantir isolamento de dados."""
         query = (
             self.db.query(AdSpend)
             .options(load_only(AdSpend.id, AdSpend.date, AdSpend.amount, AdSpend.sub_id, AdSpend.clicks))
@@ -56,9 +45,7 @@ class AdSpendRepository:
         if limit:
             query = query.limit(limit).offset(offset)
         
-        results = query.all()
-        logger.info(f"Ad_spends retornados após filtros: {len(results)}")
-        return results
+        return query.all()
 
     def get_by_id(self, ad_spend_id: int, user_id: int) -> Optional[AdSpend]:
         return (

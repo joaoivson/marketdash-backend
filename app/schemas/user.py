@@ -4,8 +4,8 @@ from typing import Optional
 
 
 class UserBase(BaseModel):
-    name: str
-    cpf_cnpj: str
+    name: Optional[str] = None
+    cpf_cnpj: Optional[str] = None
     email: EmailStr
 
 
@@ -57,4 +57,9 @@ class ForgotPasswordRequest(BaseModel):
 
 class ForgotPasswordResponse(BaseModel):
     message: str
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
 

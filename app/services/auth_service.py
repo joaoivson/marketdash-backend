@@ -30,6 +30,28 @@ class AuthService:
         return self.user_repo.create(new_user)
 
     def login(self, email: str, password: str):
+        import logging
+        from supabase import create_client, Client
+        logger = logging.getLogger(__name__)
+
+        # 1. Tentar login direto no Supabase Auth (caso já migrado)
+        try:
+            supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            auth_response = supabase_anon.auth.sign_in_with_password({"email": email, "password": password})
+            
+            if auth_response and auth_response.session:
+                logger.info(f"Login Supabase bem-sucedido para {email}")
+                # Buscar usuário local para retornar junto
+                user = self.user_repo.get_by_email(email)
+                return {
+                    "access_token": auth_response.session.access_token,
+                    "token_type": "bearer",
+                    "user": user
+                }
+        except Exception as e:
+            logger.info(f"Login Supabase falhou para {email} (usuário pode não estar migrado): {e}")
+
+        # 2. Fallback: Validar contra banco local (Legacy)
         user = self.user_repo.get_by_email(email)
         if not user or not verify_password(password, user.hashed_password):
             raise HTTPException(
@@ -37,9 +59,11 @@ class AuthService:
                 detail="Email ou senha incorretos",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário inativo")
 
+        # 3. Validar assinatura (Cakto)
         if settings.CAKTO_ENFORCE_SUBSCRIPTION:
             try:
                 has_access, reason = check_active_subscription(user.email)
@@ -49,27 +73,47 @@ class AuthService:
                         detail=reason or "Assinatura ativa não encontrada",
                     )
             except CaktoError as e:
-                # Em ambiente de desenvolvimento/homologação, permitir login mesmo se Cakto falhar
-                # Em produção, bloquear login se a validação falhar
-                if settings.ENVIRONMENT in ("development", "staging", "homologation"):
-                    # Log do erro mas permite login em ambientes de desenvolvimento/homologação
-                    import logging
-                    logger = logging.getLogger(__name__)
+                if settings.ENVIRONMENT not in ("production"):
                     logger.warning(f"Cakto validation failed for {user.email} in {settings.ENVIRONMENT}: {str(e)}")
                 else:
-                    # Em produção, bloquear login se Cakto falhar
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail="Falha ao validar assinatura. Tente novamente.",
                     )
 
-        access_token_expires = timedelta(hours=settings.JWT_EXPIRATION_HOURS)
-        # JWT requer que 'sub' seja uma string, não um número
-        access_token = create_access_token(
-            data={"sub": str(user.id)},
-            expires_delta=access_token_expires,
-        )
-        return {"access_token": access_token, "token_type": "bearer", "user": user}
+        # 4. Migração Automática: Criar usuário no Supabase
+        # IMPORTANTE: Requer SUPABASE_SERVICE_KEY para ignorar confirmação de email
+        try:
+            logger.info(f"Iniciando Lazy Migration para {email}")
+            supabase_admin: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+            
+            # Criar usuário via Admin API (isso define a senha e confirma o email automaticamente)
+            admin_auth_response = supabase_admin.auth.admin.create_user({
+                "email": email,
+                "password": password,
+                "email_confirm": True
+            })
+            
+            if admin_auth_response:
+                logger.info(f"Usuário {email} migrado para Supabase com sucesso.")
+                
+                # Agora logar como o usuário para obter um token de sessão normal
+                supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+                auth_data = supabase_anon.auth.sign_in_with_password({"email": email, "password": password})
+                
+                return {
+                    "access_token": auth_data.session.access_token,
+                    "token_type": "bearer",
+                    "user": user
+                }
+        except Exception as e:
+            logger.error(f"Erro crítico na Lazy Migration para {email}: {e}")
+            # Se a migração falhar (ex: usuário já existe mas a senha é diferente),
+            # retornamos erro de autenticação normal para o usuário.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Erro na migração de conta. Por favor, use 'Esqueci minha senha'.",
+            )
 
     def register_from_cakto(self, email: str, name: str = None, cpf_cnpj: str = None) -> User:
         """Cria usuário a partir dos dados do webhook do Cakto. Gera token para definir senha e envia email."""
