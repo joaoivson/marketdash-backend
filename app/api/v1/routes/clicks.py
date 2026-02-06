@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
+import redis.exceptions
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -38,22 +39,35 @@ async def upload_click_csv(
     db.commit()
     db.refresh(dataset)
 
-    if settings.UPLOAD_TEMP_DIR:
-        path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "wb") as f:
-            while chunk := await file.read(1024 * 1024):
-                f.write(chunk)
-        task = process_click_csv_task.delay(
-            dataset.id, current_user.id, file.filename,
-            file_path=str(path), file_content_b64=None,
+    try:
+        if settings.UPLOAD_TEMP_DIR:
+            path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                while chunk := await file.read(1024 * 1024):
+                    f.write(chunk)
+            task = process_click_csv_task.delay(
+                dataset.id, current_user.id, file.filename,
+                file_path=str(path), file_content_b64=None,
+            )
+        else:
+            file_content = await file.read()
+            task = process_click_csv_task.delay(
+                dataset.id, current_user.id, file.filename,
+                file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+            )
+    except redis.exceptions.AuthenticationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis: autenticação inválida. Configure REDIS_PASSWORD no ambiente com a senha do Redis, ou use REDIS_URL no formato redis://:SENHA@host:6379/0.",
         )
-    else:
-        file_content = await file.read()
-        task = process_click_csv_task.delay(
-            dataset.id, current_user.id, file.filename,
-            file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
-        )
+    except RuntimeError as e:
+        if "reconnect" in str(e).lower() and "redis" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Redis: falha de conexão/autenticação. Verifique REDIS_URL e REDIS_PASSWORD no ambiente e reinicie a aplicação.",
+            )
+        raise
 
     return {
         "task_id": task.id,

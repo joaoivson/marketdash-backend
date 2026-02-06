@@ -291,7 +291,8 @@ class DatasetService:
         limit: Optional[int],
         offset: int,
     ):
-        latest = self.dataset_repo.get_latest_by_user(user_id)
+        # Último dataset de comissão (transaction), não o último de qualquer tipo (ex.: click)
+        latest = self.dataset_repo.get_latest_by_user_and_type(user_id, "transaction")
         if not latest:
             return []
         if start_date and end_date and start_date > end_date:

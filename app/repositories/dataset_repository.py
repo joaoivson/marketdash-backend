@@ -22,6 +22,15 @@ class DatasetRepository:
             .first()
         )
 
+    def get_latest_by_user_and_type(self, user_id: int, dataset_type: str) -> Optional[Dataset]:
+        """Último dataset do usuário para um tipo (ex.: 'transaction' comissão, 'click' cliques)."""
+        return (
+            self.db.query(Dataset)
+            .filter(Dataset.user_id == user_id, Dataset.type == dataset_type)
+            .order_by(Dataset.uploaded_at.desc())
+            .first()
+        )
+
     def list_by_user(self, user_id: int) -> List[Dataset]:
         return (
             self.db.query(Dataset)
