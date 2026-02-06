@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from typing import Optional, Dict
 
 
@@ -23,7 +24,17 @@ class Settings(BaseSettings):
 
     # Cache / Redis
     REDIS_URL: Optional[str] = None
+    REDIS_PASSWORD: Optional[str] = None
     CACHE_TTL_SECONDS: int = 300
+
+    @model_validator(mode='after')
+    def assemble_redis_url(self) -> 'Settings':
+        if self.REDIS_PASSWORD and self.REDIS_URL:
+            # Se a URL não tem senha mas temos REDIS_PASSWORD, injetamos
+            if "@" not in self.REDIS_URL and "redis://" in self.REDIS_URL:
+                # Formato: redis://:PASSWORD@HOST:PORT/DB
+                self.REDIS_URL = self.REDIS_URL.replace("redis://", f"redis://:{self.REDIS_PASSWORD}@", 1)
+        return self
 
     # Cakto Integration
     CAKTO_API_BASE: str = "https://api.cakto.com.br"
