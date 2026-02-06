@@ -33,7 +33,7 @@ async def upload_csv(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Enfileira processamento de CSV de comissão/vendas via Celery; retorna task_id e dataset_id para polling de status."""
+    """Processa CSV de comissão/vendas. Se PROCESS_CSV_SYNC=true, processa na requisição e retorna status completed; senão enfileira via Celery (pending)."""
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
@@ -42,9 +42,31 @@ async def upload_csv(
     db.commit()
     db.refresh(dataset)
 
+    if settings.PROCESS_CSV_SYNC:
+        # Processamento síncrono: sem Celery; dados disponíveis logo após o upload (útil quando não há worker).
+        if settings.UPLOAD_TEMP_DIR:
+            path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                while chunk := await file.read(1024 * 1024):
+                    f.write(chunk)
+            file_content = path.read_bytes()
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        else:
+            file_content = await file.read()
+        service.process_commission_csv(dataset.id, current_user.id, file_content, file.filename)
+        db.refresh(dataset)
+        return {
+            "task_id": f"sync-{dataset.id}",
+            "dataset_id": dataset.id,
+            "status": "completed",
+        }
+
     try:
         if settings.UPLOAD_TEMP_DIR:
-            # Arquivo grande: grava em disco e envia só o caminho ao Celery (evita payload gigante no Redis).
             path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "wb") as f:
