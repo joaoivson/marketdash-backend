@@ -1,10 +1,14 @@
+import base64
 from datetime import date
+from pathlib import Path
 from typing import List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import require_active_subscription
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.dataset import Dataset
 from app.models.user import User
@@ -27,7 +31,6 @@ async def upload_click_csv(
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
-    file_content = await file.read()
     dataset_repo = DatasetRepository(db)
     dataset = dataset_repo.create(
         Dataset(user_id=current_user.id, filename=file.filename, type="click", status="pending")
@@ -35,7 +38,22 @@ async def upload_click_csv(
     db.commit()
     db.refresh(dataset)
 
-    task = process_click_csv_task.delay(dataset.id, current_user.id, file_content, file.filename)
+    if settings.UPLOAD_TEMP_DIR:
+        path = Path(settings.UPLOAD_TEMP_DIR) / f"{dataset.id}_{uuid4().hex}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                f.write(chunk)
+        task = process_click_csv_task.delay(
+            dataset.id, current_user.id, file.filename,
+            file_path=str(path), file_content_b64=None,
+        )
+    else:
+        file_content = await file.read()
+        task = process_click_csv_task.delay(
+            dataset.id, current_user.id, file.filename,
+            file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+        )
 
     return {
         "task_id": task.id,

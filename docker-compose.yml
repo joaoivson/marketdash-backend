@@ -30,6 +30,8 @@ services:
       JWT_SECRET: marketdash-secret-dev-32chars
       REDIS_URL: redis://redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
+      # Upload de arquivos grandes: grava em disco e envia só o caminho ao Celery
+      UPLOAD_TEMP_DIR: /app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -53,6 +55,7 @@ services:
       DATABASE_URL: postgresql://dashads_user:dashads_password@db:5432/dashads_db
       REDIS_URL: redis://redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
+      UPLOAD_TEMP_DIR: /app/uploads
     depends_on:
       db:
         condition: service_healthy

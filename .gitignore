@@ -28,6 +28,7 @@ wheels/
 .venv
 *.log
 .DS_Store
+uploads/
 .vscode/
 .idea/
 *.swp

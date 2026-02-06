@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     CACHE_TTL_SECONDS: int = 300
 
+    # Upload de arquivos grandes (ex.: CSV 500k+ linhas)
+    # Se definido, o arquivo é gravado em disco e apenas o caminho é enviado ao Celery (evita Redis com payload gigante).
+    # API e worker precisam enxergar o mesmo diretório (ex.: volume compartilhado). Ex.: /app/uploads
+    UPLOAD_TEMP_DIR: Optional[str] = None
+
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
         if self.REDIS_PASSWORD and self.REDIS_URL:
