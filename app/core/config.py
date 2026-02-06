@@ -30,10 +30,13 @@ class Settings(BaseSettings):
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
         if self.REDIS_PASSWORD and self.REDIS_URL:
+            import urllib.parse
             # Se a URL não tem senha mas temos REDIS_PASSWORD, injetamos
             if "@" not in self.REDIS_URL and "redis://" in self.REDIS_URL:
+                # URL Encode a senha para garantir que caracteres especiais não quebrem a URL
+                encoded_pwd = urllib.parse.quote_plus(self.REDIS_PASSWORD)
                 # Formato: redis://:PASSWORD@HOST:PORT/DB
-                self.REDIS_URL = self.REDIS_URL.replace("redis://", f"redis://:{self.REDIS_PASSWORD}@", 1)
+                self.REDIS_URL = self.REDIS_URL.replace("redis://", f"redis://:{encoded_pwd}@", 1)
         return self
 
     # Cakto Integration

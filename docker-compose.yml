@@ -29,6 +29,7 @@ services:
       DATABASE_URL: postgresql://dashads_user:dashads_password@db:5432/dashads_db
       JWT_SECRET: marketdash-secret-dev-32chars
       REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
     depends_on:
       db:
         condition: service_healthy
@@ -40,7 +41,7 @@ services:
     container_name: marketdash_redis
     ports:
       - "6379:6379"
-    command: [ "redis-server", "--appendonly", "yes" ]
+    command: [ "redis-server", "--requirepass", "${REDIS_PASSWORD:-marketdash_local}", "--appendonly", "yes" ]
 
   worker:
     build: .
@@ -51,6 +52,7 @@ services:
     environment:
       DATABASE_URL: postgresql://dashads_user:dashads_password@db:5432/dashads_db
       REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
     depends_on:
       db:
         condition: service_healthy
