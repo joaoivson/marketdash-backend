@@ -15,7 +15,7 @@ from app.models.dataset import Dataset
 from app.models.user import User
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.click_row_repository import ClickRowRepository
-from app.schemas.click import ClickRowResponse, ClickTaskResponse
+from app.schemas.click import ClickListResponse, ClickTaskResponse
 from app.services.click_service import ClickService
 from app.tasks.csv_tasks import process_click_csv_task
 
@@ -99,7 +99,7 @@ async def upload_click_csv(
     }
 
 
-@router.get("/latest/rows", response_model=List[ClickRowResponse])
+@router.get("/latest/rows", response_model=ClickListResponse)
 def list_latest_clicks(
     start_date: Optional[date] = Query(None, description="Data inicial"),
     end_date: Optional[date] = Query(None, description="Data final"),
@@ -108,12 +108,12 @@ def list_latest_clicks(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Lista as linhas do último upload de cliques realizado."""
+    """Lista as linhas do último upload de cliques. Resposta inclui total_clicks (soma) e rows."""
     service = ClickService(DatasetRepository(db), ClickRowRepository(db))
     return service.list_latest_clicks(current_user.id, start_date, end_date, limit, offset)
 
 
-@router.get("/all/rows", response_model=List[ClickRowResponse])
+@router.get("/all/rows", response_model=ClickListResponse)
 def list_all_clicks(
     start_date: Optional[date] = Query(None, description="Data inicial"),
     end_date: Optional[date] = Query(None, description="Data final"),
@@ -122,7 +122,7 @@ def list_all_clicks(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Lista todo o histórico de cliques do usuário."""
+    """Lista todo o histórico de cliques. Resposta inclui total_clicks (soma) e rows."""
     service = ClickService(DatasetRepository(db), ClickRowRepository(db))
     return service.list_all_clicks(current_user.id, start_date, end_date, limit, offset)
 

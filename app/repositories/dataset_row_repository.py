@@ -45,12 +45,16 @@ class DatasetRowRepository:
         from sqlalchemy.dialects.postgresql import insert
         
         stmt = insert(DatasetRow).values(mappings)
+        # Em conflito: atualizar apenas métricas/dimensões; NÃO atualizar dataset_id.
+        # Assim, re-enviar um arquivo com dados já existentes não "transfere" linhas para o novo
+        # dataset e os totais (ex.: listar por último dataset) não mudam indevidamente.
         stmt = stmt.on_conflict_do_update(
             index_elements=['row_hash'],
             set_={
                 'status': stmt.excluded.status,
                 'revenue': stmt.excluded.revenue,
                 'commission': stmt.excluded.commission,
+                'cost': stmt.excluded.cost,
                 'profit': stmt.excluded.profit,
                 'quantity': stmt.excluded.quantity,
                 'date': stmt.excluded.date,
@@ -58,7 +62,6 @@ class DatasetRowRepository:
                 'category': stmt.excluded.category,
                 'platform': stmt.excluded.platform,
                 'product': stmt.excluded.product,
-                'dataset_id': stmt.excluded.dataset_id,
             }
         )
         

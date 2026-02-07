@@ -2,6 +2,7 @@ from typing import Iterable, List, Optional
 from datetime import date
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.models.click_row import ClickRow
 
@@ -12,12 +13,15 @@ class ClickRowRepository:
 
     def bulk_create(self, rows: Iterable[ClickRow]) -> None:
         """
-        Inserção em lote de cliques com ON CONFLICT DO NOTHING.
+        Inserção em lote de cliques com ON CONFLICT DO UPDATE (upsert).
+        Regra fundamental: dados do arquivo prevalecem; linhas existentes são atualizadas.
         """
         rows_list = list(rows)
         if not rows_list:
             return
-        
+
+        from sqlalchemy.dialects.postgresql import insert
+
         mappings = []
         for row in rows_list:
             mapping = {
@@ -30,13 +34,20 @@ class ClickRowRepository:
                 'row_hash': row.row_hash,
             }
             mappings.append(mapping)
-        
-        # Usar inserção com ON CONFLICT DO NOTHING via SQLAlchemy Core (PostgreSQL)
-        from sqlalchemy.dialects.postgresql import insert
-        
+
+        # Em conflito: atualizar apenas métricas/dimensões; NÃO atualizar dataset_id (evita
+        # que re-envio "mova" linhas para o novo dataset e altere totais exibidos).
         stmt = insert(ClickRow).values(mappings)
-        stmt = stmt.on_conflict_do_nothing(index_elements=['row_hash'])
-        
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['row_hash'],
+            set_={
+                'clicks': stmt.excluded.clicks,
+                'date': stmt.excluded.date,
+                'channel': stmt.excluded.channel,
+                'sub_id': stmt.excluded.sub_id,
+            }
+        )
+
         self.db.execute(stmt)
         self.db.commit()
 
@@ -81,6 +92,26 @@ class ClickRowRepository:
         if limit:
             query = query.limit(limit).offset(offset)
         return query.all()
+
+    def get_total_clicks(
+        self,
+        user_id: int,
+        dataset_id: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> int:
+        """Retorna a soma de clicks no mesmo escopo das listagens (user_id, opcionalmente dataset_id e datas)."""
+        query = self.db.query(func.coalesce(func.sum(ClickRow.clicks), 0)).filter(
+            ClickRow.user_id == user_id
+        )
+        if dataset_id is not None:
+            query = query.filter(ClickRow.dataset_id == dataset_id)
+        if start_date:
+            query = query.filter(ClickRow.date >= start_date)
+        if end_date:
+            query = query.filter(ClickRow.date <= end_date)
+        result = query.scalar()
+        return int(result) if result is not None else 0
 
     def get_existing_hashes(self, user_id: int, min_date: Optional[date] = None) -> set:
         """Retorna hashes existentes para deduplicação (sem limite de data)."""

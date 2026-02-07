@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from datetime import datetime, date
-from typing import Optional, Any
+from typing import Optional, Any, List
 from app.schemas.dataset import DatasetResponse
 
 
@@ -18,6 +18,12 @@ class ClickRowResponse(ClickRowBase):
 
     class Config:
         from_attributes = True
+
+
+class ClickListResponse(BaseModel):
+    """Resposta das listagens de cliques: total_clicks no nível raiz + rows."""
+    total_clicks: int = Field(..., description="Soma de todos os cliques no escopo (para exibir como total)")
+    rows: List[ClickRowResponse] = Field(..., description="Lista de registros de cliques")
 
 
 class ClickUploadResponse(DatasetResponse):
