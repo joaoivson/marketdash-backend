@@ -60,38 +60,31 @@ class ClickService:
         # Agrupar por data, canal e subid, somando os cliques
         df_grouped = df.groupby(['date', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
 
-        # 2. Deduplicação e Inserção
-        # Buscar hashes existentes (nos últimos 90 dias por performance)
-        lookback_date = datetime.date.today() - datetime.timedelta(days=90)
-        existing_hashes = self.click_repo.get_existing_hashes(user_id, min_date=lookback_date)
+        # 2. Upsert: incluir todas as linhas (novas e existentes). Regra: dados do arquivo prevalecem.
+        existing_hashes = self.click_repo.get_existing_hashes(user_id)
 
         rows_to_create = []
         rows_data = df_grouped.to_dict('records')
-        ignored_count = 0
+        inserted_count = 0
+        updated_count = 0
+        processed_hashes_in_file = set()
         total_rows = len(rows_data)
-        
+
         for row_data in rows_data:
-            # Normalizar sub_id para gerar hash e salvar
             sub_id = None if row_data["sub_id"] == 'nan' else row_data["sub_id"]
             row_data_clean = {**row_data, "sub_id": sub_id}
-            
             row_hash = self._generate_click_hash(row_data_clean, user_id)
-            
-            if row_hash in existing_hashes:
-                ignored_count += 1
+
+            if row_hash in processed_hashes_in_file:
                 continue
-                
-            existing_hashes.add(row_hash)
+            processed_hashes_in_file.add(row_hash)
+
+            if row_hash in existing_hashes:
+                updated_count += 1
+            else:
+                inserted_count += 1
             rows_to_create.append({**row_data_clean, "row_hash": row_hash})
 
-        # Bloqueio se tudo for duplicado
-        if total_rows > 0 and ignored_count == total_rows:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail="Todos os cliques deste arquivo já foram importados anteriormente (100% duplicado)."
-            )
-
-        # Criar registro de dataset apenas se houver o que inserir
         dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename, type="click"))
 
         click_rows = []
@@ -110,26 +103,27 @@ class ClickService:
 
         if click_rows:
             self.click_repo.bulk_create(click_rows)
-            dataset.row_count = len(click_rows)
+            dataset.row_count = inserted_count  # só linhas novas ficam com este dataset_id (upsert não altera dataset_id)
             dataset.status = "completed"
             self.dataset_repo.db.commit()
-            if ignored_count > 0:
-                logger.info(f"Deduplicação: {ignored_count} grupos de cliques ignorados para o usuário {user_id}.")
+            logger.info(
+                f"Upload cliques: {inserted_count} novas linhas, {updated_count} atualizadas para dataset {dataset.id}."
+            )
 
         self.dataset_repo.db.refresh(dataset)
-        
+
         metadata = {
             "total_rows": total_rows,
-            "inserted_rows": len(click_rows),
-            "ignored_rows": ignored_count
+            "inserted_rows": inserted_count,
+            "updated_rows": updated_count,
+            "ignored_rows": total_rows - (inserted_count + updated_count),
         }
-        
         return dataset, metadata
 
     def process_click_csv(self, dataset_id: int, user_id: int, file_content: bytes, filename: str) -> None:
         """
         Processa CSV de cliques para um dataset já criado (uso pela task Celery).
-        Atualiza dataset.status e dataset.row_count; em erro de validação ou 100% duplicado define status='error'.
+        Regra: dados do arquivo prevalecem (upsert). Atualiza dataset.status e dataset.row_count.
         """
         dataset = self.dataset_repo.get_by_id(dataset_id, user_id)
         if not dataset:
@@ -147,31 +141,27 @@ class ClickService:
         df['sub_id'] = df['sub_id'].fillna('nan')
         df_grouped = df.groupby(['date', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
 
-        lookback_date = datetime.date.today() - datetime.timedelta(days=90)
-        existing_hashes = self.click_repo.get_existing_hashes(user_id, min_date=lookback_date)
-
+        existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
         rows_data = df_grouped.to_dict('records')
-        ignored_count = 0
-        total_rows = len(rows_data)
+        inserted_count = 0
+        updated_count = 0
+        processed_hashes_in_file = set()
 
         for row_data in rows_data:
             sub_id = None if row_data["sub_id"] == 'nan' else row_data["sub_id"]
             row_data_clean = {**row_data, "sub_id": sub_id}
             row_hash = self._generate_click_hash(row_data_clean, user_id)
 
-            if row_hash in existing_hashes:
-                ignored_count += 1
+            if row_hash in processed_hashes_in_file:
                 continue
-            existing_hashes.add(row_hash)
-            rows_to_create.append({**row_data_clean, "row_hash": row_hash})
+            processed_hashes_in_file.add(row_hash)
 
-        if total_rows > 0 and ignored_count == total_rows:
-            dataset.status = "error"
-            dataset.error_message = "Todos os cliques deste arquivo já foram importados anteriormente (100% duplicado)."
-            self.dataset_repo.db.commit()
-            logger.info(f"Click dataset {dataset_id}: 100% duplicado, marcado como error.")
-            return
+            if row_hash in existing_hashes:
+                updated_count += 1
+            else:
+                inserted_count += 1
+            rows_to_create.append({**row_data_clean, "row_hash": row_hash})
 
         click_rows = []
         for item in rows_to_create:
@@ -189,11 +179,12 @@ class ClickService:
 
         if click_rows:
             self.click_repo.bulk_create(click_rows)
-            dataset.row_count = len(click_rows)
+            dataset.row_count = inserted_count  # só linhas novas ficam com este dataset_id (upsert não altera dataset_id)
             dataset.status = "completed"
             self.dataset_repo.db.commit()
-            if ignored_count > 0:
-                logger.info(f"Deduplicação: {ignored_count} grupos de cliques ignorados para o usuário {user_id}.")
+            logger.info(
+                f"Processamento cliques: {inserted_count} novas linhas, {updated_count} atualizadas para dataset {dataset_id}."
+            )
 
     def list_latest_clicks(
         self,
@@ -203,7 +194,7 @@ class ClickService:
         limit: Optional[int] = None,
         offset: int = 0,
     ):
-        """Lista cliques do último dataset carregado."""
+        """Lista cliques do último dataset carregado. Retorna total_clicks (soma) e rows."""
         latest = (
             self.dataset_repo.db.query(Dataset)
             .filter(Dataset.user_id == user_id, Dataset.type == "click")
@@ -211,10 +202,15 @@ class ClickService:
             .first()
         )
         if not latest:
-            return []
-            
+            return {"total_clicks": 0, "rows": []}
+        total_clicks = self.click_repo.get_total_clicks(
+            user_id, dataset_id=latest.id, start_date=start_date, end_date=end_date
+        )
         rows = self.click_repo.list_by_dataset(latest.id, user_id, start_date, end_date, limit, offset)
-        return [self.serialize_click(r) for r in rows]
+        return {
+            "total_clicks": total_clicks,
+            "rows": [self.serialize_click(r) for r in rows],
+        }
 
     def list_all_clicks(
         self,
@@ -224,9 +220,15 @@ class ClickService:
         limit: Optional[int] = None,
         offset: int = 0,
     ):
-        """Lista todos os cliques históricos."""
+        """Lista todos os cliques históricos. Retorna total_clicks (soma) e rows."""
+        total_clicks = self.click_repo.get_total_clicks(
+            user_id, dataset_id=None, start_date=start_date, end_date=end_date
+        )
         rows = self.click_repo.list_by_user(user_id, start_date, end_date, limit, offset)
-        return [self.serialize_click(r) for r in rows]
+        return {
+            "total_clicks": total_clicks,
+            "rows": [self.serialize_click(r) for r in rows],
+        }
 
     def delete_all_clicks(self, user_id: int) -> dict:
         """Remove todos os dados de cliques do usuário."""

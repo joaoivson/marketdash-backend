@@ -45,6 +45,7 @@ class DatasetService:
     def process_commission_csv(self, dataset_id: int, user_id: int, file_content: bytes, filename: str) -> None:
         """
         Processa CSV de comissão para um dataset já criado (uso pela task Celery).
+        Regra: em caso de row_hash existente, os dados do arquivo prevalecem (upsert).
         Atualiza dataset.status e dataset.row_count; em erro de validação define status='error'.
         """
         dataset = self.dataset_repo.get_by_id(dataset_id, user_id)
@@ -148,12 +149,15 @@ class DatasetService:
 
         if dataset_rows:
             self.row_repo.bulk_create(dataset_rows)
-            dataset.row_count = len(dataset_rows)
+            dataset.row_count = inserted_count  # só linhas novas ficam com este dataset_id (upsert não altera dataset_id)
             dataset.status = "completed"
             self.dataset_repo.db.commit()
             logger.info(f"Processamento concluído: {inserted_count} novas linhas, {updated_count} atualizadas para dataset {dataset_id}.")
 
     def upload_csv(self, file_content: bytes, filename: str, user_id: int) -> tuple[Dataset, dict]:
+        """
+        Upload de CSV de comissão. Regra: linhas já existentes (mesmo row_hash) são atualizadas com os dados do arquivo.
+        """
         if not filename.endswith(".csv"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
@@ -267,7 +271,7 @@ class DatasetService:
 
         if dataset_rows:
             self.row_repo.bulk_create(dataset_rows)
-            dataset.row_count = len(dataset_rows)
+            dataset.row_count = inserted_count  # só linhas novas ficam com este dataset_id (upsert não altera dataset_id)
             dataset.status = "completed"
             self.dataset_repo.db.commit()
             logger.info(f"Processamento concluído: {inserted_count} novas linhas, {updated_count} atualizadas.")
