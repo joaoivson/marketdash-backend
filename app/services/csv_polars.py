@@ -5,7 +5,7 @@ groupby, row_hash, bulk_create. Used by process_chunk Celery task.
 """
 import hashlib
 import logging
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 
 from sqlalchemy.orm import Session
@@ -19,6 +19,49 @@ from app.services.csv_service import ALIASES, normalize_name, find_column
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 5000
+
+# Formatos comuns de data/datetime em CSV (evita erro "could not find an appropriate format to parse dates")
+_DATE_FORMATS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%d",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y",
+    "%d/%m/%y",
+    "%m/%d/%Y",
+    "%m/%d/%y",
+    "%d-%m-%Y",
+    "%d-%m-%y",
+    "%d.%m.%Y",
+    "%Y/%m/%d",
+]
+
+
+def _parse_date_flexible(value) -> date | None:
+    """Tenta interpretar value como data (str, date ou datetime). Retorna date ou None."""
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value if not isinstance(value, datetime) else value.date()
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return None
+    try:
+        return date.fromisoformat(s)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except (ValueError, TypeError):
+        pass
+    for fmt in _DATE_FORMATS:
+        try:
+            parsed = datetime.strptime(s, fmt)
+            return parsed.date()
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
 def _generate_row_hash(row_data: dict, user_id: int) -> str:
@@ -82,9 +125,9 @@ def process_transaction_chunk(
     exprs = []
 
     if "date" in col_map:
-        exprs.append(pl.col(col_map["date"]).cast(pl.Utf8).str.to_date(strict=False).alias("date"))
+        exprs.append(pl.col(col_map["date"]).cast(pl.Utf8).alias("date"))
     else:
-        exprs.append(pl.lit(None).cast(pl.Date).alias("date"))
+        exprs.append(pl.lit(None).cast(pl.Utf8).alias("date"))
 
     for col in group_cols:
         if col == "date":
@@ -114,13 +157,8 @@ def process_transaction_chunk(
 
     for r in grouped.iter_rows(named=True):
         row_clean = {k: (None if r[k] == "nan" else r[k]) for k in group_cols}
-        if isinstance(row_clean["date"], str):
-            try:
-                row_clean["date"] = date.fromisoformat(row_clean["date"]) if row_clean["date"] else None
-            except Exception:
-                row_clean["date"] = date.today()
-        if row_clean["date"] is None:
-            row_clean["date"] = date.today()
+        parsed = _parse_date_flexible(row_clean["date"])
+        row_clean["date"] = parsed if parsed is not None else date.today()
         row_hash = _generate_row_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
@@ -283,12 +321,7 @@ def process_click_chunk(
     batch = []
     total = 0
     for r in grouped.iter_rows(named=True):
-        d = r.get("date")
-        if isinstance(d, str):
-            try:
-                d = date.fromisoformat(d) if d else date.today()
-            except Exception:
-                d = date.today()
+        d = _parse_date_flexible(r.get("date"))
         if d is None:
             d = date.today()
         row_clean = {"date": d, "channel": r.get("channel") or "Desconhecido", "sub_id": r.get("sub_id")}
