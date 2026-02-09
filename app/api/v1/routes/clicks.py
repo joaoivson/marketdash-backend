@@ -69,10 +69,22 @@ async def upload_click_csv(
             with open(path, "wb") as f:
                 while chunk := await file.read(1024 * 1024):
                     f.write(chunk)
-            task = process_click_csv_task.delay(
-                dataset.id, current_user.id, file.filename,
-                file_path=str(path), file_content_b64=None,
-            )
+            size = path.stat().st_size
+            if size <= settings.UPLOAD_INLINE_MAX_BYTES:
+                file_content = path.read_bytes()
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                task = process_click_csv_task.delay(
+                    dataset.id, current_user.id, file.filename,
+                    file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+                )
+            else:
+                task = process_click_csv_task.delay(
+                    dataset.id, current_user.id, file.filename,
+                    file_path=str(path), file_content_b64=None,
+                )
         else:
             file_content = await file.read()
             task = process_click_csv_task.delay(

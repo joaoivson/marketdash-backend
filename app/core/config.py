@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # API e worker precisam enxergar o mesmo diretório (ex.: volume compartilhado). Ex.: /app/uploads
     UPLOAD_TEMP_DIR: Optional[str] = None
 
+    # Se UPLOAD_TEMP_DIR estiver definido e o arquivo for menor que este tamanho (bytes), o conteúdo é enviado
+    # em base64 na tarefa Celery (evita "Upload temp file not found" quando API e worker não compartilham disco).
+    # Arquivos maiores que este limite exigem volume compartilhado entre API e worker. Default: 5 MB.
+    UPLOAD_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
+
     # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False
