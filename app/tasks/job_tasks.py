@@ -187,8 +187,15 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
     except Exception as exc:
         logger.exception(f"process_chunk failed job {job_id} chunk {chunk_index}: {exc}")
         try:
-            job_repo.set_chunk_status(UUID(job_id), chunk_index, "failed", str(exc))
-            job_repo.db.commit()
+            _db = SessionLocal()
+            _repo = JobRepository(_db)
+            _repo.set_chunk_status(UUID(job_id), chunk_index, "failed", str(exc))
+            if self.request.retries >= self.max_retries:
+                _job = _repo.get_by_id(UUID(job_id))
+                if _job:
+                    _job.status = "error"
+            _repo.db.commit()
+            _db.close()
         except Exception:
             pass
         raise self.retry(exc=exc, countdown=60)
