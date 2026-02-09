@@ -119,6 +119,8 @@ def process_transaction_chunk(
                 row_clean["date"] = date.fromisoformat(row_clean["date"]) if row_clean["date"] else None
             except Exception:
                 row_clean["date"] = date.today()
+        if row_clean["date"] is None:
+            row_clean["date"] = date.today()
         row_hash = _generate_row_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
@@ -186,6 +188,9 @@ def _process_transaction_chunk_pandas(db: Session, dataset_id: int, user_id: int
     total = 0
     for _, row_data in df_grouped.iterrows():
         row_clean = {c: (None if row_data[c] == "nan" else row_data[c]) for c in group_cols}
+        d = row_clean["date"]
+        if d is None or (isinstance(d, pd.Timestamp) and pd.isna(d)):
+            row_clean["date"] = date.today()
         row_hash = _generate_row_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
@@ -284,6 +289,8 @@ def process_click_chunk(
                 d = date.fromisoformat(d) if d else date.today()
             except Exception:
                 d = date.today()
+        if d is None:
+            d = date.today()
         row_clean = {"date": d, "channel": r.get("channel") or "Desconhecido", "sub_id": r.get("sub_id")}
         row_hash = _generate_click_hash(row_clean, user_id)
         if row_hash in processed_hashes:
@@ -310,6 +317,7 @@ def process_click_chunk(
 
 
 def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chunk_content: bytes) -> int:
+    import pandas as pd
     from app.services.csv_service import CSVService
 
     df, errors = CSVService.validate_click_csv(chunk_content, "chunk.csv")
@@ -323,7 +331,10 @@ def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chun
     total = 0
     for _, row_data in df_grouped.iterrows():
         sub_id = None if row_data["sub_id"] == "nan" else row_data["sub_id"]
-        row_clean = {"date": row_data["date"], "channel": row_data["channel"], "sub_id": sub_id}
+        d = row_data["date"]
+        if d is None or (isinstance(d, pd.Timestamp) and pd.isna(d)):
+            d = date.today()
+        row_clean = {"date": d, "channel": row_data["channel"], "sub_id": sub_id}
         row_hash = _generate_click_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue

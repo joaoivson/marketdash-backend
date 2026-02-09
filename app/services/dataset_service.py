@@ -1,6 +1,7 @@
 import datetime
 import logging
 import hashlib
+from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
@@ -126,11 +127,14 @@ class DatasetService:
             row_clean = item["clean_data"]
             m = item["metrics"]
             profit = m["revenue"] - m["commission"] - m["cost"]
+            row_date = row_clean["date"]
+            if not isinstance(row_date, date) or row_date is None:
+                row_date = date.today()
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
-                    date=row_clean["date"],
+                    date=row_date,
                     product=row_clean["product"],
                     platform=row_clean["platform"],
                     category=row_clean["category"],
@@ -247,12 +251,14 @@ class DatasetService:
             row_clean = item["clean_data"]
             m = item["metrics"]
             profit = m["revenue"] - m["commission"] - m["cost"]
-
+            row_date = row_clean["date"]
+            if not isinstance(row_date, date) or row_date is None:
+                row_date = date.today()
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
-                    date=row_clean["date"],
+                    date=row_date,
                     product=row_clean["product"],
                     platform=row_clean["platform"],
                     category=row_clean["category"],

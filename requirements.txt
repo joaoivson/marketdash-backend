@@ -6,6 +6,7 @@ pandas>=2.2.0
 pydantic[email]>=2.9.0
 pydantic-settings>=2.5.0
 celery
+vine>=5.1.0,<6
 redis
 flower
 python-jose[cryptography]==3.3.0
