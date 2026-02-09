@@ -1,13 +1,29 @@
 import datetime
 import logging
 import hashlib
-from datetime import date
+from datetime import date, datetime as dt
 from decimal import Decimal
 from typing import List, Optional
 
 import pandas as pd
 import numpy as np
 from fastapi import HTTPException, status
+
+
+def _ensure_date(value) -> date:
+    """Garante um date válido; None/pd.NaT/inválido vira date.today()."""
+    if value is None:
+        return date.today()
+    try:
+        if getattr(pd, "isna", None) and pd.isna(value):
+            return date.today()
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, dt):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.today()
 
 from app.models.dataset import Dataset
 from app.models.dataset_row import DatasetRow
@@ -127,9 +143,7 @@ class DatasetService:
             row_clean = item["clean_data"]
             m = item["metrics"]
             profit = m["revenue"] - m["commission"] - m["cost"]
-            row_date = row_clean["date"]
-            if not isinstance(row_date, date) or row_date is None:
-                row_date = date.today()
+            row_date = _ensure_date(row_clean["date"])
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
@@ -251,9 +265,7 @@ class DatasetService:
             row_clean = item["clean_data"]
             m = item["metrics"]
             profit = m["revenue"] - m["commission"] - m["cost"]
-            row_date = row_clean["date"]
-            if not isinstance(row_date, date) or row_date is None:
-                row_date = date.today()
+            row_date = _ensure_date(row_clean["date"])
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,

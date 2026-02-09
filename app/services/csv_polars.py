@@ -8,6 +8,7 @@ import logging
 from datetime import date, datetime
 from io import BytesIO
 
+import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models.dataset_row import DatasetRow
@@ -227,7 +228,14 @@ def _process_transaction_chunk_pandas(db: Session, dataset_id: int, user_id: int
     for _, row_data in df_grouped.iterrows():
         row_clean = {c: (None if row_data[c] == "nan" else row_data[c]) for c in group_cols}
         d = row_clean["date"]
-        if d is None or (isinstance(d, pd.Timestamp) and pd.isna(d)):
+        try:
+            if d is None or pd.isna(d):
+                row_clean["date"] = date.today()
+            elif isinstance(d, datetime):
+                row_clean["date"] = d.date()
+            elif not isinstance(d, date):
+                row_clean["date"] = date.today()
+        except (TypeError, ValueError):
             row_clean["date"] = date.today()
         row_hash = _generate_row_hash(row_clean, user_id)
         if row_hash in processed_hashes:

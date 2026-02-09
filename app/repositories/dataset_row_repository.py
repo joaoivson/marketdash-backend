@@ -21,10 +21,13 @@ class DatasetRowRepository:
         # Converter objetos DatasetRow para dicionários com apenas os campos necessários
         mappings = []
         for row in rows_list:
+            row_date = row.date
+            if row_date is None:
+                row_date = date.today()
             mapping = {
                 'dataset_id': row.dataset_id,
                 'user_id': row.user_id,
-                'date': row.date,
+                'date': row_date,
                 'platform': row.platform,
                 'category': row.category,
                 'product': row.product,
