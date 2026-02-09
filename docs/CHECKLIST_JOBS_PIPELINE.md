@@ -1,0 +1,73 @@
+# Checklist: Pipeline de Jobs (CSV Chunking + Object Storage)
+
+## Visão geral
+
+Com `USE_JOBS_PIPELINE=true`, o backend expõe as rotas `/api/v1/jobs` para upload de CSV via URL pré-assinada (presigned) e processamento em chunks (Object Storage + Celery). O fluxo antigo (`POST /datasets/upload`, `POST /clicks/upload`) continua disponível; o rollback é imediato desativando a flag.
+
+## Variáveis de ambiente
+
+| Variável | Obrigatória (se pipeline ativa) | Descrição |
+|----------|----------------------------------|-----------|
+| `USE_JOBS_PIPELINE` | - | `true` para registrar rotas `/jobs` e usar a nova pipeline. Default: `false`. |
+| `S3_BUCKET` | Sim | Nome do bucket (ex.: `uploads`). |
+| `S3_ENDPOINT` | Sim | URL do endpoint S3 (ex.: Supabase Storage ou MinIO). |
+| `S3_ACCESS_KEY` | Sim | Access key. |
+| `S3_SECRET_KEY` | Sim | Secret key. |
+| `S3_REGION` | Não | Região (default: `us-east-1`). |
+
+## Ativar a pipeline
+
+1. Aplicar a migration de tabelas `jobs` e `job_chunks`:
+   ```bash
+   python apply_migration_supabase.py migrations/007_jobs_and_job_chunks.sql
+   ```
+   (Ou executar o SQL no Supabase SQL Editor.)
+
+2. Configurar Object Storage (Supabase Storage com compatibilidade S3 ou MinIO) e definir as variáveis `S3_*` acima.
+
+3. Definir `USE_JOBS_PIPELINE=true` no ambiente da API e do worker (Coolify, docker-compose, etc.).
+
+4. Reiniciar a aplicação e o worker Celery.
+
+## Rollback
+
+- Definir `USE_JOBS_PIPELINE=false` e fazer redeploy.
+- As rotas `/api/v1/jobs` deixam de ser registradas (404).
+- Os clientes que usam `POST /datasets/upload` e `POST /clicks/upload` continuam funcionando sem alteração.
+
+## Limites e opcionais
+
+- **Concorrência por job**: o chunker enfileira todos os chunks; para limitar concorrência por job pode-se usar um grupo Celery ou rate limit (fase 2).
+- **Fila dedicada para chunks**: para isolamento, pode-se enfileirar `process_chunk` na fila `chunks` e rodar um worker com `-Q celery,chunks`.
+- **Celery**: `task_time_limit=1200`, `task_soft_time_limit=1100` já configurados para evitar OOM em chunks grandes.
+
+## Observabilidade
+
+- Logs estruturados em `split_and_enqueue_chunks` e `process_chunk` (tempo, linhas processadas, erros).
+- Progresso do job: `GET /api/v1/jobs/{job_id}` retorna `total_chunks`, `chunks_done` e `errors` (chunks com falha).
+
+## Desenvolvimento local com MinIO
+
+No `docker-compose.yml` pode-se adicionar um serviço MinIO e expor as variáveis S3 para app e worker. Exemplo:
+
+```yaml
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+
+# No service app e worker, adicionar quando USE_JOBS_PIPELINE=true:
+#   S3_BUCKET: uploads
+#   S3_ENDPOINT: http://minio:9000
+#   S3_ACCESS_KEY: minioadmin
+#   S3_SECRET_KEY: minioadmin
+#   USE_JOBS_PIPELINE: "true"
+```
+
+Criar o bucket `uploads` no MinIO (Console em http://localhost:9000) antes de testar.

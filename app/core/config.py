@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False
 
+    # Jobs pipeline: upload via presigned URL + chunking (Object Storage + Celery). Se False, rotas /jobs não são registradas.
+    USE_JOBS_PIPELINE: bool = False
+
+    # Object Storage (S3-compatible, ex.: Supabase Storage). Se ausentes, pipeline jobs desativada ou fallback.
+    S3_BUCKET: Optional[str] = None
+    S3_ENDPOINT: Optional[str] = None
+    S3_ACCESS_KEY: Optional[str] = None
+    S3_SECRET_KEY: Optional[str] = None
+    S3_REGION: Optional[str] = None
+
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
         if self.REDIS_PASSWORD and self.REDIS_URL:
