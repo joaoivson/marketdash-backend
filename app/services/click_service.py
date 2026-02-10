@@ -3,6 +3,7 @@ import hashlib
 import logging
 from typing import List, Optional, Tuple
 
+import pandas as pd
 from fastapi import HTTPException, status
 
 from app.models.dataset import Dataset
@@ -53,12 +54,12 @@ class ClickService:
                 detail=f"Erro ao processar CSV de cliques: {'; '.join(errors)}",
             )
 
-        # 1. Agrupamento (Groupby)
-        # Garantir que sub_id nulo seja tratado uniformemente para o groupby
+        # 1. Agrupamento (Groupby) — incluir time quando CSV trouxer datetime
         df['sub_id'] = df['sub_id'].fillna('nan')
-        
-        # Agrupar por data, canal e subid, somando os cliques
-        df_grouped = df.groupby(['date', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
+        if 'time' not in df.columns:
+            df['time'] = None
+        # Agrupar por data, hora (se houver), canal e subid, somando os cliques
+        df_grouped = df.groupby(['date', 'time', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
 
         # 2. Upsert: incluir todas as linhas (novas e existentes). Regra: dados do arquivo prevalecem.
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
@@ -89,11 +90,15 @@ class ClickService:
 
         click_rows = []
         for item in rows_to_create:
+            _time = item.get("time")
+            if _time is not None and pd.isna(_time):
+                _time = None
             click_rows.append(
                 ClickRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=item["date"],
+                    time=_time,
                     channel=item["channel"],
                     sub_id=item["sub_id"],
                     clicks=int(item["clicks"]),
@@ -139,7 +144,9 @@ class ClickService:
             return
 
         df['sub_id'] = df['sub_id'].fillna('nan')
-        df_grouped = df.groupby(['date', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
+        if 'time' not in df.columns:
+            df['time'] = None
+        df_grouped = df.groupby(['date', 'time', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
 
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
@@ -165,11 +172,15 @@ class ClickService:
 
         click_rows = []
         for item in rows_to_create:
+            _time = item.get("time")
+            if _time is not None and pd.isna(_time):
+                _time = None
             click_rows.append(
                 ClickRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=item["date"],
+                    time=_time,
                     channel=item["channel"],
                     sub_id=item["sub_id"],
                     clicks=int(item["clicks"]),

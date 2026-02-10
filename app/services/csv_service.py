@@ -197,13 +197,15 @@ class CSVService:
                     parsed_date = pd.Timestamp("today")
                     errors.append("Coluna de data ausente; usando data atual.")
 
+            # Separar data e hora: se a coluna tiver datetime (ex.: 2026-01-07 23:59:22), extrair .date e .time
             out["date"] = parsed_date.dt.date if hasattr(parsed_date, "dt") else parsed_date
 
             if "time" in col_map:
                 parsed_time = pd.to_datetime(df[col_map["time"]], errors="coerce")
                 out["time"] = parsed_time.dt.time
             else:
-                out["time"] = None
+                # Extrair hora da mesma coluna de data quando vier datetime (ex.: 2026-01-07 23:59:22)
+                out["time"] = parsed_date.dt.time if hasattr(parsed_date, "dt") else None
 
             # Produto
             if "product" in col_map:
@@ -247,7 +249,7 @@ class CSVService:
                 return None
             
             out["mes_ano"] = out["date"].apply(calc_mes_ano)
-            if out["time"].isnull().all():
+            if out["time"] is not None and hasattr(out["time"], "isnull") and out["time"].isnull().all():
                 out["time"] = None
             out["product"] = out["product"].replace({"": "Produto"}, regex=False)
             out["revenue"] = out["revenue"].clip(lower=0)
@@ -331,13 +333,16 @@ class CSVService:
                     parsed_date = pd.Timestamp("today")
                     errors.append("Data ausente no arquivo de cliques; usando hoje.")
 
-            out["date"] = pd.to_datetime(parsed_date, errors="coerce").dt.date
+            # Separar data e hora: se a coluna tiver datetime (ex.: 2026-01-07 23:59:22), extrair .date e .time
+            parsed_dt = pd.to_datetime(parsed_date, errors="coerce", dayfirst=True)
+            out["date"] = parsed_dt.dt.date if hasattr(parsed_dt, "dt") else parsed_dt
 
             if "time" in col_map:
                 parsed_time = pd.to_datetime(df[col_map["time"]], errors="coerce")
                 out["time"] = parsed_time.dt.time
             else:
-                out["time"] = None
+                # Extrair hora da mesma coluna de data quando vier datetime
+                out["time"] = parsed_dt.dt.time if hasattr(parsed_dt, "dt") else None
 
             # Canal / Platform
             if "channel" in col_map:

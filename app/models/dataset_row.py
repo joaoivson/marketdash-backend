@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Numeric, Date, Time, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from app.db.base import Base
 
@@ -10,8 +10,9 @@ class DatasetRow(Base):
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # Dimensões (Campos de agrupamento)
+    # Dimensões (Campos de agrupamento) — data e hora separadas quando CSV traz datetime
     date = Column(Date, nullable=False, index=True)
+    time = Column(Time, nullable=True)
     platform = Column(String, nullable=True, index=True)
     category = Column(String, nullable=True, index=True)
     product = Column(String, nullable=False, index=True)

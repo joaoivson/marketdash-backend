@@ -1,14 +1,25 @@
-from pydantic import BaseModel, Field
-from datetime import datetime, date
+from pydantic import BaseModel, Field, field_serializer
+from datetime import datetime, date, time
 from typing import Optional, Any, List
 from app.schemas.dataset import DatasetResponse
 
 
 class ClickRowBase(BaseModel):
     date: date
+    time: Optional[time] = None
     channel: str
     sub_id: Optional[str] = None
     clicks: int
+
+    @field_serializer("date")
+    def serialize_date_dd_mm_yyyy(self, d: date) -> str:
+        """Exibir data no formato DD-MM-YYYY na API."""
+        return d.strftime("%d-%m-%Y") if d else ""
+
+    @field_serializer("time")
+    def serialize_time_hh_mm_ss(self, t: Optional[time]) -> Optional[str]:
+        """Exibir hora no formato HH:MM:SS na API."""
+        return t.strftime("%H:%M:%S") if t else None
 
 
 class ClickRowResponse(ClickRowBase):

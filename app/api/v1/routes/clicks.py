@@ -17,6 +17,7 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.click_row_repository import ClickRowRepository
 from app.schemas.click import ClickListResponse, ClickTaskResponse
 from app.services.click_service import ClickService
+from app.services.storage import upload_file_obj, is_storage_configured
 from app.tasks.csv_tasks import process_click_csv_task
 
 router = APIRouter(tags=["clicks"])
@@ -79,6 +80,24 @@ async def upload_click_csv(
                 task = process_click_csv_task.delay(
                     dataset.id, current_user.id, file.filename,
                     file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+                )
+            elif is_storage_configured():
+                # Large file: upload to S3 so worker can download (no shared disk needed)
+                from io import BytesIO
+                storage_key = f"uploads/temp/{dataset.id}_{uuid4().hex}.csv"
+                buf = BytesIO(path.read_bytes())
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if not upload_file_obj(settings.S3_BUCKET, storage_key, buf, content_type="text/csv"):
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="Failed to upload file to storage.",
+                    )
+                task = process_click_csv_task.delay(
+                    dataset.id, current_user.id, file.filename,
+                    file_path=None, file_content_b64=None, storage_key=storage_key,
                 )
             else:
                 task = process_click_csv_task.delay(

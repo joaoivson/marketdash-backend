@@ -76,18 +76,23 @@ def process_transaction_chunk(
         if found:
             col_map[target] = found
 
-    # Build normalized frame for groupby (minimal set)
-    group_cols = ["date", "platform", "category", "product", "status", "sub_id1", "order_id", "product_id"]
+    # Build normalized frame for groupby (minimal set) — incluir time quando coluna for datetime
+    group_cols = ["date", "time", "platform", "category", "product", "status", "sub_id1", "order_id", "product_id"]
     metrics = ["revenue", "commission", "cost", "quantity"]
     exprs = []
 
+    # Aceitar coluna datetime (ex.: 2026-01-07 23:59:22) e extrair data e hora
     if "date" in col_map:
-        exprs.append(pl.col(col_map["date"]).cast(pl.Utf8).str.to_date(strict=False).alias("date"))
+        date_col = pl.col(col_map["date"]).cast(pl.Utf8)
+        dt_col = date_col.str.to_datetime(strict=False)
+        exprs.append(dt_col.dt.date().alias("date"))
+        exprs.append(dt_col.dt.time().alias("time"))
     else:
         exprs.append(pl.lit(None).cast(pl.Date).alias("date"))
+        exprs.append(pl.lit(None).cast(pl.Time).alias("time"))
 
     for col in group_cols:
-        if col == "date":
+        if col in ("date", "time"):
             continue
         if col in col_map:
             exprs.append(pl.col(col_map[col]).cast(pl.Utf8).str.strip_chars().fill_null("nan").alias(col))
@@ -113,12 +118,20 @@ def process_transaction_chunk(
     batch = []
 
     for r in grouped.iter_rows(named=True):
-        row_clean = {k: (None if r[k] == "nan" else r[k]) for k in group_cols}
+        row_clean = {}
+        for k in group_cols:
+            if k == "time":
+                row_clean[k] = r.get(k)
+            else:
+                row_clean[k] = None if r[k] == "nan" else r[k]
         if isinstance(row_clean["date"], str):
             try:
                 row_clean["date"] = date.fromisoformat(row_clean["date"]) if row_clean["date"] else None
             except Exception:
                 row_clean["date"] = date.today()
+        if row_clean.get("date") is None:
+            row_clean["date"] = date.today()
+        _time = row_clean.get("time")
         row_hash = _generate_row_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
@@ -133,6 +146,7 @@ def process_transaction_chunk(
                 dataset_id=dataset_id,
                 user_id=user_id,
                 date=row_clean["date"],
+                time=_time,
                 product=row_clean["product"] or "nan",
                 platform=row_clean["platform"],
                 category=row_clean["category"],
@@ -167,11 +181,13 @@ def _process_transaction_chunk_pandas(db: Session, dataset_id: int, user_id: int
     if df is None or df.empty:
         return 0
 
-    group_cols = ["date", "platform", "category", "product", "status", "sub_id1", "order_id", "product_id"]
+    group_cols = ["date", "time", "platform", "category", "product", "status", "sub_id1", "order_id", "product_id"]
+    if "time" not in df.columns:
+        df["time"] = None
     for col in group_cols:
         if col not in df.columns:
-            df[col] = "nan"
-        else:
+            df[col] = None if col == "time" else "nan"
+        elif col != "time":
             df[col] = df[col].fillna("nan").astype(str)
     metrics = ["revenue", "commission", "cost", "quantity"]
     for col in metrics:
@@ -185,7 +201,12 @@ def _process_transaction_chunk_pandas(db: Session, dataset_id: int, user_id: int
     batch = []
     total = 0
     for _, row_data in df_grouped.iterrows():
-        row_clean = {c: (None if row_data[c] == "nan" else row_data[c]) for c in group_cols}
+        row_clean = {}
+        for c in group_cols:
+            if c == "time":
+                row_clean[c] = row_data.get(c)
+            else:
+                row_clean[c] = None if row_data[c] == "nan" else row_data[c]
         row_hash = _generate_row_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
@@ -195,11 +216,20 @@ def _process_transaction_chunk_pandas(db: Session, dataset_id: int, user_id: int
         cost = float(row_data["cost"])
         qty = int(row_data["quantity"])
         profit = rev - comm - cost
+        _time = row_clean.get("time")
+        if _time is not None:
+            try:
+                import pandas as _pd
+                if _pd.isna(_time):
+                    _time = None
+            except Exception:
+                pass
         batch.append(
             DatasetRow(
                 dataset_id=dataset_id,
                 user_id=user_id,
                 date=row_clean["date"],
+                time=_time,
                 product=row_clean["product"] or "nan",
                 platform=row_clean["platform"],
                 category=row_clean["category"],
@@ -252,12 +282,16 @@ def process_click_chunk(
         if found:
             col_map[target] = found
 
-    # date, channel, sub_id, clicks
+    # date, time, channel, sub_id, clicks — aceitar datetime e extrair data e hora
     exprs = []
     if "date" in col_map:
-        exprs.append(pl.col(col_map["date"]).cast(pl.Utf8).str.to_date(strict=False).alias("date"))
+        date_col = pl.col(col_map["date"]).cast(pl.Utf8)
+        dt_col = date_col.str.to_datetime(strict=False)
+        exprs.append(dt_col.dt.date().alias("date"))
+        exprs.append(dt_col.dt.time().alias("time"))
     else:
         exprs.append(pl.lit(None).cast(pl.Date).alias("date"))
+        exprs.append(pl.lit(None).cast(pl.Time).alias("time"))
     if "channel" in col_map:
         exprs.append(pl.col(col_map["channel"]).cast(pl.Utf8).str.strip_chars().fill_null("Desconhecido").alias("channel"))
     else:
@@ -272,7 +306,7 @@ def process_click_chunk(
         exprs.append(pl.lit(1).alias("clicks"))
 
     df_norm = df.select(exprs)
-    grouped = df_norm.group_by(["date", "channel", "sub_id"]).agg(pl.col("clicks").sum().alias("clicks"))
+    grouped = df_norm.group_by(["date", "time", "channel", "sub_id"]).agg(pl.col("clicks").sum().alias("clicks"))
     click_repo = ClickRowRepository(db)
     processed_hashes = set()
     batch = []
@@ -284,6 +318,9 @@ def process_click_chunk(
                 d = date.fromisoformat(d) if d else date.today()
             except Exception:
                 d = date.today()
+        if d is None:
+            d = date.today()
+        _time = r.get("time")
         row_clean = {"date": d, "channel": r.get("channel") or "Desconhecido", "sub_id": r.get("sub_id")}
         row_hash = _generate_click_hash(row_clean, user_id)
         if row_hash in processed_hashes:
@@ -294,6 +331,7 @@ def process_click_chunk(
                 dataset_id=dataset_id,
                 user_id=user_id,
                 date=row_clean["date"],
+                time=_time,
                 channel=row_clean["channel"],
                 sub_id=row_clean["sub_id"],
                 clicks=int(r.get("clicks") or 0),
@@ -316,7 +354,9 @@ def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chun
     if df is None or df.empty:
         return 0
     df["sub_id"] = df["sub_id"].fillna("nan")
-    df_grouped = df.groupby(["date", "channel", "sub_id"], as_index=False)["clicks"].sum()
+    if "time" not in df.columns:
+        df["time"] = None
+    df_grouped = df.groupby(["date", "time", "channel", "sub_id"], as_index=False)["clicks"].sum()
     click_repo = ClickRowRepository(db)
     processed_hashes = set()
     batch = []
@@ -328,11 +368,19 @@ def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chun
         if row_hash in processed_hashes:
             continue
         processed_hashes.add(row_hash)
+        _time = row_data.get("time")
+        try:
+            import pandas as _pd
+            if _time is not None and _pd.isna(_time):
+                _time = None
+        except Exception:
+            pass
         batch.append(
             ClickRow(
                 dataset_id=dataset_id,
                 user_id=user_id,
                 date=row_clean["date"],
+                time=_time,
                 channel=row_clean["channel"],
                 sub_id=row_clean["sub_id"],
                 clicks=int(row_data["clicks"]),
