@@ -147,11 +147,16 @@ class ClickService:
         if 'time' not in df.columns:
             df['time'] = None
         
-        # Process each row individually (no aggregation)
-        # Each row represents a single click event
+        # Captura o total de linhas originais do CSV (cada linha = 1 clique)
+        total_original_rows = len(df)
+        
+        # Agrega por date/time/channel/sub_id para storage eficiente
+        # O campo 'clicks' em cada row será a soma de cliques para aquela combinação
+        df_grouped = df.groupby(['date', 'time', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
+        
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
-        rows_data = df.to_dict('records')
+        rows_data = df_grouped.to_dict('records')
         inserted_count = 0
         updated_count = 0
         processed_hashes_in_file = set()
@@ -191,11 +196,13 @@ class ClickService:
 
         if click_rows:
             self.click_repo.bulk_create(click_rows)
-            dataset.row_count = inserted_count  # só linhas novas ficam com este dataset_id (upsert não altera dataset_id)
+            # IMPORTANTE: row_count deve refletir TODAS as linhas originais do CSV
+            dataset.row_count = total_original_rows
             dataset.status = "completed"
             self.dataset_repo.db.commit()
             logger.info(
-                f"Processamento cliques: {inserted_count} novas linhas, {updated_count} atualizadas para dataset {dataset_id}."
+                f"Processamento cliques: {len(df)} linhas originais -> {len(df_grouped)} rows agregados, "
+                f"{inserted_count} novos, {updated_count} atualizados para dataset {dataset_id}."
             )
 
     def list_latest_clicks(
@@ -215,9 +222,11 @@ class ClickService:
         )
         if not latest:
             return {"total_clicks": 0, "rows": []}
-        total_clicks = self.click_repo.get_total_clicks(
-            user_id, dataset_id=latest.id, start_date=start_date, end_date=end_date
-        )
+        
+        # total_clicks = número de linhas originais do CSV (dataset.row_count)
+        # Cada linha do CSV representa 1 clique individual
+        total_clicks = latest.row_count if latest.row_count else 0
+        
         rows = self.click_repo.list_by_dataset(latest.id, user_id, start_date, end_date, limit, offset)
         return {
             "total_clicks": total_clicks,
