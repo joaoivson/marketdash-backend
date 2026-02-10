@@ -205,10 +205,10 @@ class ClickService:
         limit: Optional[int] = None,
         offset: int = 0,
     ):
-        """Lista cliques do último dataset carregado. Retorna total_clicks (soma) e rows."""
+        """Lista cliques do último dataset concluído. Só considera status=completed para evitar rows vazios enquanto o worker processa."""
         latest = (
             self.dataset_repo.db.query(Dataset)
-            .filter(Dataset.user_id == user_id, Dataset.type == "click")
+            .filter(Dataset.user_id == user_id, Dataset.type == "click", Dataset.status == "completed")
             .order_by(Dataset.uploaded_at.desc())
             .first()
         )
