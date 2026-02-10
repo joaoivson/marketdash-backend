@@ -125,6 +125,67 @@ class ClickRowRepository:
         
         return {r[0] for r in query.all()}
 
+    def list_aggregated_by_dataset(
+        self,
+        dataset_id: int,
+        user_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[dict]:
+        """Lista cliques agregados por dia, canal e sub_id para um dataset."""
+        query = self.db.query(
+            ClickRow.date,
+            ClickRow.channel,
+            ClickRow.sub_id,
+            func.sum(ClickRow.clicks).label('clicks')
+        ).filter(
+            ClickRow.user_id == user_id,
+            ClickRow.dataset_id == dataset_id
+        )
+        if start_date:
+            query = query.filter(ClickRow.date >= start_date)
+        if end_date:
+            query = query.filter(ClickRow.date <= end_date)
+            
+        query = query.group_by(ClickRow.date, ClickRow.channel, ClickRow.sub_id)
+        query = query.order_by(ClickRow.date.desc(), func.sum(ClickRow.clicks).desc())
+        
+        if limit:
+            query = query.limit(limit).offset(offset)
+            
+        return query.all()
+
+    def list_aggregated_by_user(
+        self,
+        user_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[dict]:
+        """Lista cliques agregados de todos os datasets do usuário."""
+        query = self.db.query(
+            ClickRow.date,
+            ClickRow.channel,
+            ClickRow.sub_id,
+            func.sum(ClickRow.clicks).label('clicks')
+        ).filter(ClickRow.user_id == user_id)
+        
+        if start_date:
+            query = query.filter(ClickRow.date >= start_date)
+        if end_date:
+            query = query.filter(ClickRow.date <= end_date)
+            
+        query = query.group_by(ClickRow.date, ClickRow.channel, ClickRow.sub_id)
+        query = query.order_by(ClickRow.date.desc(), func.sum(ClickRow.clicks).desc())
+        
+        if limit:
+            query = query.limit(limit).offset(offset)
+            
+        return query.all()
+
     def delete_all_by_user(self, user_id: int) -> int:
         """Deleta todos os cliques do usuário."""
         query = self.db.query(ClickRow).filter(ClickRow.user_id == user_id)

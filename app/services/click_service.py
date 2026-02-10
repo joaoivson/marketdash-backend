@@ -227,10 +227,11 @@ class ClickService:
         # Cada linha do CSV representa 1 clique individual
         total_clicks = latest.row_count if latest.row_count else 0
         
-        rows = self.click_repo.list_by_dataset(latest.id, user_id, start_date, end_date, limit, offset)
+        # Rows são AGREGADOS para exibição (Hybrid approach)
+        rows = self.click_repo.list_aggregated_by_dataset(latest.id, user_id, start_date, end_date, limit, offset)
         return {
             "total_clicks": total_clicks,
-            "rows": [self.serialize_click(r) for r in rows],
+            "rows": [self._serialize_aggregated_click(r) for r in rows],
         }
 
     def list_all_clicks(
@@ -242,13 +243,23 @@ class ClickService:
         offset: int = 0,
     ):
         """Lista todos os cliques históricos. Retorna total_clicks (soma) e rows."""
-        total_clicks = self.click_repo.get_total_clicks(
-            user_id, dataset_id=None, start_date=start_date, end_date=end_date
+        # total_clicks = soma dos row_count de TODOS os datasets de cliques completos
+        # Cada dataset.row_count = número de linhas originais do CSV
+        total_clicks_query = (
+            self.dataset_repo.db.query(func.coalesce(func.sum(Dataset.row_count), 0))
+            .filter(
+                Dataset.user_id == user_id,
+                Dataset.type == "click",
+                Dataset.status == "completed"
+            )
         )
-        rows = self.click_repo.list_by_user(user_id, start_date, end_date, limit, offset)
+        total_clicks = int(total_clicks_query.scalar() or 0)
+        
+        # Rows são AGREGADOS para exibição (Hybrid approach)
+        rows = self.click_repo.list_aggregated_by_user(user_id, start_date, end_date, limit, offset)
         return {
             "total_clicks": total_clicks,
-            "rows": [self.serialize_click(r) for r in rows],
+            "rows": [self._serialize_aggregated_click(r) for r in rows],
         }
 
     def delete_all_clicks(self, user_id: int) -> dict:
@@ -271,4 +282,16 @@ class ClickService:
             "channel": row.channel,
             "clicks": row.clicks,
             "sub_id": row.sub_id,
+        }
+
+    def _serialize_aggregated_click(self, row) -> dict:
+        """Serializa o resultado da agregação (KeyedTuple)."""
+        return {
+            "id": None,  # Agregado não tem ID único
+            "dataset_id": None,
+            "user_id": None,
+            "date": row.date,
+            "channel": row.channel,
+            "sub_id": row.sub_id,
+            "clicks": int(row.clicks) if row.clicks else 0,
         }
