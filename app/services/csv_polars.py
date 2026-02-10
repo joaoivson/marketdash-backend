@@ -32,14 +32,13 @@ def _generate_row_hash(row_data: dict, user_id: int) -> str:
 
 
 def _generate_click_hash(row_data: dict, user_id: int) -> str:
-    """Same as ClickService._generate_click_hash."""
+    """Same as ClickService._generate_click_hash: (user_id, date, channel) only."""
     date_val = row_data.get("date")
     date_str = date_val.isoformat() if hasattr(date_val, "isoformat") else str(date_val)
     components = [
         str(user_id),
         date_str,
         str(row_data.get("channel") or "Desconhecido").strip().lower(),
-        str(row_data.get("sub_id") or "nan").strip().lower(),
     ]
     return hashlib.md5("|".join(components).encode()).hexdigest()
 
@@ -353,37 +352,26 @@ def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chun
     df, errors = CSVService.validate_click_csv(chunk_content, "chunk.csv")
     if df is None or df.empty:
         return 0
-    df["sub_id"] = df["sub_id"].fillna("nan")
-    if "time" not in df.columns:
-        df["time"] = None
-    df_grouped = df.groupby(["date", "time", "channel", "sub_id"], as_index=False)["clicks"].sum()
+    df_grouped = df.groupby(["date", "channel"], as_index=False)["clicks"].sum()
     click_repo = ClickRowRepository(db)
     processed_hashes = set()
     batch = []
     total = 0
     for _, row_data in df_grouped.iterrows():
-        sub_id = None if row_data["sub_id"] == "nan" else row_data["sub_id"]
-        row_clean = {"date": row_data["date"], "channel": row_data["channel"], "sub_id": sub_id}
+        row_clean = {"date": row_data["date"], "channel": row_data["channel"], "clicks": row_data["clicks"]}
         row_hash = _generate_click_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
         processed_hashes.add(row_hash)
-        _time = row_data.get("time")
-        try:
-            import pandas as _pd
-            if _time is not None and _pd.isna(_time):
-                _time = None
-        except Exception:
-            pass
         batch.append(
             ClickRow(
                 dataset_id=dataset_id,
                 user_id=user_id,
                 date=row_clean["date"],
-                time=_time,
+                time=None,
                 channel=row_clean["channel"],
-                sub_id=row_clean["sub_id"],
-                clicks=int(row_data["clicks"]),
+                sub_id=None,
+                clicks=int(row_clean["clicks"]),
                 row_hash=row_hash,
             )
         )

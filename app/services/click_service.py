@@ -23,27 +23,23 @@ class ClickService:
     @staticmethod
     def _generate_click_hash(row_data: dict, user_id: int) -> str:
         """
-        Gera um hash MD5 determinístico para o agrupamento.
-        Inclui user_id e normaliza a data para evitar conflitos globais.
+        Gera um hash MD5 determinístico por (user_id, date, channel).
+        Regra: rows agregados por dia e canal; hash não inclui sub_id nem time.
         """
-        # Normalizar a data para string ISO format
         date_val = row_data.get("date")
-        if hasattr(date_val, 'isoformat'):
+        if hasattr(date_val, "isoformat"):
             date_str = date_val.isoformat()
         else:
             date_str = str(date_val)
-
         components = [
             str(user_id),
             date_str,
             str(row_data.get("channel") or "Desconhecido").strip().lower(),
-            str(row_data.get("sub_id") or "nan").strip().lower(),
         ]
-        row_str = "|".join(components)
-        return hashlib.md5(row_str.encode()).hexdigest()
+        return hashlib.md5("|".join(components).encode()).hexdigest()
 
     def upload_click_csv(self, file_content: bytes, filename: str, user_id: int) -> Tuple[Dataset, dict]:
-        """Processa upload de CSV de cliques com agrupamento por dia/canal/subid."""
+        """Processa upload de CSV de cliques com agrupamento por (date, channel). total_clicks = linhas do CSV; rows.clicks = soma por dia/canal."""
         if not filename.endswith(".csv"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Apenas arquivos CSV são permitidos")
 
@@ -54,32 +50,23 @@ class ClickService:
                 detail=f"Erro ao processar CSV de cliques: {'; '.join(errors)}",
             )
 
-        # 1. Agrupamento (Groupby) — incluir time quando CSV trouxer datetime
-        df['sub_id'] = df['sub_id'].fillna('nan')
-        if 'time' not in df.columns:
-            df['time'] = None
-        # Agrupar por data, hora (se houver), canal e subid, somando os cliques
-        df_grouped = df.groupby(['date', 'time', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
+        # 1. Agrupamento por (date, channel): total_clicks = cada linha do CSV; rows.clicks = total por dia/canal
+        total_original_rows = len(df)
+        df_grouped = df.groupby(["date", "channel"], as_index=False)["clicks"].sum()
 
-        # 2. Upsert: incluir todas as linhas (novas e existentes). Regra: dados do arquivo prevalecem.
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
-
         rows_to_create = []
-        rows_data = df_grouped.to_dict('records')
+        rows_data = df_grouped.to_dict("records")
         inserted_count = 0
         updated_count = 0
         processed_hashes_in_file = set()
-        total_rows = len(rows_data)
 
         for row_data in rows_data:
-            sub_id = None if row_data["sub_id"] == 'nan' else row_data["sub_id"]
-            row_data_clean = {**row_data, "sub_id": sub_id}
+            row_data_clean = {"date": row_data["date"], "channel": row_data["channel"], "clicks": row_data["clicks"]}
             row_hash = self._generate_click_hash(row_data_clean, user_id)
-
             if row_hash in processed_hashes_in_file:
                 continue
             processed_hashes_in_file.add(row_hash)
-
             if row_hash in existing_hashes:
                 updated_count += 1
             else:
@@ -90,17 +77,14 @@ class ClickService:
 
         click_rows = []
         for item in rows_to_create:
-            _time = item.get("time")
-            if _time is not None and pd.isna(_time):
-                _time = None
             click_rows.append(
                 ClickRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=item["date"],
-                    time=_time,
+                    time=None,
                     channel=item["channel"],
-                    sub_id=item["sub_id"],
+                    sub_id=None,
                     clicks=int(item["clicks"]),
                     row_hash=item["row_hash"],
                 )
@@ -108,20 +92,21 @@ class ClickService:
 
         if click_rows:
             self.click_repo.bulk_create(click_rows)
-            dataset.row_count = inserted_count  # só linhas novas ficam com este dataset_id (upsert não altera dataset_id)
+            dataset.row_count = total_original_rows
             dataset.status = "completed"
             self.dataset_repo.db.commit()
             logger.info(
-                f"Upload cliques: {inserted_count} novas linhas, {updated_count} atualizadas para dataset {dataset.id}."
+                f"Upload cliques: {total_original_rows} linhas CSV -> {len(rows_to_create)} rows (date, channel), "
+                f"{inserted_count} novos, {updated_count} atualizados para dataset {dataset.id}."
             )
 
         self.dataset_repo.db.refresh(dataset)
 
         metadata = {
-            "total_rows": total_rows,
+            "total_rows": total_original_rows,
             "inserted_rows": inserted_count,
             "updated_rows": updated_count,
-            "ignored_rows": total_rows - (inserted_count + updated_count),
+            "ignored_rows": total_original_rows - (inserted_count + updated_count),
         }
         return dataset, metadata
 
@@ -143,33 +128,22 @@ class ClickService:
             logger.error(f"Validation errors for click dataset {dataset_id}: {errors}")
             return
 
-        df['sub_id'] = df['sub_id'].fillna('nan')
-        if 'time' not in df.columns:
-            df['time'] = None
-        
-        # Captura o total de linhas originais do CSV (cada linha = 1 clique)
         total_original_rows = len(df)
-        
-        # Agrega por date/time/channel/sub_id para storage eficiente
-        # O campo 'clicks' em cada row será a soma de cliques para aquela combinação
-        df_grouped = df.groupby(['date', 'time', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
-        
+        df_grouped = df.groupby(["date", "channel"], as_index=False)["clicks"].sum()
+
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
-        rows_data = df_grouped.to_dict('records')
+        rows_data = df_grouped.to_dict("records")
         inserted_count = 0
         updated_count = 0
         processed_hashes_in_file = set()
 
         for row_data in rows_data:
-            sub_id = None if row_data["sub_id"] == 'nan' else row_data["sub_id"]
-            row_data_clean = {**row_data, "sub_id": sub_id}
+            row_data_clean = {"date": row_data["date"], "channel": row_data["channel"], "clicks": row_data["clicks"]}
             row_hash = self._generate_click_hash(row_data_clean, user_id)
-
             if row_hash in processed_hashes_in_file:
                 continue
             processed_hashes_in_file.add(row_hash)
-
             if row_hash in existing_hashes:
                 updated_count += 1
             else:
@@ -178,17 +152,14 @@ class ClickService:
 
         click_rows = []
         for item in rows_to_create:
-            _time = item.get("time")
-            if _time is not None and pd.isna(_time):
-                _time = None
             click_rows.append(
                 ClickRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=item["date"],
-                    time=_time,
+                    time=None,
                     channel=item["channel"],
-                    sub_id=item["sub_id"],
+                    sub_id=None,
                     clicks=int(item["clicks"]),
                     row_hash=item["row_hash"],
                 )
@@ -201,7 +172,7 @@ class ClickService:
             dataset.status = "completed"
             self.dataset_repo.db.commit()
             logger.info(
-                f"Processamento cliques: {len(df)} linhas originais -> {len(df_grouped)} rows agregados, "
+                f"Processamento cliques: {total_original_rows} linhas CSV -> {len(rows_to_create)} rows (date, channel), "
                 f"{inserted_count} novos, {updated_count} atualizados para dataset {dataset_id}."
             )
 
@@ -285,13 +256,13 @@ class ClickService:
         }
 
     def _serialize_aggregated_click(self, row) -> dict:
-        """Serializa o resultado da agregação (KeyedTuple)."""
+        """Serializa o resultado da agregação (date, channel, clicks)."""
         return {
-            "id": None,  # Agregado não tem ID único
+            "id": None,
             "dataset_id": None,
             "user_id": None,
             "date": row.date,
             "channel": row.channel,
-            "sub_id": row.sub_id,
+            "sub_id": getattr(row, "sub_id", None),
             "clicks": int(row.clicks) if row.clicks else 0,
         }
