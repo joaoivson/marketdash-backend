@@ -23,9 +23,10 @@ class ClickRowBase(BaseModel):
 
 
 class ClickRowResponse(ClickRowBase):
-    id: int
-    dataset_id: int
-    user_id: int
+    """Row de clique; id/dataset_id/user_id são None quando a linha é agregada (date, channel)."""
+    id: Optional[int] = None
+    dataset_id: Optional[int] = None
+    user_id: Optional[int] = None
 
     class Config:
         from_attributes = True
