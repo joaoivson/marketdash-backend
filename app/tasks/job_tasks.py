@@ -183,6 +183,10 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
                     count = db.query(func.count(ClickRow.id)).filter(ClickRow.dataset_id == job.dataset_id).scalar()
                 dataset.row_count = count or 0
                 dataset.status = "completed"
+                
+                # Update job status to completed so frontend polling stops
+                job.status = "completed"
+                
                 db.commit()
     except Exception as exc:
         logger.exception(f"process_chunk failed job {job_id} chunk {chunk_index}: {exc}")
