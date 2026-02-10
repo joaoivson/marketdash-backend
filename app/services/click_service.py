@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 from fastapi import HTTPException, status
+from sqlalchemy import func
 
 from app.models.dataset import Dataset
 from app.models.click_row import ClickRow
