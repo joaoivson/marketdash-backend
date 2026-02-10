@@ -146,11 +146,12 @@ class ClickService:
         df['sub_id'] = df['sub_id'].fillna('nan')
         if 'time' not in df.columns:
             df['time'] = None
-        df_grouped = df.groupby(['date', 'time', 'channel', 'sub_id'], as_index=False)['clicks'].sum()
-
+        
+        # Process each row individually (no aggregation)
+        # Each row represents a single click event
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
-        rows_data = df_grouped.to_dict('records')
+        rows_data = df.to_dict('records')
         inserted_count = 0
         updated_count = 0
         processed_hashes_in_file = set()
