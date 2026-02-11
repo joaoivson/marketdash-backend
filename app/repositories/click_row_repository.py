@@ -2,7 +2,7 @@ from typing import Iterable, List, Optional
 from datetime import date
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, coalesce
+from sqlalchemy import func, case
 
 from app.models.click_row import ClickRow
 
@@ -49,7 +49,7 @@ class ClickRowRepository:
                 'date': stmt.excluded.date,
                 'channel': stmt.excluded.channel,
                 'sub_id': stmt.excluded.sub_id,
-                'time': coalesce(stmt.excluded.time, ClickRow.time),
+                'time': func.coalesce(stmt.excluded.time, ClickRow.time),
             }
         )
 
