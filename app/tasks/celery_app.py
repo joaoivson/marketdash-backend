@@ -23,9 +23,10 @@ celery_app.conf.update(
     task_soft_time_limit=1100,
 )
 
-# Auto-discover tasks from the tasks directory
-celery_app.autodiscover_tasks(['app.tasks'], force=True)
-
-# Also import explicitly so tasks are registered
-import app.tasks.csv_tasks
-import app.tasks.job_tasks
+# Explicitly include task modules so the worker always registers them (avoids "unregistered task" in production).
+celery_app.conf.include = [
+    "app.tasks.job_tasks",
+    "app.tasks.csv_tasks",
+]
+# Auto-discover any other tasks under app.tasks
+celery_app.autodiscover_tasks(["app.tasks"], force=True)

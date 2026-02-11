@@ -263,3 +263,67 @@ Equipe MarketDash
         except Exception as e:
             logger.error(f"Erro ao enviar email de reativação para {user_email}: {e}")
             return False
+
+    def send_feedback_email(
+        self,
+        data: dict,
+        user_name: Optional[str] = None,
+        user_email: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> bool:
+        """
+        Envia o conteúdo do feedback para o email de relacionamento (ex.: relacionamento@marketdash.com.br).
+        data: objeto com os campos coletados no formulário (ex.: message, rating, category). Será exibido como chave: valor.
+        """
+        from app.core.config import settings
+        to_email = getattr(settings, "FEEDBACK_EMAIL", None) or "relacionamento@marketdash.com.br"
+        data_lines = []
+        for k, v in (data or {}).items():
+            val = v if v is None or isinstance(v, (str, int, float, bool)) else str(v)
+            data_lines.append(f"{k}: {val}")
+        data_text = "\n".join(data_lines) if data_lines else "(nenhum campo)"
+        lines = [
+            "Novo feedback recebido pelo MarketDash",
+            "",
+            "--- Dados do feedback ---",
+            data_text,
+            "",
+            "--- Dados do usuário ---",
+            f"Nome: {user_name or '(não informado)'}",
+            f"Email: {user_email or '(não informado)'}",
+            f"ID do usuário: {user_id if user_id is not None else '(não informado)'}",
+        ]
+        text_body = "\n".join(lines)
+        data_html = "".join(
+            f"<p><strong>{_escape_html(str(k))}:</strong> {_escape_html(str(v))}</p>"
+            for k, v in (data or {}).items()
+        ) or "<p>(nenhum campo)</p>"
+        html_body = (
+            "<h2>Novo feedback recebido pelo MarketDash</h2>"
+            "<h3>Dados do feedback</h3>"
+            f"{data_html}"
+            "<h3>Dados do usuário</h3>"
+            f"<p><strong>Nome:</strong> {name}<br><strong>Email:</strong> {email}<br><strong>ID:</strong> {uid}</p>"
+        ).format(
+            name=_escape_html(user_name or "(não informado)"),
+            email=_escape_html(user_email or "(não informado)"),
+            uid=user_id if user_id is not None else "(não informado)",
+        )
+        subject = "[MarketDash] Novo feedback"
+        success = self._send_email(
+            to=to_email,
+            subject=subject,
+            html_content=html_body,
+            text_content=text_body,
+        )
+        return success
+
+
+def _escape_html(s: str) -> str:
+    """Escapa caracteres HTML para evitar injection no corpo do email."""
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )

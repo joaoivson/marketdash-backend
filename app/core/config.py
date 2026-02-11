@@ -124,6 +124,8 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: Optional[str] = None
     SMTP_FROM_NAME: str = "MarketDash"
     FRONTEND_URL: str = "https://marketdash.com.br"
+    # Email que recebe feedback do formulário (API de feedback)
+    FEEDBACK_EMAIL: str = "relacionamento@marketdash.com.br"
     
     # CORS Configuration
     # Por padrão, apenas HTTPS é permitido em produção/homologação
