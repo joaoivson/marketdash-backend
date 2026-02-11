@@ -2,7 +2,7 @@ from typing import Iterable, List, Optional
 from datetime import date
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case, coalesce
 
 from app.models.click_row import ClickRow
 
@@ -32,19 +32,24 @@ class ClickRowRepository:
                 'sub_id': row.sub_id,
                 'clicks': row.clicks,
                 'row_hash': row.row_hash,
+                'time': getattr(row, 'time', None),
             }
             mappings.append(mapping)
 
-        # Em conflito: atualizar apenas métricas/dimensões; NÃO atualizar dataset_id (evita
-        # que re-envio "mova" linhas para o novo dataset e altere totais exibidos).
+        # Em conflito: mesmo dataset (ex.: chunks do mesmo job) -> soma clicks; outro dataset -> substitui.
+        # Assim upload por chunks acumula; re-upload de outro arquivo substitui totais por (date, channel).
         stmt = insert(ClickRow).values(mappings)
         stmt = stmt.on_conflict_do_update(
             index_elements=['row_hash'],
             set_={
-                'clicks': stmt.excluded.clicks,
+                'clicks': case(
+                    (ClickRow.dataset_id == stmt.excluded.dataset_id, ClickRow.clicks + stmt.excluded.clicks),
+                    else_=stmt.excluded.clicks,
+                ),
                 'date': stmt.excluded.date,
                 'channel': stmt.excluded.channel,
                 'sub_id': stmt.excluded.sub_id,
+                'time': coalesce(stmt.excluded.time, ClickRow.time),
             }
         )
 
@@ -134,12 +139,14 @@ class ClickRowRepository:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[dict]:
-        """Lista cliques agregados por (date, channel); rows[].clicks = total por dia/canal."""
+        """Lista cliques agregados por (date, channel); rows[].clicks = total por dia/canal; time = primeira hora do grupo."""
         sum_clicks = func.sum(ClickRow.clicks).label("clicks")
+        time_min = func.min(ClickRow.time).label("time")
         query = self.db.query(
             ClickRow.date,
             ClickRow.channel,
             sum_clicks,
+            time_min,
         ).filter(
             ClickRow.user_id == user_id,
             ClickRow.dataset_id == dataset_id
@@ -162,12 +169,14 @@ class ClickRowRepository:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[dict]:
-        """Lista cliques agregados por (date, channel) de todos os datasets do usuário."""
+        """Lista cliques agregados por (date, channel) de todos os datasets do usuário; time = primeira hora do grupo."""
         sum_clicks = func.sum(ClickRow.clicks).label("clicks")
+        time_min = func.min(ClickRow.time).label("time")
         query = self.db.query(
             ClickRow.date,
             ClickRow.channel,
             sum_clicks,
+            time_min,
         ).filter(ClickRow.user_id == user_id)
         if start_date:
             query = query.filter(ClickRow.date >= start_date)

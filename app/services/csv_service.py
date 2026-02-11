@@ -13,8 +13,8 @@ TARGET_COLUMNS = ["date", "product", "revenue", "cost", "commission", "quantity"
 
 # Mapeamento flexível de aliases (normalizados: minúsculo, sem acentos, sem espaços/pontuação)
 ALIASES = {
-    "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao", "tempo_dos_cliques"},
-    "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido", "tempo_dos_cliques"},
+    "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao", "tempo_dos_cliques", "."},
+    "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido", "tempo_dos_cliques", "."},
     "product": {"product", "produto", "produto_nome", "product_name", "nome_do_item"},
     "order_id": {"order_id", "idpedido", "id_do_pedido", "id_dopedido", "id_pagamento", "idpagamento", "numero_do_pedido", "id_do_pedido"},
     "product_id": {"product_id", "id_do_item", "id_item", "item_id", "id_do_produto", "product_id"},
@@ -88,7 +88,7 @@ def find_column(df_cols: List[str], aliases: set) -> str:
     # 2. Se não encontrar prioritária, usar a lógica original de busca no set
     for col in df_cols:
         norm = normalize_name(col)
-        if norm in aliases:
+        if norm in aliases or col in aliases:
             return col
     return ""
 
@@ -353,13 +353,8 @@ class CSVService:
                 out["channel"] = "Desconhecido"
                 errors.append("Coluna de canal não encontrada; usando 'Desconhecido'.")
 
-            # Cliques
-            if "clicks" in col_map:
-                out["clicks"] = pd.to_numeric(df[col_map["clicks"]], errors="coerce").fillna(0).astype(int)
-            else:
-                # Se não houver coluna de cliques, assume 1 clique por linha (cada linha é um evento)
-                out["clicks"] = 1
-                logger.info("Coluna de cliques não encontrada; assumindo 1 por linha.")
+            # Cliques: cada linha do CSV = 1 evento de clique; groupby (date, channel).sum() = contagem por dia/canal
+            out["clicks"] = 1
 
             # Sub ID
             if "sub_id" in col_map:

@@ -53,7 +53,10 @@ class ClickService:
 
         # 1. Agrupamento por (date, channel): total_clicks = cada linha do CSV; rows.clicks = total por dia/canal
         total_original_rows = len(df)
-        df_grouped = df.groupby(["date", "channel"], as_index=False)["clicks"].sum()
+        agg_dict = {"clicks": "sum"}
+        if "time" in df.columns:
+            agg_dict["time"] = "first"
+        df_grouped = df.groupby(["date", "channel"], as_index=False).agg(agg_dict)
 
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
@@ -72,6 +75,7 @@ class ClickService:
                 updated_count += 1
             else:
                 inserted_count += 1
+            row_data_clean["time"] = row_data.get("time")
             rows_to_create.append({**row_data_clean, "row_hash": row_hash})
 
         dataset = self.dataset_repo.create(Dataset(user_id=user_id, filename=filename, type="click"))
@@ -83,7 +87,7 @@ class ClickService:
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=item["date"],
-                    time=None,
+                    time=item.get("time"),
                     channel=item["channel"],
                     sub_id=None,
                     clicks=int(item["clicks"]),
@@ -130,7 +134,10 @@ class ClickService:
             return
 
         total_original_rows = len(df)
-        df_grouped = df.groupby(["date", "channel"], as_index=False)["clicks"].sum()
+        agg_dict = {"clicks": "sum"}
+        if "time" in df.columns:
+            agg_dict["time"] = "first"
+        df_grouped = df.groupby(["date", "channel"], as_index=False).agg(agg_dict)
 
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
@@ -149,6 +156,7 @@ class ClickService:
                 updated_count += 1
             else:
                 inserted_count += 1
+            row_data_clean["time"] = row_data.get("time")
             rows_to_create.append({**row_data_clean, "row_hash": row_hash})
 
         click_rows = []
@@ -158,7 +166,7 @@ class ClickService:
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=item["date"],
-                    time=None,
+                    time=item.get("time"),
                     channel=item["channel"],
                     sub_id=None,
                     clicks=int(item["clicks"]),
@@ -257,13 +265,14 @@ class ClickService:
         }
 
     def _serialize_aggregated_click(self, row) -> dict:
-        """Serializa o resultado da agregação (date, channel, clicks)."""
+        """Serializa o resultado da agregação (date, channel, clicks, time)."""
         return {
             "id": None,
             "dataset_id": None,
             "user_id": None,
-            "date": row.date,
-            "channel": row.channel,
+            "date": getattr(row, "date", None),
+            "time": getattr(row, "time", None),
+            "channel": getattr(row, "channel", None) or "",
             "sub_id": getattr(row, "sub_id", None),
             "clicks": int(row.clicks) if row.clicks else 0,
         }

@@ -179,9 +179,13 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
             if dataset:
                 if job.type == "transaction":
                     count = db.query(func.count(DatasetRow.id)).filter(DatasetRow.dataset_id == job.dataset_id).scalar()
+                    dataset.row_count = count or 0
                 else:
-                    count = db.query(func.count(ClickRow.id)).filter(ClickRow.dataset_id == job.dataset_id).scalar()
-                dataset.row_count = count or 0
+                    # Click: row_count = total CSV lines = sum of clicks (each line = 1 click event)
+                    total_clicks = db.query(func.coalesce(func.sum(ClickRow.clicks), 0)).filter(
+                        ClickRow.dataset_id == job.dataset_id
+                    ).scalar()
+                    dataset.row_count = int(total_clicks or 0)
                 dataset.status = "completed"
                 
                 # Update job status to completed so frontend polling stops

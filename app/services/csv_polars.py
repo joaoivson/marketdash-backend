@@ -305,7 +305,11 @@ def process_click_chunk(
         exprs.append(pl.lit(1).alias("clicks"))
 
     df_norm = df.select(exprs)
-    grouped = df_norm.group_by(["date", "time", "channel", "sub_id"]).agg(pl.col("clicks").sum().alias("clicks"))
+    # Agrupar só por (date, channel): um ClickRow por grupo; clicks = soma, time = primeira hora (Tempo dos Cliques)
+    agg_exprs = [pl.col("clicks").sum().alias("clicks")]
+    if "time" in df_norm.columns:
+        agg_exprs.append(pl.col("time").first().alias("time"))
+    grouped = df_norm.group_by(["date", "channel"]).agg(agg_exprs)
     click_repo = ClickRowRepository(db)
     processed_hashes = set()
     batch = []
@@ -320,7 +324,7 @@ def process_click_chunk(
         if d is None:
             d = date.today()
         _time = r.get("time")
-        row_clean = {"date": d, "channel": r.get("channel") or "Desconhecido", "sub_id": r.get("sub_id")}
+        row_clean = {"date": d, "channel": r.get("channel") or "Desconhecido"}
         row_hash = _generate_click_hash(row_clean, user_id)
         if row_hash in processed_hashes:
             continue
@@ -332,7 +336,7 @@ def process_click_chunk(
                 date=row_clean["date"],
                 time=_time,
                 channel=row_clean["channel"],
-                sub_id=row_clean["sub_id"],
+                sub_id=None,
                 clicks=int(r.get("clicks") or 0),
                 row_hash=row_hash,
             )
@@ -352,7 +356,10 @@ def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chun
     df, errors = CSVService.validate_click_csv(chunk_content, "chunk.csv")
     if df is None or df.empty:
         return 0
-    df_grouped = df.groupby(["date", "channel"], as_index=False)["clicks"].sum()
+    agg_dict = {"clicks": "sum"}
+    if "time" in df.columns:
+        agg_dict["time"] = "first"
+    df_grouped = df.groupby(["date", "channel"], as_index=False).agg(agg_dict)
     click_repo = ClickRowRepository(db)
     processed_hashes = set()
     batch = []
@@ -368,7 +375,7 @@ def _process_click_chunk_pandas(db: Session, dataset_id: int, user_id: int, chun
                 dataset_id=dataset_id,
                 user_id=user_id,
                 date=row_clean["date"],
-                time=None,
+                time=row_data.get("time"),
                 channel=row_clean["channel"],
                 sub_id=None,
                 clicks=int(row_clean["clicks"]),
