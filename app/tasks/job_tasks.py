@@ -83,6 +83,7 @@ def process_job_from_storage(self, job_id: str):
                         db.commit()
             except Exception as e:
                 logger.warning(f"process_job_from_storage Polars failed: {e}, using pandas")
+                db.rollback()
                 use_polars = False
 
         if not use_polars:

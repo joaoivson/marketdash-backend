@@ -142,12 +142,13 @@ class ClickRowRepository:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[dict]:
-        """Lista cliques agregados por (date, channel); rows[].clicks = total por dia/canal; time = primeira hora do grupo."""
+        """Lista cliques por (date, channel, sub_id); rows[].clicks = total do grupo; time = primeira hora do grupo."""
         sum_clicks = func.sum(ClickRow.clicks).label("clicks")
         time_min = func.min(ClickRow.time).label("time")
         query = self.db.query(
             ClickRow.date,
             ClickRow.channel,
+            ClickRow.sub_id,
             sum_clicks,
             time_min,
         ).filter(
@@ -158,7 +159,7 @@ class ClickRowRepository:
             query = query.filter(ClickRow.date >= start_date)
         if end_date:
             query = query.filter(ClickRow.date <= end_date)
-        query = query.group_by(ClickRow.date, ClickRow.channel)
+        query = query.group_by(ClickRow.date, ClickRow.channel, ClickRow.sub_id)
         query = query.order_by(ClickRow.date.desc(), sum_clicks.desc())
         if limit:
             query = query.limit(limit).offset(offset)
@@ -180,12 +181,13 @@ class ClickRowRepository:
         limit: Optional[int] = None,
         offset: int = 0,
     ) -> List[dict]:
-        """Lista cliques agregados por (date, channel) de todos os datasets do usuário; time = primeira hora do grupo."""
+        """Lista cliques por (date, channel, sub_id) de todos os datasets do usuário; time = primeira hora do grupo."""
         sum_clicks = func.sum(ClickRow.clicks).label("clicks")
         time_min = func.min(ClickRow.time).label("time")
         query = self.db.query(
             ClickRow.date,
             ClickRow.channel,
+            ClickRow.sub_id,
             sum_clicks,
             time_min,
         ).filter(ClickRow.user_id == user_id)
@@ -193,7 +195,7 @@ class ClickRowRepository:
             query = query.filter(ClickRow.date >= start_date)
         if end_date:
             query = query.filter(ClickRow.date <= end_date)
-        query = query.group_by(ClickRow.date, ClickRow.channel)
+        query = query.group_by(ClickRow.date, ClickRow.channel, ClickRow.sub_id)
         query = query.order_by(ClickRow.date.desc(), sum_clicks.desc())
         if limit:
             query = query.limit(limit).offset(offset)

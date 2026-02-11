@@ -6,7 +6,7 @@ from app.schemas.dataset import DatasetResponse
 
 class ClickRowBase(BaseModel):
     date: date
-    time: Optional[time] = None
+    time: Optional[str] = None  # HH:MM:SS quando disponível (Tempo dos Cliques)
     channel: str
     sub_id: Optional[str] = None
     clicks: int
@@ -17,9 +17,9 @@ class ClickRowBase(BaseModel):
         return d.strftime("%d-%m-%Y") if d else ""
 
     @field_serializer("time")
-    def serialize_time_hh_mm_ss(self, t: Optional[time]) -> Optional[str]:
-        """Exibir hora no formato HH:MM:SS na API."""
-        return t.strftime("%H:%M:%S") if t else None
+    def serialize_time(self, t: Optional[str]) -> Optional[str]:
+        """Hora já vem como string HH:MM:SS do serviço; repassa como está."""
+        return t
 
 
 class ClickRowResponse(ClickRowBase):

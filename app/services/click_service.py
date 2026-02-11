@@ -26,19 +26,19 @@ class ClickService:
 
     @staticmethod
     def _generate_click_hash(row_data: dict, user_id: int) -> str:
-        """
-        Gera um hash MD5 determinístico por (user_id, date, channel).
-        Regra: rows agregados por dia e canal; hash não inclui sub_id nem time.
-        """
+        """Unicidade por (user_id, date, channel, sub_id)."""
         date_val = row_data.get("date")
         if hasattr(date_val, "isoformat"):
             date_str = date_val.isoformat()
         else:
             date_str = str(date_val)
+        sub_id_val = row_data.get("sub_id")
+        sub_id_str = (str(sub_id_val).strip().lower() if sub_id_val not in (None, "") else "")
         components = [
             str(user_id),
             date_str,
             str(row_data.get("channel") or "Desconhecido").strip().lower(),
+            sub_id_str,
         ]
         return hashlib.md5("|".join(components).encode()).hexdigest()
 
@@ -54,12 +54,14 @@ class ClickService:
                 detail=f"Erro ao processar CSV de cliques: {'; '.join(errors)}",
             )
 
-        # 1. Agrupamento por (date, channel): total_clicks = cada linha do CSV; rows.clicks = total por dia/canal
+        # 1. Agrupamento por (date, channel, sub_id): total_clicks = cada linha do CSV; rows.clicks = total por grupo
         total_original_rows = len(df)
+        if "sub_id" not in df.columns:
+            df["sub_id"] = None
         agg_dict = {"clicks": "sum"}
         if "time" in df.columns:
             agg_dict["time"] = "first"
-        df_grouped = df.groupby(["date", "channel"], as_index=False).agg(agg_dict)
+        df_grouped = df.groupby(["date", "channel", "sub_id"], as_index=False).agg(agg_dict)
 
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
@@ -69,7 +71,12 @@ class ClickService:
         processed_hashes_in_file = set()
 
         for row_data in rows_data:
-            row_data_clean = {"date": row_data["date"], "channel": row_data["channel"], "clicks": row_data["clicks"]}
+            sub_id_val = row_data.get("sub_id")
+            if sub_id_val is not None and isinstance(sub_id_val, str) and sub_id_val.strip() == "":
+                sub_id_val = None
+            if sub_id_val is not None and not isinstance(sub_id_val, str):
+                sub_id_val = str(sub_id_val).strip() or None
+            row_data_clean = {"date": row_data["date"], "channel": row_data["channel"], "sub_id": sub_id_val, "clicks": row_data["clicks"]}
             row_hash = self._generate_click_hash(row_data_clean, user_id)
             if row_hash in processed_hashes_in_file:
                 continue
@@ -92,7 +99,7 @@ class ClickService:
                     date=item["date"],
                     time=item.get("time"),
                     channel=item["channel"],
-                    sub_id=None,
+                    sub_id=item.get("sub_id"),
                     clicks=int(item["clicks"]),
                     row_hash=item["row_hash"],
                 )
@@ -144,10 +151,12 @@ class ClickService:
             return
 
         total_original_rows = len(df)
+        if "sub_id" not in df.columns:
+            df["sub_id"] = None
         agg_dict = {"clicks": "sum"}
         if "time" in df.columns:
             agg_dict["time"] = "first"
-        df_grouped = df.groupby(["date", "channel"], as_index=False).agg(agg_dict)
+        df_grouped = df.groupby(["date", "channel", "sub_id"], as_index=False).agg(agg_dict)
 
         existing_hashes = self.click_repo.get_existing_hashes(user_id)
         rows_to_create = []
@@ -157,7 +166,12 @@ class ClickService:
         processed_hashes_in_file = set()
 
         for row_data in rows_data:
-            row_data_clean = {"date": row_data["date"], "channel": row_data["channel"], "clicks": row_data["clicks"]}
+            sub_id_val = row_data.get("sub_id")
+            if sub_id_val is not None and isinstance(sub_id_val, str) and sub_id_val.strip() == "":
+                sub_id_val = None
+            if sub_id_val is not None and not isinstance(sub_id_val, str):
+                sub_id_val = str(sub_id_val).strip() or None
+            row_data_clean = {"date": row_data["date"], "channel": row_data["channel"], "sub_id": sub_id_val, "clicks": row_data["clicks"]}
             row_hash = self._generate_click_hash(row_data_clean, user_id)
             if row_hash in processed_hashes_in_file:
                 continue
@@ -178,7 +192,7 @@ class ClickService:
                     date=item["date"],
                     time=item.get("time"),
                     channel=item["channel"],
-                    sub_id=None,
+                    sub_id=item.get("sub_id"),
                     clicks=int(item["clicks"]),
                     row_hash=item["row_hash"],
                 )
@@ -305,13 +319,16 @@ class ClickService:
         }
 
     def _serialize_aggregated_click(self, row) -> dict:
-        """Serializa o resultado da agregação (date, channel, clicks, time)."""
+        """Serializa o resultado da agregação (date, channel, clicks, time). time em HH:MM:SS para a API."""
+        t = getattr(row, "time", None)
+        if t is not None and hasattr(t, "strftime"):
+            t = t.strftime("%H:%M:%S")
         return {
             "id": None,
             "dataset_id": None,
             "user_id": None,
             "date": getattr(row, "date", None),
-            "time": getattr(row, "time", None),
+            "time": t,
             "channel": getattr(row, "channel", None) or "",
             "sub_id": getattr(row, "sub_id", None),
             "clicks": int(row.clicks) if row.clicks else 0,
