@@ -5,6 +5,8 @@ groupby, row_hash, bulk_create. Used by process_chunk Celery task.
 """
 import hashlib
 import logging
+
+from app.utils.row_hash import generate_row_hash as _generate_row_hash_impl
 from datetime import date
 from io import BytesIO
 
@@ -22,13 +24,12 @@ BATCH_SIZE = 5000
 
 
 def _generate_row_hash(row_data: dict, user_id: int) -> str:
-    """Same as DatasetService._generate_row_hash."""
-    components = [
-        str(user_id),
-        str(row_data.get("order_id") or "nan").strip().lower(),
-        str(row_data.get("product_id") or "nan").strip().lower(),
-    ]
-    return hashlib.md5("|".join(components).encode()).hexdigest()
+    """Same as DatasetService._generate_row_hash; uses shared normalize_id for stable hash across re-uploads."""
+    return _generate_row_hash_impl(
+        user_id,
+        row_data.get("order_id"),
+        row_data.get("product_id"),
+    )
 
 
 def _generate_click_hash(row_data: dict, user_id: int) -> str:
