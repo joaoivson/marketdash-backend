@@ -22,6 +22,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - .:/app
+      - upload_temp_data:/app/uploads
     ports:
       - "8000:8000"
     environment:
@@ -32,6 +33,12 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
       # Upload de arquivos grandes: grava em disco e envia só o caminho ao Celery
       UPLOAD_TEMP_DIR: /app/uploads
+      USE_JOBS_PIPELINE: "true"
+      S3_BUCKET: marketDash_bucket
+      S3_ENDPOINT: https://rsejwvxealraianensoz.storage.supabase.co/storage/v1/s3
+      S3_ACCESS_KEY: b66c95e91947d71dc6c85880b59aafd3
+      S3_SECRET_KEY: 88f15f3f87f9f415b6980d277dd1d7b42a89e61e7e6d1d04a063901520f3b673
+      S3_REGION: us-east-2
     depends_on:
       db:
         condition: service_healthy
@@ -48,19 +55,42 @@ services:
   worker:
     build: .
     container_name: marketdash_worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info
+    command: celery -A app.tasks.celery_app worker --loglevel=info --uid=1000
     volumes:
       - .:/app
+      - upload_temp_data:/app/uploads
     environment:
+      HOME: /home/celeryuser
       DATABASE_URL: postgresql://dashads_user:dashads_password@db:5432/dashads_db
       REDIS_URL: redis://redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
       UPLOAD_TEMP_DIR: /app/uploads
+      USE_JOBS_PIPELINE: "true"
+      S3_BUCKET: marketDash_bucket
+      S3_ENDPOINT: https://rsejwvxealraianensoz.storage.supabase.co/storage/v1/s3
+      S3_ACCESS_KEY: b66c95e91947d71dc6c85880b59aafd3
+      S3_SECRET_KEY: 88f15f3f87f9f415b6980d277dd1d7b42a89e61e7e6d1d04a063901520f3b673
+      S3_REGION: us-east-2
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
 
+  # MinIO for jobs pipeline (USE_JOBS_PIPELINE). Create bucket "uploads" in Console (http://localhost:9000).
+  minio:
+    image: minio/minio:latest
+    container_name: marketdash_minio
+    command: server /data
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+
 volumes:
   postgres_data:
+  upload_temp_data:
+  minio_data:

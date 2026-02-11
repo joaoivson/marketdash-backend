@@ -13,8 +13,8 @@ TARGET_COLUMNS = ["date", "product", "revenue", "cost", "commission", "quantity"
 
 # Mapeamento flexível de aliases (normalizados: minúsculo, sem acentos, sem espaços/pontuação)
 ALIASES = {
-    "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao", "tempo_dos_cliques"},
-    "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido", "tempo_dos_cliques"},
+    "date": {"date", "data", "datapedido", "data_do_pedido", "datadopedido", "horario", "horario_do_pedido", "horariodopedido", "tempo", "tempo_de_conclusao", "tempo_conclusao", "tempo_dos_cliques", "."},
+    "time": {"hora", "horario", "hora_do_pedido", "horario_do_pedido", "tempo_dos_cliques", "."},
     "product": {"product", "produto", "produto_nome", "product_name", "nome_do_item"},
     "order_id": {"order_id", "idpedido", "id_do_pedido", "id_dopedido", "id_pagamento", "idpagamento", "numero_do_pedido", "id_do_pedido"},
     "product_id": {"product_id", "id_do_item", "id_item", "item_id", "id_do_produto", "product_id"},
@@ -88,7 +88,7 @@ def find_column(df_cols: List[str], aliases: set) -> str:
     # 2. Se não encontrar prioritária, usar a lógica original de busca no set
     for col in df_cols:
         norm = normalize_name(col)
-        if norm in aliases:
+        if norm in aliases or col in aliases:
             return col
     return ""
 
@@ -197,13 +197,15 @@ class CSVService:
                     parsed_date = pd.Timestamp("today")
                     errors.append("Coluna de data ausente; usando data atual.")
 
+            # Separar data e hora: se a coluna tiver datetime (ex.: 2026-01-07 23:59:22), extrair .date e .time
             out["date"] = parsed_date.dt.date if hasattr(parsed_date, "dt") else parsed_date
 
             if "time" in col_map:
                 parsed_time = pd.to_datetime(df[col_map["time"]], errors="coerce")
                 out["time"] = parsed_time.dt.time
             else:
-                out["time"] = None
+                # Extrair hora da mesma coluna de data quando vier datetime (ex.: 2026-01-07 23:59:22)
+                out["time"] = parsed_date.dt.time if hasattr(parsed_date, "dt") else None
 
             # Produto
             if "product" in col_map:
@@ -247,7 +249,7 @@ class CSVService:
                 return None
             
             out["mes_ano"] = out["date"].apply(calc_mes_ano)
-            if out["time"].isnull().all():
+            if out["time"] is not None and hasattr(out["time"], "isnull") and out["time"].isnull().all():
                 out["time"] = None
             out["product"] = out["product"].replace({"": "Produto"}, regex=False)
             out["revenue"] = out["revenue"].clip(lower=0)
@@ -331,13 +333,16 @@ class CSVService:
                     parsed_date = pd.Timestamp("today")
                     errors.append("Data ausente no arquivo de cliques; usando hoje.")
 
-            out["date"] = pd.to_datetime(parsed_date, errors="coerce").dt.date
+            # Separar data e hora: se a coluna tiver datetime (ex.: 2026-01-07 23:59:22), extrair .date e .time
+            parsed_dt = pd.to_datetime(parsed_date, errors="coerce", dayfirst=True)
+            out["date"] = parsed_dt.dt.date if hasattr(parsed_dt, "dt") else parsed_dt
 
             if "time" in col_map:
                 parsed_time = pd.to_datetime(df[col_map["time"]], errors="coerce")
                 out["time"] = parsed_time.dt.time
             else:
-                out["time"] = None
+                # Extrair hora da mesma coluna de data quando vier datetime
+                out["time"] = parsed_dt.dt.time if hasattr(parsed_dt, "dt") else None
 
             # Canal / Platform
             if "channel" in col_map:
@@ -348,13 +353,8 @@ class CSVService:
                 out["channel"] = "Desconhecido"
                 errors.append("Coluna de canal não encontrada; usando 'Desconhecido'.")
 
-            # Cliques
-            if "clicks" in col_map:
-                out["clicks"] = pd.to_numeric(df[col_map["clicks"]], errors="coerce").fillna(0).astype(int)
-            else:
-                # Se não houver coluna de cliques, assume 1 clique por linha (cada linha é um evento)
-                out["clicks"] = 1
-                logger.info("Coluna de cliques não encontrada; assumindo 1 por linha.")
+            # Cliques: cada linha do CSV = 1 evento de clique; groupby (date, channel).sum() = contagem por dia/canal
+            out["clicks"] = 1
 
             # Sub ID
             if "sub_id" in col_map:

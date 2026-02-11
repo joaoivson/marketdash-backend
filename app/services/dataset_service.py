@@ -1,6 +1,5 @@
 import datetime
 import logging
-import hashlib
 from decimal import Decimal
 from typing import List, Optional
 
@@ -13,6 +12,7 @@ from app.models.dataset_row import DatasetRow
 from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.services.csv_service import CSVService
+from app.utils.row_hash import generate_row_hash
 from app.utils.serialization import serialize_value, clean_number
 
 logger = logging.getLogger(__name__)
@@ -32,15 +32,13 @@ class DatasetService:
     def _generate_row_hash(row_data: dict, user_id: int) -> str:
         """
         Gera um hash MD5 determinístico para o registro de venda.
-        Utiliza user_id + order_id + product_id para garantir unicidade por item de pedido.
+        Utiliza user_id + order_id + product_id normalizados para garantir unicidade por item de pedido.
         """
-        components = [
-            str(user_id),
-            str(row_data.get("order_id") or "nan").strip().lower(),
-            str(row_data.get("product_id") or "nan").strip().lower(),
-        ]
-        row_str = "|".join(components)
-        return hashlib.md5(row_str.encode()).hexdigest()
+        return generate_row_hash(
+            user_id,
+            row_data.get("order_id"),
+            row_data.get("product_id"),
+        )
 
     def process_commission_csv(self, dataset_id: int, user_id: int, file_content: bytes, filename: str) -> None:
         """
@@ -61,13 +59,15 @@ class DatasetService:
             logger.error(f"Validation errors for dataset {dataset_id}: {errors}")
             return
 
-        # 1. Agrupamento e Consolidação (Groupby)
-        group_cols = ['date', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        # 1. Agrupamento e Consolidação (Groupby) — incluir time quando CSV trouxer datetime
+        group_cols = ['date', 'time', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        if 'time' not in df.columns:
+            df['time'] = None
         for col in group_cols:
             if col in df.columns:
-                df[col] = df[col].fillna('nan')
+                df[col] = df[col].fillna('nan') if col != 'time' else df[col]
             else:
-                df[col] = 'nan'
+                df[col] = None if col == 'time' else 'nan'
 
         metrics = ['revenue', 'commission', 'cost', 'quantity']
         for col in metrics:
@@ -98,7 +98,10 @@ class DatasetService:
             row_clean = {}
             for col in group_cols:
                 val = row_data[col]
-                row_clean[col] = None if val == 'nan' else val
+                if col == 'time':
+                    row_clean[col] = None if (val is None or (hasattr(pd, "isna") and pd.isna(val))) else val
+                else:
+                    row_clean[col] = None if val == 'nan' else val
 
             row_hash = self._generate_row_hash(row_clean, user_id)
             if row_hash in processed_hashes_in_file:
@@ -126,11 +129,15 @@ class DatasetService:
             row_clean = item["clean_data"]
             m = item["metrics"]
             profit = m["revenue"] - m["commission"] - m["cost"]
+            _time = row_clean.get("time")
+            if _time is None or (hasattr(pd, "isna") and pd.isna(_time)):
+                _time = None
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=row_clean["date"],
+                    time=_time,
                     product=row_clean["product"],
                     platform=row_clean["platform"],
                     category=row_clean["category"],
@@ -168,14 +175,15 @@ class DatasetService:
                 detail=f"Erro ao processar CSV: {'; '.join(errors)}",
             )
 
-        # 1. Agrupamento e Consolidação (Groupby)
-        # Tratar nulos para o groupby não descartar linhas
-        group_cols = ['date', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        # 1. Agrupamento e Consolidação (Groupby) — incluir time quando CSV trouxer datetime
+        group_cols = ['date', 'time', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        if 'time' not in df.columns:
+            df['time'] = None
         for col in group_cols:
             if col in df.columns:
-                df[col] = df[col].fillna('nan')
+                df[col] = df[col].fillna('nan') if col != 'time' else df[col]
             else:
-                df[col] = 'nan'
+                df[col] = None if col == 'time' else 'nan'
 
         # Garantir métricas numéricas e tipos corretos
         metrics = ['revenue', 'commission', 'cost', 'quantity']
@@ -208,11 +216,14 @@ class DatasetService:
         total_rows = len(rows_data)
         
         for row_data in rows_data:
-            # Restaurar 'nan' para None para salvar no banco
+            # Restaurar 'nan' para None para salvar no banco; time pode ser datetime.time ou NaT
             row_clean = {}
             for col in group_cols:
                 val = row_data[col]
-                row_clean[col] = None if val == 'nan' else val
+                if col == 'time':
+                    row_clean[col] = None if (val is None or (hasattr(pd, "isna") and pd.isna(val))) else val
+                else:
+                    row_clean[col] = None if val == 'nan' else val
             
             row_hash = self._generate_row_hash(row_clean, user_id)
             
@@ -247,12 +258,16 @@ class DatasetService:
             row_clean = item["clean_data"]
             m = item["metrics"]
             profit = m["revenue"] - m["commission"] - m["cost"]
+            _time = row_clean.get("time")
+            if _time is None or (hasattr(pd, "isna") and pd.isna(_time)):
+                _time = None
 
             dataset_rows.append(
                 DatasetRow(
                     dataset_id=dataset.id,
                     user_id=user_id,
                     date=row_clean["date"],
+                    time=_time,
                     product=row_clean["product"],
                     platform=row_clean["platform"],
                     category=row_clean["category"],

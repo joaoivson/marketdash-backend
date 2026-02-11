@@ -11,10 +11,11 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements first (better Docker caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Retry pip on network flakes (e.g. Broken pipe in CI); --retries/--timeout help within pip
+RUN for i in 1 2 3; do pip install --no-cache-dir --retries 5 --timeout 120 -r requirements.txt && break; done
 
 # Install gunicorn for production
-RUN pip install gunicorn[gevent]
+RUN pip install --no-cache-dir --retries 5 --timeout 120 gunicorn[gevent]
 
 # Copy application code
 COPY . .

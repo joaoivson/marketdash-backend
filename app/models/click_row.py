@@ -10,8 +10,9 @@ class ClickRow(Base):
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # Campos fundamentais
+    # Campos fundamentais — data e hora separadas quando CSV traz datetime
     date = Column(Date, nullable=False, index=True)
+    time = Column(Time, nullable=True)
     channel = Column(String, nullable=False, index=True)
     sub_id = Column(String, nullable=True, index=True)
     clicks = Column(Integer, nullable=False, default=0)

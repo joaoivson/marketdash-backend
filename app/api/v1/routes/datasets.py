@@ -17,6 +17,7 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.schemas.dataset import DatasetResponse, DatasetRowResponse, AdSpendResponse, DatasetTaskResponse
 from app.services.dataset_service import DatasetService
+from app.services.storage import upload_file_obj, is_storage_configured
 from app.tasks.csv_tasks import process_csv_task
 
 router = APIRouter(tags=["datasets"])
@@ -72,10 +73,40 @@ async def upload_csv(
             with open(path, "wb") as f:
                 while chunk := await file.read(1024 * 1024):
                     f.write(chunk)
-            task = process_csv_task.delay(
-                dataset.id, current_user.id, file.filename,
-                file_path=str(path), file_content_b64=None,
-            )
+            size = path.stat().st_size
+            if size <= settings.UPLOAD_INLINE_MAX_BYTES:
+                file_content = path.read_bytes()
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                task = process_csv_task.delay(
+                    dataset.id, current_user.id, file.filename,
+                    file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
+                )
+            elif is_storage_configured():
+                # Large file: upload to S3 so worker can download (no shared disk needed)
+                from io import BytesIO
+                storage_key = f"uploads/temp/{dataset.id}_{uuid4().hex}.csv"
+                buf = BytesIO(path.read_bytes())
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                if not upload_file_obj(settings.S3_BUCKET, storage_key, buf, content_type="text/csv"):
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail="Failed to upload file to storage.",
+                    )
+                task = process_csv_task.delay(
+                    dataset.id, current_user.id, file.filename,
+                    file_path=None, file_content_b64=None, storage_key=storage_key,
+                )
+            else:
+                task = process_csv_task.delay(
+                    dataset.id, current_user.id, file.filename,
+                    file_path=str(path), file_content_b64=None,
+                )
         else:
             file_content = await file.read()
             task = process_csv_task.delay(

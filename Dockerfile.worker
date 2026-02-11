@@ -14,4 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info"]
+# Create user for --uid to avoid "running worker with superuser privileges" SecurityWarning
+RUN adduser --disabled-password --gecos "" --uid 1000 celeryuser
+
+# Ensure libpq looks for SSL certs in a path readable by celeryuser (fixes "postgresql.crt: Permission denied")
+ENV HOME=/home/celeryuser
+
+CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--uid=1000"]

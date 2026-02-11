@@ -1,6 +1,8 @@
-from pydantic_settings import BaseSettings
-from pydantic import model_validator
+import os
 from typing import Optional, Dict
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -32,9 +34,32 @@ class Settings(BaseSettings):
     # API e worker precisam enxergar o mesmo diretório (ex.: volume compartilhado). Ex.: /app/uploads
     UPLOAD_TEMP_DIR: Optional[str] = None
 
+    # Se UPLOAD_TEMP_DIR estiver definido e o arquivo for menor que este tamanho (bytes), o conteúdo é enviado
+    # em base64 na tarefa Celery (evita "Upload temp file not found" quando API e worker não compartilham disco).
+    # Arquivos maiores que este limite exigem volume compartilhado entre API e worker. Default: 5 MB.
+    UPLOAD_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
+
     # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False
+
+    # Jobs pipeline: upload via presigned URL + chunking (Object Storage + Celery). Se False, rotas /jobs não são registradas.
+    USE_JOBS_PIPELINE: bool = False
+
+    # Object Storage (S3-compatible, ex.: Supabase Storage). Se ausentes, pipeline jobs desativada ou fallback.
+    S3_BUCKET: Optional[str] = None
+    S3_ENDPOINT: Optional[str] = None
+    S3_ACCESS_KEY: Optional[str] = None
+    S3_SECRET_KEY: Optional[str] = None
+    S3_REGION: Optional[str] = None
+
+    # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
+    DEBUG_LOG_PATH: Optional[str] = None
+
+    @property
+    def effective_debug_log_path(self) -> str:
+        """Path do arquivo de log de debug (env/config ou default em cwd)."""
+        return self.DEBUG_LOG_PATH or os.environ.get("DEBUG_LOG_PATH") or os.path.join(os.getcwd(), ".cursor", "debug.log")
 
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
@@ -99,6 +124,8 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: Optional[str] = None
     SMTP_FROM_NAME: str = "MarketDash"
     FRONTEND_URL: str = "https://marketdash.com.br"
+    # Email que recebe feedback do formulário (API de feedback)
+    FEEDBACK_EMAIL: str = "relacionamento@marketdash.com.br"
     
     # CORS Configuration
     # Por padrão, apenas HTTPS é permitido em produção/homologação

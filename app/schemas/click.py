@@ -1,20 +1,32 @@
-from pydantic import BaseModel, Field
-from datetime import datetime, date
+from pydantic import BaseModel, Field, field_serializer
+from datetime import datetime, date, time
 from typing import Optional, Any, List
 from app.schemas.dataset import DatasetResponse
 
 
 class ClickRowBase(BaseModel):
     date: date
+    time: Optional[str] = None  # HH:MM:SS quando disponível (Tempo dos Cliques)
     channel: str
     sub_id: Optional[str] = None
     clicks: int
 
+    @field_serializer("date")
+    def serialize_date_dd_mm_yyyy(self, d: date) -> str:
+        """Exibir data no formato DD-MM-YYYY na API."""
+        return d.strftime("%d-%m-%Y") if d else ""
+
+    @field_serializer("time")
+    def serialize_time(self, t: Optional[str]) -> Optional[str]:
+        """Hora já vem como string HH:MM:SS do serviço; repassa como está."""
+        return t
+
 
 class ClickRowResponse(ClickRowBase):
-    id: int
-    dataset_id: int
-    user_id: int
+    """Row de clique; id/dataset_id/user_id são None quando a linha é agregada (date, channel)."""
+    id: Optional[int] = None
+    dataset_id: Optional[int] = None
+    user_id: Optional[int] = None
 
     class Config:
         from_attributes = True

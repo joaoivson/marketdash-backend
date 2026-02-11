@@ -95,6 +95,22 @@ def get_current_user(
     return user
 
 
+def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """
+    Retorna o usuário atual se o Bearer token for válido; caso contrário retorna None.
+    Útil para rotas que funcionam com ou sem autenticação (ex.: feedback).
+    """
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials=credentials, db=db)
+    except HTTPException:
+        return None
+
+
 def require_active_subscription(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
