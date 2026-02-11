@@ -55,12 +55,11 @@ services:
   worker:
     build: .
     container_name: marketdash_worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info --uid=1000
+    command: celery -A app.tasks.celery_app worker --loglevel=info
     volumes:
       - .:/app
       - upload_temp_data:/app/uploads
     environment:
-      HOME: /home/celeryuser
       DATABASE_URL: postgresql://dashads_user:dashads_password@db:5432/dashads_db
       REDIS_URL: redis://redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
