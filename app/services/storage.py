@@ -129,3 +129,84 @@ def delete_object(bucket: str, key: str) -> bool:
     except Exception as e:
         logger.error(f"Delete failed for {bucket}/{key}: {e}")
         return False
+
+
+def create_multipart_upload(bucket: str, key: str, content_type: str = "text/csv") -> Optional[str]:
+    """Initiate multipart upload. Returns upload_id."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        response = client.create_multipart_upload(
+            Bucket=bucket,
+            Key=key,
+            ContentType=content_type,
+        )
+        return response["UploadId"]
+    except Exception as e:
+        logger.error(f"Failed to create multipart upload for {bucket}/{key}: {e}")
+        return None
+
+
+def create_presigned_upload_part(
+    bucket: str,
+    key: str,
+    upload_id: str,
+    part_number: int,
+    expires_in: int = 3600,
+) -> Optional[str]:
+    """Generate presigned URL for uploading a single part."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        url = client.generate_presigned_url(
+            "upload_part",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "UploadId": upload_id,
+                "PartNumber": part_number,
+            },
+            ExpiresIn=expires_in,
+        )
+        return url
+    except Exception as e:
+        logger.error(f"Failed to generate presigned URL for part {part_number}: {e}")
+        return None
+
+
+def complete_multipart_upload(
+    bucket: str,
+    key: str,
+    upload_id: str,
+    parts: list[dict],
+) -> bool:
+    """Complete multipart upload. parts = [{"PartNumber": int, "ETag": str}, ...]."""
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        client.complete_multipart_upload(
+            Bucket=bucket,
+            Key=key,
+            UploadId=upload_id,
+            MultipartUpload={"Parts": parts},
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to complete multipart upload for {bucket}/{key}: {e}")
+        return False
+
+
+def abort_multipart_upload(bucket: str, key: str, upload_id: str) -> bool:
+    """Abort multipart upload (cleanup)."""
+    client = _get_client()
+    if not client:
+        return False
+    try:
+        client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to abort multipart upload for {bucket}/{key}: {e}")
+        return False

@@ -172,3 +172,227 @@ def list_jobs(
     """List jobs for the current user, most recent first."""
     service = JobService(JobRepository(db), DatasetRepository(db))
     return service.list_jobs(current_user.id, limit=limit)
+
+
+class MultipartUploadInitResponse(BaseModel):
+    job_id: str
+    dataset_id: int
+    upload_id: str
+    storage_key: str
+
+
+class MultipartUploadPartRequest(BaseModel):
+    part_number: int = Field(..., ge=1, le=10000, description="Part number (1-10000)")
+
+
+class MultipartUploadPartResponse(BaseModel):
+    part_number: int
+    upload_url: str
+    expires_in: int
+
+
+class MultipartUploadCompleteRequest(BaseModel):
+    parts: list[dict] = Field(..., description='List of {"PartNumber": int, "ETag": str}')
+
+
+@router.post("/multipart/init", response_model=MultipartUploadInitResponse, status_code=status.HTTP_201_CREATED)
+def init_multipart_upload(
+    body: JobCreateBody,
+    current_user: User = Depends(require_active_subscription),
+    db=Depends(get_db),
+):
+    """
+    Initiate multipart upload for large files (>20MB recommended).
+    Returns upload_id and storage_key. Client should:
+    1. Call POST /jobs/multipart/{job_id}/part for each chunk (5MB-5GB per part)
+    2. Upload each part to the presigned URL (PUT with body = chunk)
+    3. Collect ETags from response headers
+    4. Call POST /jobs/multipart/{job_id}/complete with parts list
+    """
+    from app.services.storage import create_multipart_upload
+    from uuid import uuid4
+
+    if not is_storage_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Object Storage not configured.",
+        )
+
+    job_id = uuid4()
+    storage_key = f"uploads/{job_id}/{body.filename}"
+
+    upload_id = create_multipart_upload(settings.S3_BUCKET, storage_key, content_type="text/csv")
+    if not upload_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to initiate multipart upload.",
+        )
+
+    dataset = Dataset(
+        user_id=current_user.id,
+        filename=body.filename,
+        type=body.type,
+        status="pending",
+    )
+    dataset_repo = DatasetRepository(db)
+    job_repo = JobRepository(db)
+    dataset_repo.create(dataset)
+    job_repo.db.flush()
+
+    job = Job(
+        job_id=job_id,
+        dataset_id=dataset.id,
+        user_id=current_user.id,
+        type=body.type,
+        storage_key=storage_key,
+        status="queued",
+    )
+    job_repo.create(job)
+    job_repo.db.commit()
+
+    return {
+        "job_id": str(job_id),
+        "dataset_id": dataset.id,
+        "upload_id": upload_id,
+        "storage_key": storage_key,
+    }
+
+
+@router.post("/multipart/{job_id}/part", response_model=MultipartUploadPartResponse)
+def get_multipart_part_url(
+    job_id: UUID,
+    body: MultipartUploadPartRequest,
+    upload_id: str,
+    current_user: User = Depends(require_active_subscription),
+    db=Depends(get_db),
+):
+    """
+    Generate presigned URL for uploading a single part.
+    Client should PUT the chunk to the returned upload_url and save the ETag from response headers.
+    """
+    from app.services.storage import create_presigned_upload_part
+
+    job_repo = JobRepository(db)
+    job = job_repo.get_by_id(job_id, user_id=current_user.id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    url = create_presigned_upload_part(
+        settings.S3_BUCKET,
+        job.storage_key,
+        upload_id,
+        body.part_number,
+        expires_in=3600,
+    )
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to generate presigned URL for part.",
+        )
+
+    return {
+        "part_number": body.part_number,
+        "upload_url": url,
+        "expires_in": 3600,
+    }
+
+
+@router.post("/multipart/{job_id}/complete", response_model=JobCommitResponse, status_code=status.HTTP_202_ACCEPTED)
+def complete_multipart_upload_endpoint(
+    job_id: UUID,
+    upload_id: str,
+    body: MultipartUploadCompleteRequest,
+    current_user: User = Depends(require_active_subscription),
+    db=Depends(get_db),
+):
+    """
+    Complete multipart upload and start processing.
+    parts = [{"PartNumber": 1, "ETag": "abc123"}, {"PartNumber": 2, "ETag": "def456"}, ...]
+    """
+    from app.services.storage import complete_multipart_upload
+
+    job_repo = JobRepository(db)
+    job = job_repo.get_by_id(job_id, user_id=current_user.id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    if not complete_multipart_upload(settings.S3_BUCKET, job.storage_key, upload_id, body.parts):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to complete multipart upload.",
+        )
+
+    job.status = "processing"
+    job_repo.db.commit()
+
+    process_job_from_storage.delay(str(job_id))
+
+    return {
+        "job_id": str(job_id),
+        "status": "processing",
+        "message": "Multipart upload completed, processing scheduled.",
+    }
+
+
+@router.post("/multipart/{job_id}/abort", status_code=status.HTTP_204_NO_CONTENT)
+def abort_multipart_upload_endpoint(
+    job_id: UUID,
+    upload_id: str,
+    current_user: User = Depends(require_active_subscription),
+    db=Depends(get_db),
+):
+    """Abort multipart upload (cleanup). Call this if upload fails or is cancelled."""
+    from app.services.storage import abort_multipart_upload
+
+    job_repo = JobRepository(db)
+    job = job_repo.get_by_id(job_id, user_id=current_user.id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    abort_multipart_upload(settings.S3_BUCKET, job.storage_key, upload_id)
+
+    job.status = "cancelled"
+    job_repo.db.commit()
+
+
+@router.post("/{job_id}/retry", response_model=JobCommitResponse, status_code=status.HTTP_202_ACCEPTED)
+def retry_job(
+    job_id: UUID,
+    current_user: User = Depends(require_active_subscription),
+    db=Depends(get_db),
+):
+    """
+    Retry a stuck or failed job. Resets chunks_done and re-enqueues the task.
+    Only works for jobs in 'pending', 'error', or 'cancelled' status.
+    """
+    job_repo = JobRepository(db)
+    job = job_repo.get_by_id(job_id, user_id=current_user.id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    if job.status not in ("pending", "error", "cancelled", "queued"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Job is in '{job.status}' status and cannot be retried. Only 'pending', 'error', 'cancelled', or 'queued' jobs can be retried.",
+        )
+
+    from app.services.storage import object_exists
+
+    if not object_exists(settings.S3_BUCKET, job.storage_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File not found in storage. Cannot retry job without uploaded file.",
+        )
+
+    job.status = "processing"
+    job.chunks_done = 0
+    job_repo.db.commit()
+
+    process_job_from_storage.delay(str(job_id))
+
+    return {
+        "job_id": str(job_id),
+        "status": "processing",
+        "message": "Job retry scheduled.",
+    }
+

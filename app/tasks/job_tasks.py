@@ -104,6 +104,7 @@ def process_job_from_storage(self, job_id: str):
 
         job.total_chunks = batch_count
         dataset_repo = DatasetRepository(db)
+        logger.info(f"Updating dataset {job.dataset_id} for user {job.user_id}")
         dataset = dataset_repo.get_by_id(job.dataset_id, job.user_id)
         if dataset:
             if job.type == "transaction":
@@ -115,6 +116,10 @@ def process_job_from_storage(self, job_id: str):
                 ).scalar()
                 dataset.row_count = int(total_clicks or 0)
             dataset.status = "completed"
+            logger.info(f"Dataset {job.dataset_id} status set to completed with {dataset.row_count} rows")
+        else:
+            logger.error(f"Dataset {job.dataset_id} not found for user {job.user_id}")
+        
         job.status = "completed"
         db.commit()
 
