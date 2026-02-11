@@ -269,6 +269,17 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
             logger.warning(f"process_chunk: job {job_id} not found")
             return
 
+        # Verificar se o dataset existe antes de processar (evita ForeignKeyViolation)
+        from app.repositories.dataset_repository import DatasetRepository
+        dataset_repo = DatasetRepository(db)
+        dataset = dataset_repo.get_by_id(job.dataset_id, job.user_id)
+        if not dataset:
+            err_msg = f"Dataset id={job.dataset_id} not found (user_id={job.user_id})"
+            logger.error(f"process_chunk: {err_msg}, aborting")
+            job_repo.set_chunk_status(uid, chunk_index, "failed", err_msg)
+            job_repo.db.commit()
+            return
+
         content = download_file(settings.S3_BUCKET, storage_key)
         if not content:
             job_repo.set_chunk_status(uid, chunk_index, "failed", "Download failed")
@@ -331,12 +342,18 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
                 
                 db.commit()
     except Exception as exc:
+        from sqlalchemy.exc import IntegrityError
+
         logger.exception(f"process_chunk failed job {job_id} chunk {chunk_index}: {exc}")
         try:
             job_repo.set_chunk_status(UUID(job_id), chunk_index, "failed", str(exc))
             job_repo.db.commit()
         except Exception:
             pass
+        # IntegrityError (FK violation etc): retry não resolve
+        if isinstance(exc, IntegrityError):
+            logger.error("process_chunk: IntegrityError, not retrying")
+            return
         raise self.retry(exc=exc, countdown=60)
     finally:
         db.close()

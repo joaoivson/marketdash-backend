@@ -303,7 +303,7 @@ Equipe MarketDash
             "<h3>Dados do feedback</h3>"
             f"{data_html}"
             "<h3>Dados do usuário</h3>"
-            f"<p><strong>Nome:</strong> {name}<br><strong>Email:</strong> {email}<br><strong>ID:</strong> {uid}</p>"
+            "<p><strong>Nome:</strong> {name}<br><strong>Email:</strong> {email}<br><strong>ID:</strong> {uid}</p>"
         ).format(
             name=_escape_html(user_name or "(não informado)"),
             email=_escape_html(user_email or "(não informado)"),

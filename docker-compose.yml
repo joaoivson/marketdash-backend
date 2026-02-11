@@ -55,7 +55,7 @@ services:
   worker:
     build: .
     container_name: marketdash_worker
-    command: celery -A app.tasks.celery_app worker --loglevel=info
+    command: celery -A app.tasks.celery_app worker --loglevel=info --uid=1000
     volumes:
       - .:/app
       - upload_temp_data:/app/uploads
