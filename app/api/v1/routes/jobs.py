@@ -13,7 +13,7 @@ from app.repositories.dataset_repository import DatasetRepository
 from app.repositories.job_repository import JobRepository
 from app.services.job_service import JobService
 from app.services.storage import upload_file_obj, is_storage_configured
-from app.tasks.job_tasks import split_and_enqueue_chunks
+from app.tasks.job_tasks import process_job_from_storage
 from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["jobs"])
@@ -133,7 +133,7 @@ async def upload_job_file(
     job_repo.create(job)
     job_repo.db.commit()
 
-    split_and_enqueue_chunks.delay(str(job_id))
+    process_job_from_storage.delay(str(job_id))
     return {"job_id": str(job_id), "dataset_id": dataset.id, "status": "processing"}
 
 

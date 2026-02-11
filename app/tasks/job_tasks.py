@@ -1,7 +1,9 @@
 """
-Celery tasks for the jobs pipeline: split CSV into chunks and process each chunk.
-Observability: structured logs (job_id, chunk_index, rows_processed, duration).
+Celery tasks for the jobs pipeline.
+- process_job_from_storage: download file once, process in batches in memory (default path).
+- split_and_enqueue_chunks / process_chunk: legacy S3 chunking (optional, for very large files).
 """
+import json
 import logging
 import time
 from io import BytesIO
@@ -14,11 +16,132 @@ logger = logging.getLogger(__name__)
 CHUNK_LINES = 20_000
 
 
+@celery_app.task(bind=True, max_retries=2, soft_time_limit=3600, time_limit=3700)
+def process_job_from_storage(self, job_id: str):
+    """
+    Download CSV from storage once, process in batches in memory (Polars or pandas),
+    update dataset row_count and status, job status. No chunk files written to S3.
+    """
+    from app.db.session import SessionLocal
+    from app.repositories.job_repository import JobRepository
+    from app.repositories.dataset_repository import DatasetRepository
+    from app.models.dataset_row import DatasetRow
+    from app.models.click_row import ClickRow
+    from app.services.storage import download_file, is_storage_configured
+    from app.core.config import settings
+    from sqlalchemy import func
+
+    if not is_storage_configured():
+        logger.error("process_job_from_storage: storage not configured")
+        return
+
+    db = SessionLocal()
+    try:
+        uid = UUID(job_id)
+        job_repo = JobRepository(db)
+        job = job_repo.get_by_id(uid)
+        if not job:
+            logger.warning(f"process_job_from_storage: job {job_id} not found")
+            return
+
+        content = download_file(settings.S3_BUCKET, job.storage_key)
+        if not content:
+            logger.error(f"process_job_from_storage: failed to download {job.storage_key}")
+            job.status = "error"
+            db.commit()
+            return
+
+        use_polars = False
+        try:
+            import polars as pl
+            use_polars = True
+        except ImportError:
+            pass
+
+        batch_count = 0
+        t0 = time.monotonic()
+
+        if use_polars:
+            try:
+                reader = pl.read_csv_batched(BytesIO(content), batch_size=CHUNK_LINES)
+                while True:
+                    batches = reader.next_batches(1)
+                    if not batches:
+                        break
+                    for batch_df in batches:
+                        if batch_df.height == 0:
+                            continue
+                        chunk_bytes = batch_df.write_csv().encode("utf-8")
+                        if job.type == "transaction":
+                            from app.services.csv_polars import process_transaction_chunk
+                            process_transaction_chunk(db, job.dataset_id, job.user_id, chunk_bytes)
+                        else:
+                            from app.services.csv_polars import process_click_chunk
+                            process_click_chunk(db, job.dataset_id, job.user_id, chunk_bytes)
+                        batch_count += 1
+                        job.chunks_done = batch_count
+                        db.commit()
+            except Exception as e:
+                logger.warning(f"process_job_from_storage Polars failed: {e}, using pandas")
+                use_polars = False
+
+        if not use_polars:
+            import pandas as pd
+            for chunk_df in pd.read_csv(BytesIO(content), chunksize=CHUNK_LINES, encoding="utf-8", on_bad_lines="skip"):
+                if chunk_df.empty:
+                    continue
+                chunk_bytes = chunk_df.to_csv(index=False).encode("utf-8")
+                if job.type == "transaction":
+                    from app.services.csv_polars import process_transaction_chunk
+                    process_transaction_chunk(db, job.dataset_id, job.user_id, chunk_bytes)
+                else:
+                    from app.services.csv_polars import process_click_chunk
+                    process_click_chunk(db, job.dataset_id, job.user_id, chunk_bytes)
+                batch_count += 1
+                job.chunks_done = batch_count
+                db.commit()
+
+        job.total_chunks = batch_count
+        dataset_repo = DatasetRepository(db)
+        dataset = dataset_repo.get_by_id(job.dataset_id, job.user_id)
+        if dataset:
+            if job.type == "transaction":
+                count = db.query(func.count(DatasetRow.id)).filter(DatasetRow.dataset_id == job.dataset_id).scalar()
+                dataset.row_count = count or 0
+            else:
+                total_clicks = db.query(func.coalesce(func.sum(ClickRow.clicks), 0)).filter(
+                    ClickRow.dataset_id == job.dataset_id
+                ).scalar()
+                dataset.row_count = int(total_clicks or 0)
+            dataset.status = "completed"
+        job.status = "completed"
+        db.commit()
+
+        duration_s = round(time.monotonic() - t0, 2)
+        logger.info(
+            "process_job_from_storage done",
+            extra={"job_id": job_id, "batches": batch_count, "duration_seconds": duration_s},
+        )
+    except Exception as exc:
+        logger.exception(f"process_job_from_storage failed for job {job_id}: {exc}")
+        try:
+            job_repo = JobRepository(SessionLocal())
+            job = job_repo.get_by_id(UUID(job_id))
+            if job:
+                job.status = "error"
+                job_repo.db.commit()
+        except Exception:
+            pass
+        raise self.retry(exc=exc, countdown=60)
+    finally:
+        db.close()
+
+
 @celery_app.task(bind=True, max_retries=2, soft_time_limit=600, time_limit=660)
 def split_and_enqueue_chunks(self, job_id: str):
     """
-    Download CSV from storage, split into chunks (Polars preferred), upload chunk files to storage,
-    insert job_chunks, enqueue process_chunk for each. Update job total_chunks and status.
+    Legacy: split file into chunks, upload each to S3, enqueue process_chunk per chunk.
+    Kept for optional use (e.g. threshold for very large files). Default path is process_job_from_storage.
     """
     from app.db.session import SessionLocal
     from app.repositories.job_repository import JobRepository
@@ -151,6 +274,14 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
             job_repo.db.commit()
             return
 
+        try:
+            _path = settings.effective_debug_log_path
+            _line_count = content.count(b"\n") if isinstance(content, bytes) else 0
+            with open(_path, "a") as _f:
+                _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "job_tasks.process_chunk", "message": "chunk_downloaded", "data": {"job_id": str(job_id), "chunk_index": chunk_index, "content_bytes": len(content), "line_count_approx": _line_count}, "hypothesisId": "H8"}) + "\n")
+        except Exception:
+            pass
+
         t0 = time.monotonic()
         if job.type == "transaction":
             from app.services.csv_polars import process_transaction_chunk
@@ -159,6 +290,7 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
             from app.services.csv_polars import process_click_chunk
             inserted = process_click_chunk(db, job.dataset_id, job.user_id, content)
         duration_s = round(time.monotonic() - t0, 2)
+        _inserted_for_log = inserted
         logger.info(
             "process_chunk done",
             extra={
@@ -186,6 +318,11 @@ def process_chunk(self, job_id: str, chunk_index: int, storage_key: str):
                         ClickRow.dataset_id == job.dataset_id
                     ).scalar()
                     dataset.row_count = int(total_clicks or 0)
+                    try:
+                        with open(settings.effective_debug_log_path, "a") as _f:
+                            _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "job_tasks.process_chunk", "message": "total_clicks -> row_count (click job)", "data": {"job_id": str(job_id), "dataset_id": job.dataset_id, "sum_click_rows": int(total_clicks or 0), "dataset_row_count": dataset.row_count, "last_chunk_inserted": _inserted_for_log}, "hypothesisId": "H7"}) + "\n")
+                    except Exception:
+                        pass
                 dataset.status = "completed"
                 
                 # Update job status to completed so frontend polling stops

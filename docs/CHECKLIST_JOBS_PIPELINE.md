@@ -2,7 +2,7 @@
 
 ## Visão geral
 
-Com `USE_JOBS_PIPELINE=true`, o backend expõe as rotas `/api/v1/jobs` para upload de CSV via URL pré-assinada (presigned) e processamento em chunks (Object Storage + Celery). O fluxo antigo (`POST /datasets/upload`, `POST /clicks/upload`) continua disponível; o rollback é imediato desativando a flag.
+Com `USE_JOBS_PIPELINE=true`, o backend expõe as rotas `/api/v1/jobs` para upload de CSV via URL pré-assinada (presigned) e processamento assíncrono (Object Storage + Celery). O worker baixa o arquivo **uma vez** e processa em batches em memória (`process_job_from_storage`), sem gravar chunks no S3, reduzindo I/O e latência. O fluxo antigo (`POST /datasets/upload`, `POST /clicks/upload`) continua disponível; o rollback é imediato desativando a flag.
 
 ## Variáveis de ambiente
 
@@ -37,14 +37,14 @@ Com `USE_JOBS_PIPELINE=true`, o backend expõe as rotas `/api/v1/jobs` para uplo
 
 ## Limites e opcionais
 
-- **Concorrência por job**: o chunker enfileira todos os chunks; para limitar concorrência por job pode-se usar um grupo Celery ou rate limit (fase 2).
-- **Fila dedicada para chunks**: para isolamento, pode-se enfileirar `process_chunk` na fila `chunks` e rodar um worker com `-Q celery,chunks`.
-- **Celery**: `task_time_limit=1200`, `task_soft_time_limit=1100` já configurados para evitar OOM em chunks grandes.
+- **Processamento**: uma task `process_job_from_storage` baixa o CSV do S3 e processa em batches em memória (Polars/pandas). Progresso: `chunks_done` e `total_chunks` refletem batches processados.
+- **Legado**: as tasks `split_and_enqueue_chunks` e `process_chunk` (gravar chunks no S3 e N tasks) permanecem no código para uso opcional (ex.: arquivos enormes com threshold futuro).
+- **Celery**: `process_job_from_storage` usa `soft_time_limit=3600`, `time_limit=3700`.
 
 ## Observabilidade
 
-- Logs estruturados em `split_and_enqueue_chunks` e `process_chunk` (tempo, linhas processadas, erros).
-- Progresso do job: `GET /api/v1/jobs/{job_id}` retorna `total_chunks`, `chunks_done` e `errors` (chunks com falha).
+- Logs estruturados em `process_job_from_storage` (job_id, batches, duration_seconds).
+- Progresso do job: `GET /api/v1/jobs/{job_id}` retorna `total_chunks`, `chunks_done` (batches) e `errors`.
 
 ## Desenvolvimento local com MinIO
 

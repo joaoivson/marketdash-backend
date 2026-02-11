@@ -1,6 +1,8 @@
 import datetime
 import hashlib
+import json
 import logging
+import time
 from typing import List, Optional, Tuple
 
 import pandas as pd
@@ -10,6 +12,7 @@ from sqlalchemy import func
 from app.models.dataset import Dataset
 from app.models.click_row import ClickRow
 from app.repositories.dataset_repository import DatasetRepository
+from app.core.config import settings
 from app.repositories.click_row_repository import ClickRowRepository
 from app.services.csv_service import CSVService
 
@@ -100,6 +103,13 @@ class ClickService:
             dataset.row_count = total_original_rows
             dataset.status = "completed"
             self.dataset_repo.db.commit()
+            # #region agent log
+            try:
+                with open(settings.effective_debug_log_path, "a") as _f:
+                    _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_service.upload_click_csv", "message": "total_clicks/rows: upload sync", "data": {"total_original_rows": total_original_rows, "rows_to_create_len": len(rows_to_create), "dataset_id": dataset.id, "dataset_row_count": dataset.row_count}, "hypothesisId": "H1"}) + "\n")
+            except Exception:
+                pass
+            # #endregion
             logger.info(
                 f"Upload cliques: {total_original_rows} linhas CSV -> {len(rows_to_create)} rows (date, channel), "
                 f"{inserted_count} novos, {updated_count} atualizados para dataset {dataset.id}."
@@ -180,6 +190,13 @@ class ClickService:
             dataset.row_count = total_original_rows
             dataset.status = "completed"
             self.dataset_repo.db.commit()
+            # #region agent log
+            try:
+                with open(settings.effective_debug_log_path, "a") as _f:
+                    _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_service.process_click_csv", "message": "total_clicks/rows: process Celery", "data": {"total_original_rows": total_original_rows, "rows_to_create_len": len(rows_to_create), "dataset_id": dataset_id, "dataset_row_count": dataset.row_count}, "hypothesisId": "H2"}) + "\n")
+            except Exception:
+                pass
+            # #endregion
             logger.info(
                 f"Processamento cliques: {total_original_rows} linhas CSV -> {len(rows_to_create)} rows (date, channel), "
                 f"{inserted_count} novos, {updated_count} atualizados para dataset {dataset_id}."
@@ -201,6 +218,13 @@ class ClickService:
             .first()
         )
         if not latest:
+            # #region agent log
+            try:
+                with open(settings.effective_debug_log_path, "a") as _f:
+                    _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_service.list_latest_clicks", "message": "no latest dataset", "data": {"user_id": user_id}, "hypothesisId": "H3"}) + "\n")
+            except Exception:
+                pass
+            # #endregion
             return {"total_clicks": 0, "rows": []}
         
         # total_clicks = número de linhas originais do CSV (dataset.row_count)
@@ -209,9 +233,17 @@ class ClickService:
         
         # Rows são AGREGADOS para exibição (Hybrid approach)
         rows = self.click_repo.list_aggregated_by_dataset(latest.id, user_id, start_date, end_date, limit, offset)
+        serialized = [self._serialize_aggregated_click(r) for r in rows]
+        # #region agent log
+        try:
+            with open(settings.effective_debug_log_path, "a") as _f:
+                _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_service.list_latest_clicks", "message": "total_clicks and rows built", "data": {"user_id": user_id, "latest_dataset_id": latest.id, "latest_row_count": getattr(latest, "row_count", None), "total_clicks": total_clicks, "rows_len": len(rows), "serialized_len": len(serialized)}, "hypothesisId": "H3"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
         return {
             "total_clicks": total_clicks,
-            "rows": [self._serialize_aggregated_click(r) for r in rows],
+            "rows": serialized,
         }
 
     def list_all_clicks(
@@ -237,9 +269,17 @@ class ClickService:
         
         # Rows são AGREGADOS para exibição (Hybrid approach)
         rows = self.click_repo.list_aggregated_by_user(user_id, start_date, end_date, limit, offset)
+        serialized = [self._serialize_aggregated_click(r) for r in rows]
+        # #region agent log
+        try:
+            with open(settings.effective_debug_log_path, "a") as _f:
+                _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_service.list_all_clicks", "message": "total_clicks and rows built", "data": {"user_id": user_id, "total_clicks": total_clicks, "rows_len": len(rows), "serialized_len": len(serialized)}, "hypothesisId": "H4"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
         return {
             "total_clicks": total_clicks,
-            "rows": [self._serialize_aggregated_click(r) for r in rows],
+            "rows": serialized,
         }
 
     def delete_all_clicks(self, user_id: int) -> dict:

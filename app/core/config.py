@@ -1,6 +1,8 @@
-from pydantic_settings import BaseSettings
-from pydantic import model_validator
+import os
 from typing import Optional, Dict
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -50,6 +52,14 @@ class Settings(BaseSettings):
     S3_ACCESS_KEY: Optional[str] = None
     S3_SECRET_KEY: Optional[str] = None
     S3_REGION: Optional[str] = None
+
+    # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
+    DEBUG_LOG_PATH: Optional[str] = None
+
+    @property
+    def effective_debug_log_path(self) -> str:
+        """Path do arquivo de log de debug (env/config ou default em cwd)."""
+        return self.DEBUG_LOG_PATH or os.environ.get("DEBUG_LOG_PATH") or os.path.join(os.getcwd(), ".cursor", "debug.log")
 
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':

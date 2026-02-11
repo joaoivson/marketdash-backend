@@ -88,7 +88,7 @@ class JobService:
     def commit_job(self, job_id: UUID, user_id: int) -> dict:
         """
         Verify job exists and belongs to user; verify object exists in storage.
-        Set job status to processing and enqueue split_and_enqueue_chunks.
+        Set job status to processing and enqueue process_job_from_storage (single task, batched in memory).
         Returns 202 payload.
         """
         job = self.job_repo.get_by_id(job_id, user_id=user_id)
@@ -104,9 +104,8 @@ class JobService:
         job.status = "processing"
         self.job_repo.db.commit()
 
-        # Enqueue split task (import here to avoid circular import and ensure task is registered)
-        from app.tasks.job_tasks import split_and_enqueue_chunks
-        split_and_enqueue_chunks.delay(str(job_id))
+        from app.tasks.job_tasks import process_job_from_storage
+        process_job_from_storage.delay(str(job_id))
 
         return {
             "job_id": str(job_id),

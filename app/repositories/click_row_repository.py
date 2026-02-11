@@ -1,9 +1,12 @@
+import json
+import time
 from typing import Iterable, List, Optional
 from datetime import date
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 
+from app.core.config import settings
 from app.models.click_row import ClickRow
 
 
@@ -159,7 +162,15 @@ class ClickRowRepository:
         query = query.order_by(ClickRow.date.desc(), sum_clicks.desc())
         if limit:
             query = query.limit(limit).offset(offset)
-        return query.all()
+        result = query.all()
+        # #region agent log
+        try:
+            with open(settings.effective_debug_log_path, "a") as _f:
+                _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_row_repo.list_aggregated_by_dataset", "message": "rows assembled", "data": {"dataset_id": dataset_id, "user_id": user_id, "rows_len": len(result)}, "hypothesisId": "H5"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        return result
 
     def list_aggregated_by_user(
         self,
@@ -186,7 +197,15 @@ class ClickRowRepository:
         query = query.order_by(ClickRow.date.desc(), sum_clicks.desc())
         if limit:
             query = query.limit(limit).offset(offset)
-        return query.all()
+        result = query.all()
+        # #region agent log
+        try:
+            with open(settings.effective_debug_log_path, "a") as _f:
+                _f.write(json.dumps({"timestamp": int(time.time() * 1000), "location": "click_row_repo.list_aggregated_by_user", "message": "rows assembled", "data": {"user_id": user_id, "rows_len": len(result)}, "hypothesisId": "H6"}) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        return result
 
     def delete_all_by_user(self, user_id: int) -> int:
         """Deleta todos os cliques do usuário."""
