@@ -28,18 +28,19 @@ def normalize_id(value: Any) -> str:
             return "nan"
         return str(int(f))
     except (ValueError, TypeError, OverflowError):
-        return "nan"
+        return s
 
 
-def generate_row_hash(user_id: int, order_id: Any, product_id: Any) -> str:
+def generate_row_hash(user_id: int, order_id: Any, product_id: Any, status: Any) -> str:
     """
     Gera hash MD5 determinístico para o registro de venda.
-    Utiliza user_id + order_id + product_id normalizados para garantir unicidade por item de pedido.
+    Utiliza user_id + order_id + product_id + status normalizados para garantir unicidade por item de pedido e status.
     """
     components = [
         str(user_id),
         normalize_id(order_id),
         normalize_id(product_id),
+        normalize_id(status),
     ]
     row_str = "|".join(components)
     return hashlib.md5(row_str.encode()).hexdigest()

@@ -29,6 +29,7 @@ def _generate_row_hash(row_data: dict, user_id: int) -> str:
         user_id,
         row_data.get("order_id"),
         row_data.get("product_id"),
+        row_data.get("status"),
     )
 
 
