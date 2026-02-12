@@ -20,25 +20,12 @@ ALIASES = {
     "product_id": {"product_id", "id_do_item", "id_item", "item_id", "id_do_produto", "product_id"},
     "platform": {"platform", "plataforma", "canal", "channel", "origem", "origem_do_pedido"},
     "revenue": {
-        "revenue", "receita", "valor", "valorvenda", "valor_receita", "valor_venda", "gross_value", "total",
-        "valor_de_c", "valor_de_compra", "valor_de_compra_r", "valor_de_compra_rs", "valor_compra", "faturamento",
-        "preco_r", "preco_rs", "preco", "preco_r$", "preco_rs$", "preco$", "valor_de_compra_r_s", "valor_de_compra_r",
+        "valor_de_compra_r_s", "valor_de_compra_r",
         "valor_de_compra_r_s_r"
     },
     "cost": {"cost", "custo", "valorcusto", "custo_total", "valor_do_r", "valor_gasto", "valor_gasto_anuncios", "gasto_anuncios"},
     "commission": {
-        "commission", "comissao", "comissão", "taxa", "fee", "commission_value", "taxa_de_cc", "taxa_de_cartao",
-        "comissao_liquido", "comissao_liquido_do_afiliado_rs", "comissao_liquido_do_afiliado_r",
-        "comissao_liquida", "comissao_liquida_do_afiliado_rs", "comissao_liquida_do_afiliado_r",
-        "comissao_liquida_do_afiliado", "comissao_liquida_do_afiliado_r_s", "comissao_liquida_do_afiliado_r",
-        "comissao_liquida_do_afiliado_r", "comissao_liquida_do_afiliado_r_s_r",
-        "comissa_o_liquida_do_afiliado_r", "comissa_o_la_quida_do_afiliado_r",
-        # Shopee / afiliados variações
-        "comissao_total_do_item_r", "comissao_total_do_item_rs", "comissao_total_do_item_r$",
-        "comissao_total_do_pedido_r", "comissao_total_do_pedido_rs", "comissao_total_do_pedido_r$",
-        "taxa_de_comissao_shopee_do_item", "taxa_de_comissao_do_vendedor_do_item",
-        "comissao_do_item_da_shopee_r", "comissao_do_item_da_marca_r", "comissao_do_vendedor_r",
-        "comissao_shopee_r", "comissao_shopee_rs", "comissao_shopee_r$", "comissao_shopee_rs$"
+        "comissao_liquida_do_afiliado_r"
     },
     "quantity": {"quantity", "quantidade", "qtd", "item_count", "count", "vendas", "sales_count"},
 
@@ -252,8 +239,14 @@ class CSVService:
             if out["time"] is not None and hasattr(out["time"], "isnull") and out["time"].isnull().all():
                 out["time"] = None
             out["product"] = out["product"].replace({"": "Produto"}, regex=False)
-            out["revenue"] = out["revenue"].clip(lower=0)
-            out["cost"] = out["cost"].clip(lower=0)
+            
+            # Truncar para 2 decimais (como Shopee faz) ANTES de salvar no banco
+            # Isso evita arredondamento implícito do Numeric(12,2) que causa discrepâncias
+            import math
+            out["revenue"] = out["revenue"].apply(lambda x: math.floor(x * 100) / 100 if pd.notna(x) else 0).clip(lower=0)
+            out["cost"] = out["cost"].apply(lambda x: math.floor(x * 100) / 100 if pd.notna(x) else 0).clip(lower=0)
+            # Para comissão, manter precisão total (soma raw 1269.43)
+            # NÃO arredondar por linha, pois isso gera discrepância (1269.83)
             out["commission"] = out["commission"].clip(lower=0)
             out["quantity"] = out["quantity"].clip(lower=0)
 

@@ -32,12 +32,13 @@ class DatasetService:
     def _generate_row_hash(row_data: dict, user_id: int) -> str:
         """
         Gera um hash MD5 determinístico para o registro de venda.
-        Utiliza user_id + order_id + product_id normalizados para garantir unicidade por item de pedido.
+        Utiliza user_id + order_id + product_id + status normalizados para garantir unicidade por item de pedido e status.
         """
         return generate_row_hash(
             user_id,
             row_data.get("order_id"),
             row_data.get("product_id"),
+            row_data.get("status"),
         )
 
     def process_commission_csv(self, dataset_id: int, user_id: int, file_content: bytes, filename: str) -> None:
