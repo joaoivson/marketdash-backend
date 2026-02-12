@@ -22,10 +22,10 @@ class DatasetRow(Base):
     product_id = Column(String, nullable=True, index=True)
     
     # Métricas (Somadas no agrupamento)
-    revenue = Column(Numeric(12, 2), nullable=True, default=0)
-    commission = Column(Numeric(12, 2), nullable=True, default=0)
-    cost = Column(Numeric(12, 2), nullable=True, default=0) # Custo de anúncios aplicado
-    profit = Column(Numeric(12, 2), nullable=True, default=0)
+    revenue = Column(Numeric(12, 4), nullable=True, default=0)
+    commission = Column(Numeric(12, 4), nullable=True, default=0)
+    cost = Column(Numeric(12, 4), nullable=True, default=0) # Custo de anúncios aplicado
+    profit = Column(Numeric(12, 4), nullable=True, default=0)
     quantity = Column(Integer, nullable=True, default=1)
     
     # Identificador único para deduplicação (Data + Plataforma + Categoria + Produto + Status + SubID)

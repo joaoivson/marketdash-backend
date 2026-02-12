@@ -245,7 +245,9 @@ class CSVService:
             import math
             out["revenue"] = out["revenue"].apply(lambda x: math.floor(x * 100) / 100 if pd.notna(x) else 0).clip(lower=0)
             out["cost"] = out["cost"].apply(lambda x: math.floor(x * 100) / 100 if pd.notna(x) else 0).clip(lower=0)
-            out["commission"] = out["commission"].apply(lambda x: math.round(x * 100) / 100 if pd.notna(x) else 0).clip(lower=0)
+            # Para comissão, manter precisão total (soma raw 1269.43)
+            # NÃO arredondar por linha, pois isso gera discrepância (1269.83)
+            out["commission"] = out["commission"].clip(lower=0)
             out["quantity"] = out["quantity"].clip(lower=0)
 
             # Profit
