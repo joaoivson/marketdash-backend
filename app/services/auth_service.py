@@ -43,6 +43,22 @@ class AuthService:
                 logger.info(f"Login Supabase bem-sucedido para {email}")
                 # Buscar usuário local para retornar junto
                 user = self.user_repo.get_by_email(email)
+
+                # JIT Provisioning (se login no Supabase OK e user local não existe)
+                if not user:
+                    import secrets
+                    import string
+                    # Gerar senha aleatória segura para conta gerenciada
+                    random_pwd = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+
+                    new_user = User(
+                        email=email,
+                        hashed_password=get_password_hash(random_pwd),
+                        is_active=True,
+                        name=auth_response.user.user_metadata.get("name") or auth_response.user.user_metadata.get("full_name"),
+                    )
+                    user = self.user_repo.create(new_user)
+
                 return {
                     "access_token": auth_response.session.access_token,
                     "token_type": "bearer",
