@@ -2,7 +2,7 @@ import uuid
 import logging
 import re
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query
-from app.api.v1.dependencies import get_current_user, get_supabase_client
+from app.api.v1.dependencies import get_current_user, get_supabase_client, get_supabase_service_client
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,8 @@ async def upload_image(
     if file_size > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Imagem muito grande. Limite de 5MB.")
 
-    supabase = get_supabase_client()
+    # Usar service role key para bypass RLS do bucket images
+    supabase = get_supabase_service_client()
     
     file_ext = file.filename.split(".")[-1] if "." in file.filename else "png"
     safe_filename = slugify(file.filename.rsplit(".", 1)[0]) if "." in file.filename else slugify(file.filename)
