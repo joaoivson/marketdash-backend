@@ -22,6 +22,7 @@ class CaptureSiteBase(BaseModel):
     urgency_animation: Optional[str] = "none"
     text_primary_color: Optional[str] = Field(None, description="Hex color for main text content")
     urgency_text_color: Optional[str] = Field(None, description="Hex color for urgency banner text")
+    is_active: Optional[bool] = Field(True, description="Whether the page is active")
 
 class CaptureSiteCreate(CaptureSiteBase):
     pass
@@ -33,6 +34,7 @@ class CaptureSiteResponse(CaptureSiteBase):
     id: int
     user_id: int
     slug: str
+    is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
 

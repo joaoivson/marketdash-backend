@@ -32,6 +32,8 @@ def get_public_site(
     site = service.get_site_by_slug(slug)
     if not site:
         raise HTTPException(status_code=404, detail="Página não encontrada")
+    if not site.is_active:
+        raise HTTPException(status_code=403, detail="Esta página está temporariamente desativada")
     return site
 
 @router.get("", response_model=List[CaptureSiteResponse])

@@ -28,6 +28,7 @@ class CaptureSite(Base):
     theme_color = Column(String, nullable=True)    # HEX color for decorative elements (glow)
     text_primary_color = Column(String, nullable=True) # HEX color for main text
     slug = Column(String, unique=True, index=True, nullable=False)
+    is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
