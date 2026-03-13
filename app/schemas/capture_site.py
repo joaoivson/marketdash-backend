@@ -11,6 +11,7 @@ class CaptureSiteBase(BaseModel):
     image_url: Optional[str] = Field(None, description="URL of the logo or image")
     urgency_text: Optional[str] = Field(None, description="Urgency or scarcity text")
     slug: Optional[str] = Field(None, description="Unique slug for the public URL")
+    theme_color: Optional[str] = Field(None, description="Theme color hex code for background gradient")
 
 class CaptureSiteCreate(CaptureSiteBase):
     pass

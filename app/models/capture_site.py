@@ -17,6 +17,7 @@ class CaptureSite(Base):
     image_url = Column(String, nullable=True)
     urgency_text = Column(String, nullable=True)
     slug = Column(String, unique=True, index=True, nullable=False)
+    theme_color = Column(String, nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

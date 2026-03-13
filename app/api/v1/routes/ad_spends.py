@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date as DateType, datetime
 from typing import List, Optional, Union
 import io
 
@@ -19,14 +19,14 @@ router = APIRouter(tags=["ad_spends"])
 
 
 class AdSpendCreate(BaseModel):
-    date: date
+    date: DateType
     amount: float = Field(..., gt=0)
     sub_id: Optional[str] = None
     clicks: Optional[int] = 0
 
 
 class AdSpendUpdate(BaseModel):
-    date: Optional[date] = None
+    date: Optional[DateType] = None
     amount: Optional[float] = Field(None, gt=0)
     sub_id: Optional[str] = None
     clicks: Optional[int] = None

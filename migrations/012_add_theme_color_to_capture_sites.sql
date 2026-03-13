@@ -1,0 +1,1 @@
+ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS theme_color VARCHAR;
