@@ -11,7 +11,17 @@ class CaptureSiteBase(BaseModel):
     image_url: Optional[str] = Field(None, description="URL of the logo or image")
     urgency_text: Optional[str] = Field(None, description="Urgency or scarcity text")
     slug: Optional[str] = Field(None, description="Unique slug for the public URL")
-    theme_color: Optional[str] = Field(None, description="Theme color hex code for background gradient")
+    theme_color: Optional[str] = Field(None, description="Theme color hex code for background glow")
+    button_color: Optional[str] = Field(None, description="Hex color for the CTA button")
+    background_color: Optional[str] = Field(None, description="Hex color for the page background")
+    is_gradient: Optional[bool] = Field(True, description="Whether to use a gradient background effect")
+    urgency_color: Optional[str] = Field(None, description="Hex color for the urgency banner background")
+    urgency_icon: Optional[str] = None
+    urgency_size: Optional[str] = "md"
+    urgency_icon_size: Optional[int] = 16
+    urgency_animation: Optional[str] = "none"
+    text_primary_color: Optional[str] = Field(None, description="Hex color for main text content")
+    urgency_text_color: Optional[str] = Field(None, description="Hex color for urgency banner text")
 
 class CaptureSiteCreate(CaptureSiteBase):
     pass

@@ -19,12 +19,7 @@ class CaptureSiteRepository:
     def create(self, user_id: int, obj_in: CaptureSiteCreate) -> CaptureSite:
         db_obj = CaptureSite(
             user_id=user_id,
-            title=obj_in.title,
-            subtitle=obj_in.subtitle,
-            button_text=obj_in.button_text,
-            button_link=obj_in.button_link,
-            benefits=obj_in.benefits,
-            slug=obj_in.slug
+            **obj_in.dict()
         )
         self.db.add(db_obj)
         self.db.commit()
