@@ -51,7 +51,10 @@ def create_site(
     service: CaptureSiteService = Depends(get_service)
 ):
     """Create a new capture site."""
-    return service.create_site(current_user.id, site_in)
+    try:
+        return service.create_site(current_user.id, site_in)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 @router.get("/{site_id}", response_model=CaptureSiteResponse)
 def get_site(

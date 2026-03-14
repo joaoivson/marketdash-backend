@@ -27,7 +27,13 @@ class CaptureSiteService:
         suggested = f"{slug}-{random_suffix}"
         return SlugCheckResponse(available=False, suggested_slug=suggested)
 
+    MAX_SITES_PER_USER = 15
+
     def create_site(self, user_id: int, site_in: CaptureSiteCreate) -> CaptureSite:
+        existing_sites = self.repository.get_by_user(user_id)
+        if len(existing_sites) >= self.MAX_SITES_PER_USER:
+            raise ValueError(f"Limite de {self.MAX_SITES_PER_USER} páginas de captura atingido")
+
         # Check slug uniqueness before creation
         if site_in.slug:
             existing = self.repository.get_by_slug(site_in.slug)

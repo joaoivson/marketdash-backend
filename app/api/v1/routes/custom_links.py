@@ -57,7 +57,10 @@ def create_link(
     service: CustomLinkService = Depends(get_service)
 ):
     """Create a new custom link."""
-    return service.create_link(current_user.id, link_in)
+    try:
+        return service.create_link(current_user.id, link_in)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
 @router.put("/{link_id}", response_model=CustomLinkResponse)

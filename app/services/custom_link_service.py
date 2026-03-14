@@ -28,7 +28,13 @@ class CustomLinkService:
         suggested = f"{slug}-{random_suffix}"
         return SlugCheckResponse(available=False, suggested_slug=suggested)
 
+    MAX_LINKS_PER_USER = 15
+
     def create_link(self, user_id: int, link_in: CustomLinkCreate) -> CustomLink:
+        existing_links = self.repository.get_by_user(user_id)
+        if len(existing_links) >= self.MAX_LINKS_PER_USER:
+            raise ValueError(f"Limite de {self.MAX_LINKS_PER_USER} links atingido")
+
         if link_in.slug:
             existing = self.repository.get_by_slug(link_in.slug)
             if existing:
