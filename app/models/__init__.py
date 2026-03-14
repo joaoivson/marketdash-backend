@@ -7,6 +7,7 @@ from app.models.ad_spend import AdSpend
 from app.models.click_row import ClickRow
 from app.models.job import Job, JobChunk
 from app.models.capture_site import CaptureSite
+from app.models.custom_link import CustomLink
 
-__all__ = ["User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow", "Job", "JobChunk", "CaptureSite"]
+__all__ = ["User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow", "Job", "JobChunk", "CaptureSite", "CustomLink"]
 
