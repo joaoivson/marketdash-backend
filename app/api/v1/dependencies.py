@@ -145,6 +145,12 @@ def require_active_subscription(
     if not settings.CAKTO_ENFORCE_SUBSCRIPTION:
         # Se não está habilitado, permite acesso
         return current_user
+
+    # Bypass em ambientes de desenvolvimento/homologação
+    env = settings.ENVIRONMENT.lower()
+    if env in ("development", "homologation", "local", "test"):
+        logger.debug(f"Subscription check bypassed in {env} environment for user {current_user.id}")
+        return current_user
     
     subscription_service = SubscriptionService(SubscriptionRepository(db))
     

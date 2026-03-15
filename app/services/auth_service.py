@@ -79,8 +79,9 @@ class AuthService:
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuário inativo")
 
-        # 3. Validar assinatura (Cakto)
-        if settings.CAKTO_ENFORCE_SUBSCRIPTION:
+        # 3. Validar assinatura (Cakto) — somente em produção
+        env = settings.ENVIRONMENT.lower()
+        if settings.CAKTO_ENFORCE_SUBSCRIPTION and env not in ("development", "homologation", "local", "test"):
             try:
                 has_access, reason = check_active_subscription(user.email)
                 if not has_access:
