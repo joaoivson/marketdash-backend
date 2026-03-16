@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date as DateType, datetime
 from typing import List, Optional, Union
 import io
 
@@ -19,14 +19,14 @@ router = APIRouter(tags=["ad_spends"])
 
 
 class AdSpendCreate(BaseModel):
-    date: date
+    date: DateType
     amount: float = Field(..., gt=0)
     sub_id: Optional[str] = None
     clicks: Optional[int] = 0
 
 
 class AdSpendUpdate(BaseModel):
-    date: Optional[date] = None
+    date: Optional[DateType] = None
     amount: Optional[float] = Field(None, gt=0)
     sub_id: Optional[str] = None
     clicks: Optional[int] = None
@@ -34,7 +34,7 @@ class AdSpendUpdate(BaseModel):
 
 class AdSpendResponse(BaseModel):
     id: int
-    date: date
+    date: DateType
     amount: float
     sub_id: Optional[str]
     clicks: Optional[int] = 0
@@ -69,8 +69,8 @@ def bulk_create_ad_spend(
 
 @router.get("", response_model=List[AdSpendResponse])
 def list_ad_spends(
-    start_date: date | None = Query(None),
-    end_date: date | None = Query(None),
+    start_date: DateType | None = Query(None, description="Data inicial (opcional)"),
+    end_date: DateType | None = Query(None, description="Data final (opcional)"),
     limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(require_active_subscription),

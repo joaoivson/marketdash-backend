@@ -23,4 +23,6 @@ class User(Base):
     dataset_rows = relationship("DatasetRow", back_populates="user", cascade="all, delete-orphan")
     click_rows = relationship("ClickRow", back_populates="user", cascade="all, delete-orphan")
     ad_spends = relationship("AdSpend", back_populates="user", cascade="all, delete-orphan")
+    capture_sites = relationship("CaptureSite", back_populates="user", cascade="all, delete-orphan")
+    custom_links = relationship("CustomLink", back_populates="user", cascade="all, delete-orphan")
 

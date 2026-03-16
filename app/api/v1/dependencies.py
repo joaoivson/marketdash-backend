@@ -40,6 +40,28 @@ def get_supabase_client() -> Client:
             )
     return _supabase
 
+_supabase_service: Optional[Client] = None
+
+def get_supabase_service_client() -> Client:
+    """Gets or initializes the Supabase service client (bypasses RLS)."""
+    global _supabase_service
+    if _supabase_service is None:
+        if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
+            logger.error("SUPABASE_URL ou SUPABASE_SERVICE_KEY não configurados")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Configuração Admin do Supabase ausente no servidor"
+            )
+        try:
+            _supabase_service = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+        except Exception as e:
+            logger.error(f"Falha ao inicializar cliente Supabase Admin: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Erro ao conectar com serviço de storage"
+            )
+    return _supabase_service
+
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -122,6 +144,12 @@ def require_active_subscription(
     """
     if not settings.CAKTO_ENFORCE_SUBSCRIPTION:
         # Se não está habilitado, permite acesso
+        return current_user
+
+    # Bypass em ambientes de desenvolvimento/homologação
+    env = settings.ENVIRONMENT.lower()
+    if env in ("development", "homologation", "local", "test"):
+        logger.debug(f"Subscription check bypassed in {env} environment for user {current_user.id}")
         return current_user
     
     subscription_service = SubscriptionService(SubscriptionRepository(db))

@@ -95,15 +95,15 @@ class Settings(BaseSettings):
             "period": "mensal"
         },
         "trimestral": {
-            "id": "3frhhks",
+            "id": "u6rpnpo",
             "name": "MarketDash Trimestral",
-            "checkout_url": "https://pay.cakto.com.br/3frhhks",
+            "checkout_url": "https://pay.cakto.com.br/u6rpnpo",
             "period": "trimestral"
         },
         "anual": {
-            "id": "ebrg3ir",
+            "id": "yda8io6",
             "name": "MarketDash Anual",
-            "checkout_url": "https://pay.cakto.com.br/ebrg3ir",
+            "checkout_url": "https://pay.cakto.com.br/yda8io6",
             "period": "anual"
         }
     }
@@ -138,6 +138,9 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://localhost:5173",
         "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
         # Production (HTTPS)
         "https://marketdash.com.br",
         "https://api.marketdash.com.br",

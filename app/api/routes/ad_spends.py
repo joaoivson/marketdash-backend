@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date
+from datetime import date as DateType, date
 from pydantic import BaseModel, Field
 
 from app.db.session import get_db
@@ -12,18 +12,18 @@ router = APIRouter(prefix="/ad_spends", tags=["ad_spends"])
 
 # Schemas
 class AdSpendCreate(BaseModel):
-    date: date
+    date: DateType
     amount: float = Field(..., gt=0)
     sub_id: Optional[str] = None
 
 class AdSpendUpdate(BaseModel):
-    date: Optional[date] = None
+    date: Optional[DateType] = None
     amount: Optional[float] = Field(None, gt=0)
     sub_id: Optional[str] = None
 
 class AdSpendResponse(BaseModel):
     id: int
-    date: date
+    date: DateType
     amount: float
     sub_id: Optional[str]
 
@@ -109,8 +109,8 @@ def bulk_create_ad_spend(
 @router.get("", response_model=List[AdSpendResponse])
 def list_ad_spends(
     user_id: int | None = Query(None),
-    start_date: date | None = Query(None, description="Data inicial (opcional)"),
-    end_date: date | None = Query(None, description="Data final (opcional)"),
+    start_date: DateType | None = Query(None, description="Data inicial (opcional)"),
+    end_date: DateType | None = Query(None, description="Data final (opcional)"),
     db: Session = Depends(get_db)
 ):
     """Lista gastos de anúncios. Se datas forem informadas, filtra pelo intervalo; caso contrário, retorna todos do usuário."""

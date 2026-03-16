@@ -1,0 +1,3 @@
+ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS button_color VARCHAR;
+ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS background_color VARCHAR;
+ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS is_gradient BOOLEAN DEFAULT TRUE;
