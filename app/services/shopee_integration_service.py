@@ -135,6 +135,7 @@ class ShopeeIntegrationService:
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
         row_repo = DatasetRowRepository(db)
         existing_hashes = row_repo.get_existing_hashes(user_id)
+        existing_order_item_keys = row_repo.get_existing_order_item_keys(user_id)
 
         total_processed = 0
         scroll_id: Optional[str] = None
@@ -175,8 +176,9 @@ class ShopeeIntegrationService:
                     for item in (order.get("items") or []):
                         item_id = str(item.get("itemId") or "")
                         rh = _row_hash(user_id, order_id, item_id, str(row_date))
+                        order_item_key = (order_id, item_id)
 
-                        if rh in existing_hashes:
+                        if rh in existing_hashes or order_item_key in existing_order_item_keys:
                             continue
 
                         rows.append(
@@ -189,6 +191,7 @@ class ShopeeIntegrationService:
                                 status=order_status,
                                 sub_id1=utm_content,
                                 order_id=order_id,
+                                product_id=item_id,
                                 revenue=float(item.get("actualAmount") or item.get("itemPrice") or 0),
                                 commission=float(item.get("itemCommission") or 0),
                                 quantity=int(item.get("qty") or 1),
@@ -196,6 +199,7 @@ class ShopeeIntegrationService:
                             )
                         )
                         existing_hashes.add(rh)
+                        existing_order_item_keys.add(order_item_key)
 
             if rows:
                 row_repo.bulk_create(rows)

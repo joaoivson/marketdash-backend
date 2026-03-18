@@ -10,7 +10,7 @@ def _get_fernet():
     if not key:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SHOPEE_ENCRYPTION_KEY não configurada no servidor.",
+            detail="Erro de configuração do servidor. Entre em contato com o suporte.",
         )
     from cryptography.fernet import Fernet
     return Fernet(key.encode() if isinstance(key, str) else key)
