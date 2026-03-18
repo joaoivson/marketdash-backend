@@ -49,8 +49,8 @@ class DatasetRowBase(BaseModel):
     product_id: Optional[str] = None
     revenue: float = 0
     commission: float = 0
-    cost: float = 0
-    quantity: int = 1
+    cost: Optional[float] = 0
+    quantity: Optional[int] = 1
 
     @field_serializer("date")
     def serialize_date_dd_mm_yyyy(self, d: date) -> str:
@@ -67,7 +67,7 @@ class DatasetRowResponse(DatasetRowBase):
     id: int
     dataset_id: int
     user_id: int
-    profit: float
+    profit: Optional[float] = 0
 
     class Config:
         from_attributes = True
