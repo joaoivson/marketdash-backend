@@ -25,6 +25,7 @@ ACTIVATE_EVENTS: Set[str] = {
     "subscription_created",
     "subscription_approved",
     "subscription_active",
+    "subscription_renewed",
     "purchase_approved",
     "order_paid",
     "payment_approved",
@@ -125,6 +126,16 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
             or data.get("paidAt")
         )
 
+        # Extrair recurrence_period e paidAt para cálculo correto da próxima data
+        recurrence_period = None
+        if isinstance(subscription, dict):
+            rp = subscription.get("recurrence_period")
+            if rp is not None:
+                try:
+                    recurrence_period = int(rp)
+                except (ValueError, TypeError):
+                    recurrence_period = None
+
         offer_name = None
         if isinstance(offer, dict):
             offer_name = offer.get("name")
@@ -144,6 +155,8 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
             "payment_method": data.get("paymentMethod") or data.get("payment_method"),
             "due_date": _parse_datetime(due_date_raw),
             "due_date_present": due_date_raw is not None,
+            "recurrence_period": recurrence_period,
+            "paid_at": _parse_datetime(data.get("paidAt")),
             "offer_name": offer_name,
         }
     except Exception as e:
@@ -157,6 +170,8 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
             "payment_method": None,
             "due_date": None,
             "due_date_present": False,
+            "recurrence_period": None,
+            "paid_at": None,
             "offer_name": None,
         }
 
@@ -374,10 +389,33 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
         # Atualizar assinatura
         subscription_service = SubscriptionService(SubscriptionRepository(db))
         
-        # Calcular expiração
+        # Calcular expiração correta
         expires_at = transaction_data.get("due_date")
-        if not expires_at and action == "activate":
-            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+        recurrence_period = transaction_data.get("recurrence_period")
+        paid_at = transaction_data.get("paid_at")
+
+        if action == "activate":
+            now_utc = datetime.now(timezone.utc)
+
+            if expires_at:
+                # Garantir timezone
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+                # Se a due_date está no passado, avançar pela recurrence_period
+                if expires_at < now_utc:
+                    period_days = int(recurrence_period) if recurrence_period else 30
+                    while expires_at < now_utc:
+                        expires_at = expires_at + timedelta(days=period_days)
+                    logger.info(f"due_date estava no passado. Nova expires_at calculada: {expires_at.isoformat()}")
+            else:
+                # Sem due_date: usar paid_at + 30 dias ou now + 30
+                base = paid_at if paid_at else now_utc
+                if base.tzinfo is None:
+                    base = base.replace(tzinfo=timezone.utc)
+                period_days = int(recurrence_period) if recurrence_period else 30
+                expires_at = base + timedelta(days=period_days)
+                logger.info(f"Sem due_date. expires_at calculada a partir de base: {expires_at.isoformat()}")
             
         try:
             logger.info(f"Atualizando assinatura para usuário {user.id} (ação: {action})")
