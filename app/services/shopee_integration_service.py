@@ -128,14 +128,16 @@ class ShopeeIntegrationService:
 
         password = decrypt_value(integration.encrypted_password)
         now = datetime.now(timezone.utc)
-        start = now - timedelta(days=60)
+        start = now - timedelta(days=90)
         ts_start = int(start.timestamp())
         ts_end = int(now.timestamp())
 
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
         row_repo = DatasetRowRepository(db)
         existing_hashes = row_repo.get_existing_hashes(user_id)
-        existing_order_item_keys = row_repo.get_existing_order_item_keys(user_id)
+        existing_order_item_keys = row_repo.get_existing_order_item_keys(
+            user_id, platform="shopee"
+        )
 
         total_processed = 0
         scroll_id: Optional[str] = None
@@ -181,6 +183,23 @@ class ShopeeIntegrationService:
                         if rh in existing_hashes or order_item_key in existing_order_item_keys:
                             continue
 
+                        qty = int(item.get("qty") or 1)
+
+                        # Revenue: usa actualAmount (valor real pago) se presente,
+                        # senão calcula itemPrice * qty
+                        actual_amount = item.get("actualAmount")
+                        item_price = item.get("itemPrice")
+                        if actual_amount is not None and float(actual_amount) > 0:
+                            revenue = float(actual_amount)
+                        elif item_price is not None:
+                            revenue = float(item_price) * qty
+                        else:
+                            revenue = 0.0
+
+                        # Commission: usa itemCommission (valor por item)
+                        item_commission = item.get("itemCommission")
+                        commission = float(item_commission) if item_commission is not None else 0.0
+
                         rows.append(
                             DatasetRow(
                                 dataset_id=dataset.id,
@@ -192,9 +211,9 @@ class ShopeeIntegrationService:
                                 sub_id1=utm_content,
                                 order_id=order_id,
                                 product_id=item_id,
-                                revenue=float(item.get("actualAmount") or item.get("itemPrice") or 0),
-                                commission=float(item.get("itemCommission") or 0),
-                                quantity=int(item.get("qty") or 1),
+                                revenue=revenue,
+                                commission=commission,
+                                quantity=qty,
                                 row_hash=rh,
                             )
                         )
