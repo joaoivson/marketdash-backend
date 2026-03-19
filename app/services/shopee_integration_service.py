@@ -157,6 +157,18 @@ class ShopeeIntegrationService:
         total_processed = 0
         scroll_id: Optional[str] = None
 
+        # Diagnóstico: somas por campo para validar mapeamento
+        from collections import defaultdict
+        debug_monthly: dict[str, dict[str, float]] = defaultdict(
+            lambda: {
+                "itemPrice": 0.0, "actualAmount": 0.0,
+                "itemPrice_x_qty": 0.0, "actualAmount_x_qty": 0.0,
+                "itemCommission": 0.0, "estimatedTotalCommission": 0.0,
+                "netCommission": 0.0, "count": 0,
+            }
+        )
+        debug_statuses: set[str] = set()
+
         while True:
             scroll_param = f', scrollId: "{scroll_id}"' if scroll_id else ""
             query = CONVERSIONS_QUERY % (ts_start, ts_end, scroll_param)
@@ -185,37 +197,55 @@ class ShopeeIntegrationService:
 
                 utm_content = str(node.get("utmContent") or "")
                 conversion_status = str(node.get("conversionStatus") or "")
+                est_total_comm = float(node.get("estimatedTotalCommission") or 0)
+                net_comm = float(node.get("netCommission") or 0)
 
                 for order in (node.get("orders") or []):
                     order_id = str(order.get("orderId") or "")
                     order_status = str(order.get("orderStatus") or conversion_status)
 
-                    for item in (order.get("items") or []):
+                    for item_idx, item in enumerate(order.get("items") or []):
                         item_id = str(item.get("itemId") or "")
-                        order_item_key = (order_id, item_id)
+                        actual_amount = item.get("actualAmount")
+                        actual_f = float(actual_amount) if actual_amount is not None else 0.0
+                        # Chave inclui actualAmount para distinguir variantes
+                        # do mesmo item (model IDs diferentes) no mesmo pedido
+                        order_item_key = (order_id, item_id, f"{actual_f:.4f}")
 
                         # Dedup dentro da mesma página/sync
                         if order_item_key in seen_keys:
                             continue
                         seen_keys.add(order_item_key)
 
-                        rh = _row_hash(user_id, order_id, item_id, str(row_date))
+                        rh = _row_hash(user_id, order_id, item_id, str(row_date), f"{actual_f:.4f}")
                         qty = int(item.get("qty") or 1)
 
-                        # Revenue: usa actualAmount (valor real pago) se presente,
-                        # senão calcula itemPrice * qty
-                        actual_amount = item.get("actualAmount")
                         item_price = item.get("itemPrice")
-                        if actual_amount is not None and float(actual_amount) > 0:
-                            revenue = float(actual_amount)
-                        elif item_price is not None:
-                            revenue = float(item_price) * qty
-                        else:
-                            revenue = 0.0
-
-                        # Commission: usa itemCommission (valor por item)
                         item_commission = item.get("itemCommission")
-                        commission = float(item_commission) if item_commission is not None else 0.0
+
+                        price_f = float(item_price) if item_price is not None else 0.0
+                        comm_f = float(item_commission) if item_commission is not None else 0.0
+
+                        # Diagnóstico por mês
+                        month_key = row_date.strftime("%Y-%m")
+                        m = debug_monthly[month_key]
+                        m["itemPrice"] += price_f
+                        m["actualAmount"] += actual_f
+                        m["itemPrice_x_qty"] += price_f * qty
+                        m["actualAmount_x_qty"] += actual_f * qty
+                        m["itemCommission"] += comm_f
+                        m["estimatedTotalCommission"] += est_total_comm
+                        m["netCommission"] += net_comm
+                        m["count"] += 1
+                        debug_statuses.add(order_status)
+
+                        # Revenue: usa actualAmount (= "Valor de Compra" no CSV Shopee)
+                        # itemPrice é o preço de vitrine e NÃO zera para pedidos cancelados,
+                        # inflando o faturamento. actualAmount reflete o valor real da compra.
+                        revenue = actual_f
+
+                        # Commission: usa itemCommission
+                        commission = comm_f
 
                         rows.append(
                             DatasetRow(
@@ -245,6 +275,22 @@ class ShopeeIntegrationService:
             scroll_id = page_info.get("scrollId")
             if not scroll_id:
                 break
+
+        # Log diagnóstico para validar mapeamento de campos
+        logger.info("=== SHOPEE DIAGNÓSTICO user_id=%s ===", user_id)
+        logger.info("Statuses encontrados: %s", debug_statuses)
+        for month, vals in sorted(debug_monthly.items()):
+            logger.info(
+                "Mês %s | items=%d | itemPrice=%.2f | actualAmount=%.2f | "
+                "itemPrice*qty=%.2f | actualAmount*qty=%.2f | "
+                "itemCommission=%.2f | estTotalComm=%.2f | netComm=%.2f",
+                month, int(vals["count"]),
+                vals["itemPrice"], vals["actualAmount"],
+                vals["itemPrice_x_qty"], vals["actualAmount_x_qty"],
+                vals["itemCommission"],
+                vals["estimatedTotalCommission"], vals["netCommission"],
+            )
+        logger.info("=== FIM DIAGNÓSTICO ===")
 
         return total_processed
 
