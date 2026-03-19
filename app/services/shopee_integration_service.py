@@ -1,5 +1,6 @@
 import hashlib
 import logging
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -127,7 +128,11 @@ class ShopeeIntegrationService:
             return 0
 
         password = decrypt_value(integration.encrypted_password)
-        now = datetime.now(timezone.utc)
+
+        # Shopee Brasil opera em BRT (UTC-3). Os timestamps de purchaseTime
+        # na API são relativos a BRT, então o range deve ser em BRT.
+        BRT = timezone(timedelta(hours=-3))
+        now = datetime.now(BRT)
         start = now - timedelta(days=90)
         ts_start = int(start.timestamp())
         ts_end = int(now.timestamp())
@@ -152,22 +157,15 @@ class ShopeeIntegrationService:
             )
 
         row_repo = DatasetRowRepository(db)
-        seen_keys: set[tuple[str, str]] = set()
+        # Contador sequencial para gerar row_hash único por item.
+        # A API retorna múltiplos nós por conversionId (um por pedido/item),
+        # e o mesmo (order_id, item_id) pode aparecer múltiplas vezes quando
+        # o comprador adquiriu várias unidades/variantes do mesmo produto.
+        # Não fazemos dedup — cada nó da API é processado como item legítimo.
+        item_seq: Counter = Counter()
 
         total_processed = 0
         scroll_id: Optional[str] = None
-
-        # Diagnóstico: somas por campo para validar mapeamento
-        from collections import defaultdict
-        debug_monthly: dict[str, dict[str, float]] = defaultdict(
-            lambda: {
-                "itemPrice": 0.0, "actualAmount": 0.0,
-                "itemPrice_x_qty": 0.0, "actualAmount_x_qty": 0.0,
-                "itemCommission": 0.0, "estimatedTotalCommission": 0.0,
-                "netCommission": 0.0, "count": 0,
-            }
-        )
-        debug_statuses: set[str] = set()
 
         while True:
             scroll_param = f', scrollId: "{scroll_id}"' if scroll_id else ""
@@ -191,79 +189,79 @@ class ShopeeIntegrationService:
             for node in nodes:
                 purchase_ts = node.get("purchaseTime")
                 try:
-                    row_date = datetime.fromtimestamp(purchase_ts, tz=timezone.utc).date()
+                    row_date = datetime.fromtimestamp(purchase_ts, tz=BRT).date()
                 except Exception:
                     row_date = now.date()
 
                 utm_content = str(node.get("utmContent") or "")
                 conversion_status = str(node.get("conversionStatus") or "")
+                # estimatedTotalCommission é a comissão líquida real do nó,
+                # equivalente a "Comissão líquida do afiliado(R$)" no CSV Shopee.
+                # itemCommission no nível do item não contém o valor completo
+                # (~10% menor). A soma de estimatedTotalCommission de todos os
+                # nós bate exatamente com o dashboard Shopee.
                 est_total_comm = float(node.get("estimatedTotalCommission") or 0)
-                net_comm = float(node.get("netCommission") or 0)
 
+                # Coletar itens deste nó para distribuir comissão proporcionalmente
+                node_items = []
                 for order in (node.get("orders") or []):
                     order_id = str(order.get("orderId") or "")
                     order_status = str(order.get("orderStatus") or conversion_status)
-
-                    for item_idx, item in enumerate(order.get("items") or []):
+                    for item in (order.get("items") or []):
                         item_id = str(item.get("itemId") or "")
-                        actual_amount = item.get("actualAmount")
-                        actual_f = float(actual_amount) if actual_amount is not None else 0.0
-                        # Chave inclui actualAmount para distinguir variantes
-                        # do mesmo item (model IDs diferentes) no mesmo pedido
-                        order_item_key = (order_id, item_id, f"{actual_f:.4f}")
-
-                        # Dedup dentro da mesma página/sync
-                        if order_item_key in seen_keys:
-                            continue
-                        seen_keys.add(order_item_key)
-
-                        rh = _row_hash(user_id, order_id, item_id, str(row_date), f"{actual_f:.4f}")
+                        actual_f = float(item.get("actualAmount") or 0)
+                        comm_f = float(item.get("itemCommission") or 0)
                         qty = int(item.get("qty") or 1)
+                        node_items.append({
+                            "order_id": order_id,
+                            "order_status": order_status,
+                            "item_id": item_id,
+                            "item_name": str(item.get("itemName") or ""),
+                            "actual_f": actual_f,
+                            "item_comm_f": comm_f,
+                            "qty": qty,
+                        })
 
-                        item_price = item.get("itemPrice")
-                        item_commission = item.get("itemCommission")
+                sum_item_comm = sum(ni["item_comm_f"] for ni in node_items)
 
-                        price_f = float(item_price) if item_price is not None else 0.0
-                        comm_f = float(item_commission) if item_commission is not None else 0.0
+                for ni in node_items:
+                    # Seq incremental para row_hash único
+                    base_key = (ni["order_id"], ni["item_id"])
+                    item_seq[base_key] += 1
+                    seq = item_seq[base_key]
 
-                        # Diagnóstico por mês
-                        month_key = row_date.strftime("%Y-%m")
-                        m = debug_monthly[month_key]
-                        m["itemPrice"] += price_f
-                        m["actualAmount"] += actual_f
-                        m["itemPrice_x_qty"] += price_f * qty
-                        m["actualAmount_x_qty"] += actual_f * qty
-                        m["itemCommission"] += comm_f
-                        m["estimatedTotalCommission"] += est_total_comm
-                        m["netCommission"] += net_comm
-                        m["count"] += 1
-                        debug_statuses.add(order_status)
+                    rh = _row_hash(user_id, ni["order_id"], ni["item_id"], str(row_date), str(seq))
 
-                        # Revenue: usa actualAmount (= "Valor de Compra" no CSV Shopee)
-                        # itemPrice é o preço de vitrine e NÃO zera para pedidos cancelados,
-                        # inflando o faturamento. actualAmount reflete o valor real da compra.
-                        revenue = actual_f
+                    # Revenue: actualAmount = "Valor de Compra(R$)" no CSV
+                    # (0 para cancelados, com descontos aplicados)
+                    revenue = ni["actual_f"]
 
-                        # Commission: usa itemCommission
-                        commission = comm_f
+                    # Commission: distribui estimatedTotalCommission proporcionalmente
+                    # ao itemCommission de cada item dentro do nó
+                    if sum_item_comm > 0:
+                        commission = ni["item_comm_f"] / sum_item_comm * est_total_comm
+                    elif len(node_items) == 1:
+                        commission = est_total_comm
+                    else:
+                        commission = 0.0
 
-                        rows.append(
-                            DatasetRow(
-                                dataset_id=dataset.id,
-                                user_id=user_id,
-                                date=row_date,
-                                platform="shopee",
-                                product=str(item.get("itemName") or ""),
-                                status=order_status,
-                                sub_id1=utm_content,
-                                order_id=order_id,
-                                product_id=item_id,
-                                revenue=revenue,
-                                commission=commission,
-                                quantity=qty,
-                                row_hash=rh,
-                            )
+                    rows.append(
+                        DatasetRow(
+                            dataset_id=dataset.id,
+                            user_id=user_id,
+                            date=row_date,
+                            platform="shopee",
+                            product=ni["item_name"],
+                            status=ni["order_status"],
+                            sub_id1=utm_content,
+                            order_id=ni["order_id"],
+                            product_id=ni["item_id"],
+                            revenue=revenue,
+                            commission=commission,
+                            quantity=ni["qty"],
+                            row_hash=rh,
                         )
+                    )
 
             if rows:
                 row_repo.bulk_create(rows)
@@ -276,22 +274,10 @@ class ShopeeIntegrationService:
             if not scroll_id:
                 break
 
-        # Log diagnóstico para validar mapeamento de campos
-        logger.info("=== SHOPEE DIAGNÓSTICO user_id=%s ===", user_id)
-        logger.info("Statuses encontrados: %s", debug_statuses)
-        for month, vals in sorted(debug_monthly.items()):
-            logger.info(
-                "Mês %s | items=%d | itemPrice=%.2f | actualAmount=%.2f | "
-                "itemPrice*qty=%.2f | actualAmount*qty=%.2f | "
-                "itemCommission=%.2f | estTotalComm=%.2f | netComm=%.2f",
-                month, int(vals["count"]),
-                vals["itemPrice"], vals["actualAmount"],
-                vals["itemPrice_x_qty"], vals["actualAmount_x_qty"],
-                vals["itemCommission"],
-                vals["estimatedTotalCommission"], vals["netCommission"],
-            )
-        logger.info("=== FIM DIAGNÓSTICO ===")
-
+        logger.info(
+            "Shopee sync user_id=%s: %d rows processados",
+            user_id, total_processed,
+        )
         return total_processed
 
     async def sync_user(self, user_id: int, db: Session) -> int:
