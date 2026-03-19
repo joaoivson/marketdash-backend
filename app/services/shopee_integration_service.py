@@ -133,11 +133,26 @@ class ShopeeIntegrationService:
         ts_end = int(now.timestamp())
 
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
-        row_repo = DatasetRowRepository(db)
-        existing_hashes = row_repo.get_existing_hashes(user_id)
-        existing_order_item_keys = row_repo.get_existing_order_item_keys(
-            user_id, platform="shopee"
+
+        # Full refresh: apaga dados Shopee do período e re-insere com valores
+        # corretos da API, garantindo que revenue/commission estejam sempre atualizados.
+        deleted = (
+            db.query(DatasetRow)
+            .filter(
+                DatasetRow.user_id == user_id,
+                DatasetRow.platform == "shopee",
+                DatasetRow.date >= start.date(),
+            )
+            .delete(synchronize_session="fetch")
         )
+        if deleted:
+            logger.info(
+                "Shopee full refresh: removidos %d rows antigos user_id=%s",
+                deleted, user_id,
+            )
+
+        row_repo = DatasetRowRepository(db)
+        seen_keys: set[tuple[str, str]] = set()
 
         total_processed = 0
         scroll_id: Optional[str] = None
@@ -177,12 +192,14 @@ class ShopeeIntegrationService:
 
                     for item in (order.get("items") or []):
                         item_id = str(item.get("itemId") or "")
-                        rh = _row_hash(user_id, order_id, item_id, str(row_date))
                         order_item_key = (order_id, item_id)
 
-                        if rh in existing_hashes or order_item_key in existing_order_item_keys:
+                        # Dedup dentro da mesma página/sync
+                        if order_item_key in seen_keys:
                             continue
+                        seen_keys.add(order_item_key)
 
+                        rh = _row_hash(user_id, order_id, item_id, str(row_date))
                         qty = int(item.get("qty") or 1)
 
                         # Revenue: usa actualAmount (valor real pago) se presente,
@@ -217,8 +234,6 @@ class ShopeeIntegrationService:
                                 row_hash=rh,
                             )
                         )
-                        existing_hashes.add(rh)
-                        existing_order_item_keys.add(order_item_key)
 
             if rows:
                 row_repo.bulk_create(rows)
