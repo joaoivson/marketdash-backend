@@ -68,7 +68,7 @@ async def upload_image(
             
     if not success_bucket:
         logger.error(f"Erro ao fazer upload da imagem em qualquer bucket: {last_err}")
-        raise HTTPException(status_code=500, detail="Falha ao fazer upload da imagem. Verifique se o bucket de storage existe no Supabase (tente criar bucket 'capturas' ou 'images').")
+        raise HTTPException(status_code=500, detail="Não foi possível enviar a imagem. Tente novamente ou entre em contato com o suporte.")
 
     try:
         # Retornar URL pública
@@ -78,4 +78,4 @@ async def upload_image(
         
     except Exception as e:
         logger.error(f"Erro ao gerar URL pública da imagem: {e}")
-        raise HTTPException(status_code=500, detail="Erro interno ao gerar URL da imagem.")
+        raise HTTPException(status_code=500, detail="Imagem enviada, mas não foi possível gerar o link. Tente novamente.")

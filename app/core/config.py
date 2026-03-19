@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     S3_SECRET_KEY: Optional[str] = None
     S3_REGION: Optional[str] = None
 
+    # Shopee Affiliate API — chave Fernet (base64) para criptografar senhas armazenadas
+    SHOPEE_ENCRYPTION_KEY: Optional[str] = None
+
     # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
     DEBUG_LOG_PATH: Optional[str] = None
 

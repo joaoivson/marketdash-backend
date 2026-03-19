@@ -43,7 +43,7 @@ class JobService:
         if job_type not in ("transaction", "click"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="type must be 'transaction' or 'click'.",
+                detail="Tipo de arquivo inválido. Use 'transaction' para comissões ou 'click' para cliques.",
             )
 
         job_id = uuid4()
@@ -93,7 +93,7 @@ class JobService:
         """
         job = self.job_repo.get_by_id(job_id, user_id=user_id)
         if not job:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processamento não encontrado.")
 
         if not object_exists(_bucket(), job.storage_key):
             raise HTTPException(
@@ -117,7 +117,7 @@ class JobService:
         """Return job status, total_chunks, chunks_done, created_at, errors from failed chunks."""
         job = self.job_repo.get_by_id(job_id, user_id=user_id)
         if not job:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processamento não encontrado.")
 
         chunks = self.job_repo.get_chunks(job_id)
         errors = [{"chunk_index": c.chunk_index, "error": c.error} for c in chunks if c.status == "failed" and c.error]

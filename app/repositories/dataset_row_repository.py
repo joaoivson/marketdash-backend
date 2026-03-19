@@ -112,6 +112,21 @@ class DatasetRowRepository:
         
         return query.all()
 
+    def get_existing_order_item_keys(
+        self, user_id: int, platform: Optional[str] = None
+    ) -> set:
+        """Retorna conjunto de (order_id, item_id) já salvos para o usuário.
+        Usado para evitar duplicatas entre CSV e API sync."""
+        query = self.db.query(DatasetRow.order_id, DatasetRow.product_id).filter(
+            DatasetRow.user_id == user_id,
+            DatasetRow.order_id.isnot(None),
+            DatasetRow.product_id.isnot(None),
+        )
+        if platform:
+            query = query.filter(DatasetRow.platform == platform)
+        rows = query.all()
+        return {(r[0], r[1]) for r in rows}
+
     def get_existing_hashes(self, user_id: int, min_date: Optional[date] = None) -> set:
         """Retorna um conjunto de hashes existentes para um usuário (sem limite de data)."""
         query = self.db.query(DatasetRow.row_hash).filter(

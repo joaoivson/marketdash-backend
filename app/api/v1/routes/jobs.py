@@ -91,12 +91,12 @@ async def upload_job_file(
     if not is_storage_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Object Storage not configured. Use presigned flow or configure S3_*.",
+            detail="Armazenamento de arquivos não configurado. Entre em contato com o suporte.",
         )
     if not file.filename or not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A CSV file is required.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Envie um arquivo no formato CSV.")
     if type not in ("transaction", "click"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="type must be 'transaction' or 'click'.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de arquivo inválido. Use 'transaction' para comissões ou 'click' para cliques.")
 
     from io import BytesIO
     from uuid import uuid4
@@ -110,7 +110,7 @@ async def upload_job_file(
         buf.write(chunk)
     buf.seek(0)
     if not upload_file_obj(bucket, storage_key, buf, content_type="text/csv"):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to upload file to storage.")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Não foi possível armazenar o arquivo. Tente novamente em instantes.")
 
     dataset = Dataset(
         user_id=current_user.id,
@@ -275,7 +275,7 @@ def get_multipart_part_url(
     job_repo = JobRepository(db)
     job = job_repo.get_by_id(job_id, user_id=current_user.id)
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processamento não encontrado.")
 
     url = create_presigned_upload_part(
         settings.S3_BUCKET,
@@ -314,7 +314,7 @@ def complete_multipart_upload_endpoint(
     job_repo = JobRepository(db)
     job = job_repo.get_by_id(job_id, user_id=current_user.id)
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processamento não encontrado.")
 
     if not complete_multipart_upload(settings.S3_BUCKET, job.storage_key, upload_id, body.parts):
         raise HTTPException(
@@ -347,7 +347,7 @@ def abort_multipart_upload_endpoint(
     job_repo = JobRepository(db)
     job = job_repo.get_by_id(job_id, user_id=current_user.id)
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processamento não encontrado.")
 
     abort_multipart_upload(settings.S3_BUCKET, job.storage_key, upload_id)
 
@@ -368,7 +368,7 @@ def retry_job(
     job_repo = JobRepository(db)
     job = job_repo.get_by_id(job_id, user_id=current_user.id)
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Processamento não encontrado.")
 
     if job.status not in ("pending", "error", "cancelled", "queued"):
         raise HTTPException(

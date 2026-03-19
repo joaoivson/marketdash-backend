@@ -76,10 +76,11 @@ class SubscriptionService:
             normalized_due_date = normalized_due_date.replace(tzinfo=timezone.utc)
 
         now_utc = datetime.now(timezone.utc)
-        is_active_value = is_active # Usar o valor passado como base
+        is_active_value = is_active  # Webhook é a fonte de verdade
         
-        # Se temos data de expiração, ela tem a palavra final sobre o status
-        if normalized_due_date is not None:
+        # Se NÃO foi pedida ativação explícita, a due_date decide o status
+        # Quando is_active=True (ex: webhook de renovação), respeitar a decisão do caller
+        if not is_active and normalized_due_date is not None:
             is_active_value = normalized_due_date >= now_utc
 
         subscription = self.repo.upsert(
