@@ -166,6 +166,7 @@ class ShopeeIntegrationService:
 
         total_processed = 0
         scroll_id: Optional[str] = None
+        all_synced_order_ids: set[str] = set()
 
         while True:
             scroll_param = f', scrollId: "{scroll_id}"' if scroll_id else ""
@@ -235,6 +236,8 @@ class ShopeeIntegrationService:
                     # Revenue: actualAmount = "Valor de Compra(R$)" no CSV
                     # (0 para cancelados, com descontos aplicados)
                     revenue = ni["actual_f"]
+                    if ni["order_status"].upper() in ["CANCELLED", "INVALID", "REJECTED"]:
+                        revenue = 0.0
 
                     # Commission: distribui estimatedTotalCommission proporcionalmente
                     # ao itemCommission de cada item dentro do nó
@@ -266,6 +269,10 @@ class ShopeeIntegrationService:
             if rows:
                 row_repo.bulk_create(rows)
                 total_processed += len(rows)
+                # Acumula order_ids inseridos para dedup posterior
+                all_synced_order_ids.update(
+                    r.order_id for r in rows if r.order_id
+                )
 
             if not page_info.get("hasNextPage"):
                 break
@@ -273,6 +280,26 @@ class ShopeeIntegrationService:
             scroll_id = page_info.get("scrollId")
             if not scroll_id:
                 break
+
+        # ── Dedup: remover rows de outros datasets (ex: CSV importado) ──
+        # que possuam os mesmos order_ids já trazidos pela API Shopee.
+        # Isso evita contagem dupla no dashboard quando o usuário importou
+        # um CSV com dados Shopee e depois ativou a integração via API.
+        if all_synced_order_ids:
+            stale = (
+                db.query(DatasetRow)
+                .filter(
+                    DatasetRow.user_id == user_id,
+                    DatasetRow.dataset_id != dataset.id,
+                    DatasetRow.order_id.in_(list(all_synced_order_ids)),
+                )
+                .delete(synchronize_session="fetch")
+            )
+            if stale:
+                logger.info(
+                    "Shopee dedup: removidos %d rows duplicados de outros datasets user_id=%s",
+                    stale, user_id,
+                )
 
         logger.info(
             "Shopee sync user_id=%s: %d rows processados",
