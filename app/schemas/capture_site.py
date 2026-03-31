@@ -22,6 +22,7 @@ class CaptureSiteBase(BaseModel):
     urgency_animation: Optional[str] = "none"
     text_primary_color: Optional[str] = Field(None, description="Hex color for main text content")
     urgency_text_color: Optional[str] = Field(None, description="Hex color for urgency banner text")
+    facebook_pixel_id: Optional[str] = Field(None, description="Facebook Pixel ID for conversion tracking")
     is_active: Optional[bool] = Field(True, description="Whether the page is active")
 
 class CaptureSiteCreate(CaptureSiteBase):
