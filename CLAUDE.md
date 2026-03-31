@@ -87,3 +87,29 @@ KPIs are calculated from `DatasetRow.raw_data` JSONB (original CSV fields):
 3. Service method in `services/`
 4. Route in `api/v1/routes/`
 5. Register import in `api/v1/routes/__init__.py`
+
+## Testes
+
+```bash
+pytest tests/ -v                         # Todos os testes
+pytest tests/unit/ -v                    # Apenas unitários
+pytest tests/ -k "test_name" -v         # Por nome
+pytest tests/ --tb=short                 # Traceback curto
+pytest tests/ -x                         # Para no primeiro erro
+```
+
+Padrões:
+- Testes em `tests/unit/` e `tests/integration/`
+- Fixtures de DB em `conftest.py`
+- Mock de Supabase Auth nos testes unitários — testes de integração usam DB real
+- Nomear: `test_{ação}_{cenário}_{resultado_esperado}`
+
+## Troubleshooting
+
+| Problema | Causa provável | Solução |
+|----------|---------------|---------|
+| `ModuleNotFoundError` | Dependência faltando | `pip install -r requirements.txt` |
+| `Connection refused` DB | PostgreSQL não rodando | `docker-compose up db` |
+| Celery task stuck | Redis não rodando | `docker-compose up redis` |
+| RLS blocking query | `app.current_user_id` não setado | Verificar `get_current_user()` dependency |
+| Migration error | SQL inválido ou conflito | Verificar `migrations/` e aplicar manualmente |

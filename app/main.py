@@ -1,14 +1,15 @@
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, Depends
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.errors import register_exception_handlers
 from app.api.v1.routes import router as api_v1_router
 from app.db.base import init_db
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, get_db
 from datetime import datetime, timezone
 import logging
 
@@ -73,6 +74,45 @@ def root():
         "docs": "/docs",
         "environment": settings.ENVIRONMENT
     }
+
+
+@app.get("/c/{slug}/og", response_class=HTMLResponse, include_in_schema=False)
+def capture_site_og(slug: str, db: Session = Depends(get_db)):
+    """Serve HTML with OG meta tags for social media crawlers."""
+    from html import escape
+    from app.models.capture_site import CaptureSite
+    site = db.query(CaptureSite).filter(
+        CaptureSite.slug == slug,
+        CaptureSite.is_active == True
+    ).first()
+
+    if not site:
+        return HTMLResponse(status_code=404, content="<html><body>Not found</body></html>")
+
+    title = escape(site.title or "", quote=True)
+    description = escape(site.subtitle or "", quote=True)
+    image = escape(site.image_url or "", quote=True)
+    site_url = f"https://marketdash.com.br/c/{escape(slug, quote=True)}"
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:image" content="{image}">
+<meta property="og:url" content="{site_url}">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{description}">
+<meta name="twitter:image" content="{image}">
+<meta http-equiv="refresh" content="0;url={site_url}">
+<title>{title}</title>
+</head>
+<body></body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 @app.get("/health")
