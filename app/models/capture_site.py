@@ -27,6 +27,7 @@ class CaptureSite(Base):
     is_gradient = Column(Boolean, default=False)   # Whether to apply gradient background
     theme_color = Column(String, nullable=True)    # HEX color for decorative elements (glow)
     text_primary_color = Column(String, nullable=True) # HEX color for main text
+    facebook_pixel_id = Column(String, nullable=True)  # Facebook Pixel ID for conversion tracking
     slug = Column(String, unique=True, index=True, nullable=False)
     is_active = Column(Boolean, default=True)
     

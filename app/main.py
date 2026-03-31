@@ -115,6 +115,39 @@ def capture_site_og(slug: str, db: Session = Depends(get_db)):
     return HTMLResponse(content=html)
 
 
+@app.get("/l/{slug}/og", response_class=HTMLResponse, include_in_schema=False)
+def custom_link_og(slug: str, db: Session = Depends(get_db)):
+    """Serve HTML with OG meta tags for social media crawlers on custom links."""
+    from html import escape
+    from app.models.custom_link import CustomLink
+    link = db.query(CustomLink).filter(
+        CustomLink.slug == slug,
+        CustomLink.is_active == True
+    ).first()
+
+    if not link:
+        return HTMLResponse(status_code=404, content="<html><body>Not found</body></html>")
+
+    title = escape(link.name or "", quote=True)
+    link_url = f"https://marketdash.com.br/l/{escape(slug, quote=True)}"
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta property="og:title" content="{title}">
+<meta property="og:url" content="{link_url}">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{title}">
+<meta http-equiv="refresh" content="0;url={link_url}">
+<title>{title}</title>
+</head>
+<body></body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
 @app.get("/health")
 def health_check():
     """
