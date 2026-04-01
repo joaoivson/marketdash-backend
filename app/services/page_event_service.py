@@ -49,3 +49,26 @@ class PageEventService:
 
         logger.info(f"Event tracked: {event_data.event_type} for site {event_data.slug}")
         return event
+
+    def get_user_site_stats(self, user_id: int) -> list["SiteEventStats"]:
+        from app.schemas.page_event import SiteEventStats
+
+        site_ids = [
+            row[0]
+            for row in self.db.query(CaptureSite.id)
+            .filter(CaptureSite.user_id == user_id)
+            .all()
+        ]
+
+        raw = self.repo.get_stats_by_site_ids(site_ids)
+
+        stats_map: dict[int, SiteEventStats] = {}
+        for site_id, event_type, count in raw:
+            if site_id not in stats_map:
+                stats_map[site_id] = SiteEventStats(site_id=site_id)
+            if event_type == "page_view":
+                stats_map[site_id].page_views = count
+            elif event_type == "click_group":
+                stats_map[site_id].click_groups = count
+
+        return list(stats_map.values())
