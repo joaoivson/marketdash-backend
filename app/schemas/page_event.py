@@ -26,3 +26,13 @@ class PageEventResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SiteEventStats(BaseModel):
+    site_id: int
+    page_views: int = 0
+    click_groups: int = 0
+
+
+class SiteEventStatsResponse(BaseModel):
+    stats: list[SiteEventStats]

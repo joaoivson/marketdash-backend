@@ -15,6 +15,7 @@ from app.repositories.user_repository import UserRepository
 from app.services.subscription_service import SubscriptionService
 from app.services.auth_service import AuthService
 from app.services.cakto_service import create_checkout_url
+from app.services.webhook_helpers import find_or_create_user, send_subscription_email, calculate_expires_at
 from app.schemas.subscription import PlansResponse, PlanInfo
 
 logger = logging.getLogger(__name__)
@@ -346,45 +347,15 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro na extração de dados")
 
-        # Buscar ou criar usuário
-        user_repo = UserRepository(db)
-        user = user_repo.get_by_email(email)
-        
-        if not user:
-            # Tentar buscar por CPF/CNPJ se disponível
-            doc_id = customer_data.get("cpf_cnpj")
-            if doc_id:
-                user = user_repo.get_by_cpf(doc_id)
-                if user:
-                    logger.info(f"Usuário ID {user.id} encontrado por documento. Atualizando email para {email}")
-                    user.email = email
-                    db.commit()
-                    db.refresh(user)
-        
-        user_created = False
-        user_has_password = False
-        
-        if not user:
-            # Criar novo usuário
-            logger.info(f"Criando novo usuário do Cakto: {email}")
-            auth_service = AuthService(user_repo)
-            try:
-                user = auth_service.register_from_cakto(
-                    email=customer_data["email"],
-                    name=customer_data["name"],
-                    cpf_cnpj=customer_data["cpf_cnpj"]
-                )
-                user_created = True
-                user_has_password = False
+        # Buscar ou criar usuário (usando helper compartilhado)
+        try:
+            user, user_created, user_has_password = find_or_create_user(email, customer_data, db)
+            if user_created:
                 logger.info(f"Usuário {email} criado com ID {user.id}")
-            except Exception as reg_err:
-                logger.error(f"Erro ao registrar usuário via webhook: {str(reg_err)}")
-                logger.error(traceback.format_exc())
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erro ao criar usuário")
-        else:
-            # Usuário existente: verificar se já tem senha
-            user_has_password = not bool(user.password_set_token)
-            logger.info(f"Usuário {user.id} já existe. Tem senha: {user_has_password}")
+        except Exception as reg_err:
+            logger.error(f"Erro ao registrar usuário via webhook: {str(reg_err)}")
+            logger.error(traceback.format_exc())
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erro ao criar usuário")
 
         # Atualizar assinatura
         subscription_service = SubscriptionService(SubscriptionRepository(db))
@@ -395,28 +366,8 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
         paid_at = transaction_data.get("paid_at")
 
         if action == "activate":
-            now_utc = datetime.now(timezone.utc)
+            expires_at = calculate_expires_at(expires_at, recurrence_period, paid_at)
 
-            if expires_at:
-                # Garantir timezone
-                if expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone.utc)
-
-                # Se a due_date está no passado, avançar pela recurrence_period
-                if expires_at < now_utc:
-                    period_days = int(recurrence_period) if recurrence_period else 30
-                    while expires_at < now_utc:
-                        expires_at = expires_at + timedelta(days=period_days)
-                    logger.info(f"due_date estava no passado. Nova expires_at calculada: {expires_at.isoformat()}")
-            else:
-                # Sem due_date: usar paid_at + 30 dias ou now + 30
-                base = paid_at if paid_at else now_utc
-                if base.tzinfo is None:
-                    base = base.replace(tzinfo=timezone.utc)
-                period_days = int(recurrence_period) if recurrence_period else 30
-                expires_at = base + timedelta(days=period_days)
-                logger.info(f"Sem due_date. expires_at calculada a partir de base: {expires_at.isoformat()}")
-            
         try:
             logger.info(f"Atualizando assinatura para usuário {user.id} (ação: {action})")
             subscription = subscription_service.set_active(
@@ -432,6 +383,16 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
                 cakto_subscription_status=transaction_data.get("subscription_status"),
                 cakto_payment_status=transaction_data.get("payment_status"),
                 cakto_payment_method=transaction_data.get("payment_method"),
+                # Dual-write: provider_* fields
+                provider="cakto",
+                provider_customer_id=customer_data.get("customer_id"),
+                provider_transaction_id=transaction_data.get("transaction_id"),
+                provider_status=transaction_data.get("subscription_status") or transaction_data.get("status"),
+                provider_offer_name=transaction_data.get("offer_name"),
+                provider_due_date=transaction_data.get("due_date"),
+                provider_subscription_status=transaction_data.get("subscription_status"),
+                provider_payment_status=transaction_data.get("payment_status"),
+                provider_payment_method=transaction_data.get("payment_method"),
             )
             
             # Commit final do status da assinatura
@@ -440,32 +401,15 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(subscription)
                 
-                # --- Lógica de E-mail (Totalmente Isolada) ---
-                try:
-                    from app.services.email_service import EmailService
-                    email_service = EmailService()
-                    user_name = customer_data.get("name") or user.name or "Usuário"
-                    
-                    if user_created:
-                        logger.info(f"Usuário novo: Email de boas-vindas já deve ter sido enviado via register_from_cakto")
-                    else:
-                        if user_has_password:
-                            logger.info(f"Enviando e-mail de reativação para {email}")
-                            email_service.send_welcome_back_email(user_email=email, user_name=user_name)
-                        else:
-                            logger.info(f"Usuário sem senha: Enviando link de definição para {email}")
-                            token = user.password_set_token
-                            if not token:
-                                import secrets
-                                import string
-                                token = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-                                user.password_set_token = token
-                                user.password_set_token_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
-                                db.commit()
-                            email_service.send_set_password_email(user_email=email, user_name=user_name, token=token)
-                except Exception as email_err:
-                    logger.error(f"FALHA NO ENVIO DE E-MAIL: {str(email_err)}")
-                    # Não relançamos o erro de e-mail para não falhar o webhook
+                # Enviar email via helper compartilhado
+                send_subscription_email(
+                    user=user,
+                    email=email,
+                    user_created=user_created,
+                    user_has_password=user_has_password,
+                    customer_name=customer_data.get("name"),
+                    db=db,
+                )
 
             logger.info(f"Webhook processado com sucesso para {email}")
             return {

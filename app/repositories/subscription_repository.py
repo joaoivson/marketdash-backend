@@ -13,9 +13,9 @@ class SubscriptionRepository:
         return self.db.query(Subscription).filter(Subscription.user_id == user_id).first()
 
     def upsert(
-        self, 
-        user_id: int, 
-        plan: str, 
+        self,
+        user_id: int,
+        plan: str,
         is_active: bool,
         cakto_customer_id: str = None,
         cakto_transaction_id: str = None,
@@ -26,13 +26,24 @@ class SubscriptionRepository:
         cakto_subscription_status: str = None,
         cakto_payment_status: str = None,
         cakto_payment_method: str = None,
+        # Generic provider fields
+        provider: str = None,
+        provider_customer_id: str = None,
+        provider_transaction_id: str = None,
+        provider_status: str = None,
+        provider_offer_name: str = None,
+        provider_due_date = None,
+        provider_subscription_status: str = None,
+        provider_payment_status: str = None,
+        provider_payment_method: str = None,
+        provider_order_id: str = None,
     ) -> Subscription:
         try:
             subscription = self.get_by_user_id(user_id)
             if not subscription:
                 subscription = Subscription(
-                    user_id=user_id, 
-                    plan=plan, 
+                    user_id=user_id,
+                    plan=plan,
                     is_active=is_active,
                     cakto_customer_id=cakto_customer_id,
                     cakto_transaction_id=cakto_transaction_id,
@@ -43,6 +54,16 @@ class SubscriptionRepository:
                     cakto_subscription_status=cakto_subscription_status,
                     cakto_payment_status=cakto_payment_status,
                     cakto_payment_method=cakto_payment_method,
+                    provider=provider,
+                    provider_customer_id=provider_customer_id,
+                    provider_transaction_id=provider_transaction_id,
+                    provider_status=provider_status,
+                    provider_offer_name=provider_offer_name,
+                    provider_due_date=provider_due_date,
+                    provider_subscription_status=provider_subscription_status,
+                    provider_payment_status=provider_payment_status,
+                    provider_payment_method=provider_payment_method,
+                    provider_order_id=provider_order_id,
                 )
                 self.db.add(subscription)
             else:
@@ -60,12 +81,31 @@ class SubscriptionRepository:
                     subscription.cakto_offer_name = cakto_offer_name
                 if cakto_due_date is not None:
                     subscription.cakto_due_date = cakto_due_date
-                
-                # Campos da Cakto
+
+                # Campos da Cakto (sempre sobrescreve)
                 subscription.cakto_subscription_status = cakto_subscription_status
                 subscription.cakto_payment_status = cakto_payment_status
                 subscription.cakto_payment_method = cakto_payment_method
-                    
+
+                # Generic provider fields
+                if provider is not None:
+                    subscription.provider = provider
+                if provider_customer_id is not None:
+                    subscription.provider_customer_id = provider_customer_id
+                if provider_transaction_id is not None:
+                    subscription.provider_transaction_id = provider_transaction_id
+                if provider_status is not None:
+                    subscription.provider_status = provider_status
+                if provider_offer_name is not None:
+                    subscription.provider_offer_name = provider_offer_name
+                if provider_due_date is not None:
+                    subscription.provider_due_date = provider_due_date
+                subscription.provider_subscription_status = provider_subscription_status
+                subscription.provider_payment_status = provider_payment_status
+                subscription.provider_payment_method = provider_payment_method
+                if provider_order_id is not None:
+                    subscription.provider_order_id = provider_order_id
+
             self.db.commit()
             self.db.refresh(subscription)
             return subscription

@@ -6,7 +6,7 @@ from app.core.config import settings
 from app.core.security import verify_password, get_password_hash, create_access_token
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
-from app.services.cakto_service import check_active_subscription, CaktoError
+from app.services.payment_provider_service import check_active_subscription, PaymentProviderError
 from app.services.email_service import EmailService
 
 
@@ -81,7 +81,8 @@ class AuthService:
 
         # 3. Validar assinatura (Cakto) — somente em produção
         env = settings.ENVIRONMENT.lower()
-        if settings.CAKTO_ENFORCE_SUBSCRIPTION and env not in ("development", "homologation", "local", "test"):
+        enforce = getattr(settings, "ENFORCE_SUBSCRIPTION", False) or settings.CAKTO_ENFORCE_SUBSCRIPTION
+        if enforce and env not in ("development", "homologation", "local", "test"):
             try:
                 has_access, reason = check_active_subscription(user.email)
                 if not has_access:
@@ -89,9 +90,9 @@ class AuthService:
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=reason or "Assinatura ativa não encontrada",
                     )
-            except CaktoError as e:
+            except PaymentProviderError as e:
                 if settings.ENVIRONMENT not in ("production"):
-                    logger.warning(f"Cakto validation failed for {user.email} in {settings.ENVIRONMENT}: {str(e)}")
+                    logger.warning(f"Subscription validation failed for {user.email} in {settings.ENVIRONMENT}: {str(e)}")
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -132,8 +133,8 @@ class AuthService:
                 detail="Erro na migração de conta. Por favor, use 'Esqueci minha senha'.",
             )
 
-    def register_from_cakto(self, email: str, name: str = None, cpf_cnpj: str = None) -> User:
-        """Cria usuário a partir dos dados do webhook do Cakto. Gera token para definir senha e envia email."""
+    def register_from_webhook(self, email: str, name: str = None, cpf_cnpj: str = None) -> User:
+        """Cria usuário a partir dos dados do webhook (Cakto/Kiwify). Gera token para definir senha e envia email."""
         existing = self.user_repo.get_by_email(email)
         if existing:
             return existing  # Usuário já existe, retornar existente
@@ -180,7 +181,10 @@ class AuthService:
             logger.error(f"Erro ao enviar email de definir senha para {email}: {e}")
         
         return user
-    
+
+    # Alias para backward compatibility
+    register_from_cakto = register_from_webhook
+
     def set_password(self, token: str, password: str) -> User:
         """Define senha do usuário usando token recebido por email."""
         import logging

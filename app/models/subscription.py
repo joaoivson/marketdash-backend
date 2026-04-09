@@ -21,6 +21,19 @@ class Subscription(Base):
     cakto_subscription_status = Column(String(64), nullable=True)
     cakto_payment_status = Column(String(64), nullable=True)
     cakto_payment_method = Column(String(64), nullable=True)
+
+    # Generic provider columns (Cakto/Kiwify)
+    provider = Column(String(32), default="cakto")
+    provider_customer_id = Column(String(255), nullable=True)
+    provider_transaction_id = Column(String(255), nullable=True)
+    provider_status = Column(String(64), nullable=True)
+    provider_offer_name = Column(String(255), nullable=True)
+    provider_due_date = Column(DateTime(timezone=True), nullable=True)
+    provider_subscription_status = Column(String(64), nullable=True)
+    provider_payment_status = Column(String(64), nullable=True)
+    provider_payment_method = Column(String(64), nullable=True)
+    provider_order_id = Column(String(255), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

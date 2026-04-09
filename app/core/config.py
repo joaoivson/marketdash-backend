@@ -80,6 +80,37 @@ class Settings(BaseSettings):
                 self.REDIS_URL = self.REDIS_URL.replace("redis://", f"redis://:{encoded_pwd}@", 1)
         return self
 
+    # Subscription enforcement (generic, replaces CAKTO_ENFORCE_SUBSCRIPTION)
+    ENFORCE_SUBSCRIPTION: bool = False
+
+    # Kiwify Integration
+    KIWIFY_API_BASE: str = "https://public-api.kiwify.com/v1"
+    KIWIFY_ACCOUNT_ID: Optional[str] = None
+    KIWIFY_CLIENT_SECRET: Optional[str] = None
+    KIWIFY_WEBHOOK_SECRET: Optional[str] = None
+    KIWIFY_SUBSCRIPTION_PRODUCT_IDS: Optional[str] = None
+
+    KIWIFY_PLANS: Dict[str, Dict[str, str]] = {
+        "mensal": {
+            "id": "mensal_kiwify",
+            "name": "MarketDash Mensal",
+            "checkout_url": "https://pay.kiwify.com.br/u12boOS",
+            "period": "mensal",
+        },
+        "trimestral": {
+            "id": "trimestral_kiwify",
+            "name": "MarketDash Trimestral",
+            "checkout_url": "https://pay.kiwify.com.br/9B9lXa6",
+            "period": "trimestral",
+        },
+        "anual": {
+            "id": "anual_kiwify",
+            "name": "MarketDash Anual",
+            "checkout_url": "https://pay.kiwify.com.br/4lhuudg",
+            "period": "anual",
+        },
+    }
+
     # Cakto Integration
     CAKTO_API_BASE: str = "https://api.cakto.com.br"
     CAKTO_CLIENT_ID: Optional[str] = None
