@@ -142,8 +142,9 @@ def require_active_subscription(
     Se passou mais de 30 dias desde a última validação, valida com Cakto.
     Retorna 403 se assinatura não estiver ativa.
     """
-    if not settings.CAKTO_ENFORCE_SUBSCRIPTION:
-        # Se não está habilitado, permite acesso
+    # ENFORCE_SUBSCRIPTION é o flag genérico; CAKTO_ENFORCE_SUBSCRIPTION como fallback
+    enforce = getattr(settings, "ENFORCE_SUBSCRIPTION", False) or settings.CAKTO_ENFORCE_SUBSCRIPTION
+    if not enforce:
         return current_user
 
     # Bypass em ambientes de desenvolvimento/homologação
@@ -151,18 +152,18 @@ def require_active_subscription(
     if env in ("development", "homologation", "local", "test"):
         logger.debug(f"Subscription check bypassed in {env} environment for user {current_user.id}")
         return current_user
-    
+
     subscription_service = SubscriptionService(SubscriptionRepository(db))
-    
+
     # Verificar se precisa validar (passou mais de 30 dias)
     needs_validation = subscription_service.needs_validation(current_user.id)
-    
+
     if needs_validation:
-        # Validar com Cakto
+        # Validar com provider ativo (Cakto ou Kiwify via adapter)
         logger.info(f"Validando assinatura do usuário {current_user.id} (passou mais de 30 dias)")
         is_active = subscription_service.check_and_update_subscription(
-            current_user.id, 
-            current_user.email
+            current_user.id,
+            current_user.email,
         )
         
         if not is_active:

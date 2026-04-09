@@ -25,6 +25,7 @@ services:
     volumes:
       - .:/app
       - upload_temp_data:/app/uploads
+      - ../feature-flags.json:/app/feature-flags.json:ro
     ports:
       - "8000:8000"
     environment:
@@ -62,6 +63,7 @@ services:
     volumes:
       - .:/app
       - upload_temp_data:/app/uploads
+      - ../feature-flags.json:/app/feature-flags.json:ro
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
@@ -86,6 +88,7 @@ services:
     command: celery -A app.tasks.celery_app beat --loglevel=info
     volumes:
       - .:/app
+      - ../feature-flags.json:/app/feature-flags.json:ro
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
