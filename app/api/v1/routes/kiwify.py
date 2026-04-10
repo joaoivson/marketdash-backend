@@ -2,6 +2,21 @@
 Webhook e rotas da Kiwify.
 
 Recebe eventos de assinatura da Kiwify e processa ativações/desativações.
+
+Payload real da Kiwify:
+{
+  "url": "...",
+  "signature": "...",
+  "order": {
+    "order_id": "...",
+    "order_status": "paid|refunded|...",
+    "webhook_event_type": "order_approved|order_refunded|subscription_canceled|...",
+    "Product": { "product_id": "...", "product_name": "..." },
+    "Customer": { "full_name": "...", "email": "...", "mobile": "...", "CPF": "..." },
+    "Subscription": { "start_date": "...", "next_payment": "...", "status": "active|canceled", ... },
+    ...
+  }
+}
 """
 
 from typing import Any, Dict, Optional, Set
@@ -27,89 +42,135 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["kiwify"])
 
-# Eventos Kiwify mapeados
+# Eventos Kiwify (webhook_event_type reais)
 ACTIVATE_EVENTS: Set[str] = {
-    "compra_aprovada",
+    "order_approved",
     "subscription_renewed",
 }
 
 DEACTIVATE_EVENTS: Set[str] = {
     "subscription_canceled",
     "subscription_late",
-    "compra_reembolsada",
+    "order_refunded",
+    "order_chargedback",
     "chargeback",
 }
 
 LOG_ONLY_EVENTS: Set[str] = {
+    "order_refused",
+    "boleto_created",
+    "pix_created",
+    "cart_abandoned",
+    # Nomes em português também (triggers do painel Kiwify)
     "compra_recusada",
     "boleto_gerado",
     "pix_gerado",
     "carrinho_abandonado",
+    "compra_aprovada",
+    "compra_reembolsada",
 }
 
 
-def _extract_event(payload: Dict[str, Any]) -> str:
-    """Extrai o tipo de evento do payload Kiwify."""
-    # Kiwify envia o trigger name como campo de nível raiz
-    for key in ("webhook_event_type", "event", "type", "event_type"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower()
+def _extract_order(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Extrai o objeto order do payload. Kiwify aninha tudo em payload.order."""
+    order = payload.get("order")
+    if isinstance(order, dict):
+        return order
+    # Fallback: payload pode ser o próprio order (sem wrapper)
+    return payload
+
+
+def _extract_event(order: Dict[str, Any]) -> str:
+    """Extrai o tipo de evento do order."""
+    # Campo principal
+    event_type = order.get("webhook_event_type")
+    if isinstance(event_type, str) and event_type.strip():
+        return event_type.strip().lower()
     # Fallback: inferir do order_status
-    order_status = (payload.get("order_status") or "").lower()
+    order_status = (order.get("order_status") or "").lower()
     if order_status in ("approved", "paid"):
-        return "compra_aprovada"
+        return "order_approved"
     if order_status in ("refunded",):
-        return "compra_reembolsada"
+        return "order_refunded"
     if order_status in ("chargedback",):
-        return "chargeback"
+        return "order_chargedback"
     return ""
 
 
-def _extract_email(payload: Dict[str, Any]) -> Optional[str]:
-    """Extrai email do Customer no payload Kiwify."""
-    customer = payload.get("Customer") or payload.get("customer") or {}
+def _map_event_to_action(event: str, order: Dict[str, Any]) -> Optional[str]:
+    """Mapeia evento para ação (activate/deactivate/None)."""
+    if event in ACTIVATE_EVENTS:
+        return "activate"
+    if event in DEACTIVATE_EVENTS:
+        return "deactivate"
+    if event in LOG_ONLY_EVENTS:
+        return None
+
+    # Fallback: verificar Subscription.status
+    subscription = order.get("Subscription") or order.get("subscription") or {}
+    if isinstance(subscription, dict):
+        sub_status = (subscription.get("status") or "").lower()
+        if sub_status == "active":
+            return "activate"
+        if sub_status in ("canceled", "cancelled", "expired"):
+            return "deactivate"
+
+    # Fallback: nomes em português dos triggers
+    if event in ("compra_aprovada",):
+        return "activate"
+    if event in ("compra_reembolsada",):
+        return "deactivate"
+
+    return None
+
+
+def _extract_email(order: Dict[str, Any]) -> Optional[str]:
+    """Extrai email do Customer."""
+    customer = order.get("Customer") or order.get("customer") or {}
     if isinstance(customer, dict):
         email = customer.get("email")
         if isinstance(email, str) and email.strip():
             return email.strip().lower()
-    # Fallback: campo de nível raiz
-    email = payload.get("email") or payload.get("customer_email")
-    if isinstance(email, str) and email.strip():
-        return email.strip().lower()
     return None
 
 
-def _extract_customer_data(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Extrai dados do cliente do payload Kiwify."""
-    customer = payload.get("Customer") or payload.get("customer") or {}
+def _extract_customer_data(order: Dict[str, Any]) -> Dict[str, Any]:
+    """Extrai dados do cliente do order Kiwify."""
+    customer = order.get("Customer") or order.get("customer") or {}
     if not isinstance(customer, dict):
         customer = {}
+
+    # CPF pode vir como "CPF" (maiúsculo) ou "cpf"
+    cpf = customer.get("CPF") or customer.get("cpf") or customer.get("cpf_cnpj")
+    cnpj = customer.get("cnpj")
+    doc = cpf or cnpj
+
     return {
-        "email": customer.get("email") or payload.get("email"),
-        "name": customer.get("full_name") or customer.get("name"),
-        "cpf_cnpj": customer.get("cpf") or customer.get("cnpj") or customer.get("cpf_cnpj"),
+        "email": customer.get("email"),
+        "name": customer.get("full_name") or customer.get("first_name") or customer.get("name"),
+        "cpf_cnpj": doc,
         "customer_id": customer.get("id"),
         "phone": customer.get("mobile") or customer.get("phone"),
     }
 
 
-def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Extrai dados da transação do payload Kiwify."""
-    subscription = payload.get("Subscription") or payload.get("subscription") or {}
-    product = payload.get("Product") or payload.get("product") or {}
-    commissions = payload.get("Commissions") or payload.get("commissions") or {}
+def _extract_transaction_data(order: Dict[str, Any]) -> Dict[str, Any]:
+    """Extrai dados da transação do order Kiwify."""
+    subscription = order.get("Subscription") or order.get("subscription") or {}
+    product = order.get("Product") or order.get("product") or {}
+    commissions = order.get("Commissions") or order.get("commissions") or {}
 
     if not isinstance(subscription, dict):
         subscription = {}
     if not isinstance(product, dict):
         product = {}
+    if not isinstance(commissions, dict):
+        commissions = {}
 
-    # Kiwify: next_payment como due_date
+    # Dates
     next_payment = subscription.get("next_payment")
     start_date = subscription.get("start_date")
 
-    # Parse dates
     due_date = None
     if next_payment:
         try:
@@ -124,20 +185,29 @@ def _extract_transaction_data(payload: Dict[str, Any]) -> Dict[str, Any]:
         except (ValueError, TypeError):
             pass
 
+    # Subscription status
+    sub_status = subscription.get("status")
+
+    # Plan info
+    plan = subscription.get("plan") or {}
+    plan_name = plan.get("name") if isinstance(plan, dict) else None
+    plan_frequency = plan.get("frequency") if isinstance(plan, dict) else None
+
     return {
-        "transaction_id": payload.get("order_id"),
-        "order_ref": payload.get("order_ref"),
-        "amount": commissions.get("my_commission") if isinstance(commissions, dict) else None,
-        "status": payload.get("order_status"),
-        "subscription_status": None,
-        "payment_status": payload.get("order_status"),
-        "payment_method": payload.get("payment_method"),
+        "transaction_id": order.get("order_id"),
+        "order_ref": order.get("order_ref"),
+        "subscription_id": order.get("subscription_id"),
+        "amount": commissions.get("my_commission"),
+        "status": order.get("order_status"),
+        "subscription_status": sub_status,
+        "payment_status": order.get("order_status"),
+        "payment_method": order.get("payment_method"),
         "due_date": due_date,
-        "due_date_present": due_date is not None,
-        "recurrence_period": None,  # Kiwify não envia explicitamente
+        "recurrence_period": None,  # Kiwify não envia; inferir do plan.frequency
         "paid_at": paid_at,
-        "offer_name": product.get("product_name") or product.get("name"),
+        "offer_name": plan_name or product.get("product_name") or product.get("name"),
         "product_id": product.get("product_id") or product.get("id"),
+        "plan_frequency": plan_frequency,
     }
 
 
@@ -151,20 +221,10 @@ def _get_allowed_products() -> Set[str]:
 def _product_allowed(product_id: Optional[str]) -> bool:
     allowed = _get_allowed_products()
     if not allowed:
-        return True
+        return True  # Se não há filtro, aceita todos
     if not product_id:
         return False
     return product_id in allowed
-
-
-def _infer_action(event: str) -> Optional[str]:
-    if event in ACTIVATE_EVENTS:
-        return "activate"
-    if event in DEACTIVATE_EVENTS:
-        return "deactivate"
-    if event in LOG_ONLY_EVENTS:
-        return None
-    return None
 
 
 @router.post("/webhook")
@@ -175,23 +235,44 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
 
         body = await request.body()
         try:
-            payload = await request.json()
+            raw_payload = await request.json()
         except Exception as json_err:
             logger.error(f"Erro ao decodificar JSON do webhook Kiwify: {str(json_err)}")
             logger.error(f"Corpo recebido: {body.decode('utf-8', errors='replace')}")
             return {"status": "error", "reason": "invalid_json"}
 
-        # Validação do token
+        # Validação: Kiwify usa signature no nível raiz ou token configurado no painel
         if settings.KIWIFY_WEBHOOK_SECRET:
-            payload_token = payload.get("token")
-            header_token = request.headers.get("x-kiwify-token") or request.headers.get("x-webhook-token")
-            if payload_token != settings.KIWIFY_WEBHOOK_SECRET and header_token != settings.KIWIFY_WEBHOOK_SECRET:
-                logger.warning("Webhook Kiwify não autorizado: token inválido")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook não autorizado")
+            # Kiwify pode enviar como "signature" no nível raiz ou como header
+            payload_signature = raw_payload.get("signature")
+            payload_token = raw_payload.get("token")
+            header_token = (
+                request.headers.get("x-kiwify-token")
+                or request.headers.get("x-webhook-token")
+                or request.headers.get("x-kiwify-signature")
+            )
+            # Aceitar qualquer match: signature, token no payload, ou header
+            valid = (
+                (payload_signature and payload_signature == settings.KIWIFY_WEBHOOK_SECRET)
+                or (payload_token and payload_token == settings.KIWIFY_WEBHOOK_SECRET)
+                or (header_token and header_token == settings.KIWIFY_WEBHOOK_SECRET)
+            )
+            if not valid:
+                logger.warning(
+                    f"Webhook Kiwify não autorizado. "
+                    f"signature={payload_signature}, token={payload_token}, header={header_token}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Webhook não autorizado",
+                )
 
-        event = _extract_event(payload)
-        email = _extract_email(payload)
-        action = _infer_action(event)
+        # Extrair order (payload real está aninhado em "order")
+        order = _extract_order(raw_payload)
+
+        event = _extract_event(order)
+        email = _extract_email(order)
+        action = _map_event_to_action(event, order)
 
         logger.info(f"Kiwify webhook - Evento: {event}, Email: {email}, Ação: {action}")
 
@@ -199,18 +280,21 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
             logger.warning(f"Email não encontrado no payload Kiwify. Evento: {event}")
             return {"status": "ignored", "reason": "email_not_found"}
 
-        if not action:
+        if action is None:
             logger.info(f"Evento Kiwify '{event}' ignorado (log only ou não mapeado)")
             return {"status": "ignored", "reason": "event_not_mapped", "event": event}
 
         # Extrair dados
         try:
-            customer_data = _extract_customer_data(payload)
-            transaction_data = _extract_transaction_data(payload)
+            customer_data = _extract_customer_data(order)
+            transaction_data = _extract_transaction_data(order)
         except Exception as extract_err:
             logger.error(f"Erro ao extrair dados do payload Kiwify: {str(extract_err)}")
             logger.error(traceback.format_exc())
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro na extração de dados")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Erro na extração de dados",
+            )
 
         # Verificar filtro de produto
         product_id = transaction_data.get("product_id")
@@ -226,7 +310,10 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
         except Exception as reg_err:
             logger.error(f"Erro ao registrar usuário via webhook Kiwify: {str(reg_err)}")
             logger.error(traceback.format_exc())
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erro ao criar usuário")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Erro ao criar usuário",
+            )
 
         # Calcular expiração
         expires_at = transaction_data.get("due_date")
@@ -251,7 +338,7 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
                 provider="kiwify",
                 provider_customer_id=customer_data.get("customer_id"),
                 provider_transaction_id=transaction_data.get("transaction_id"),
-                provider_status=transaction_data.get("status"),
+                provider_status=transaction_data.get("subscription_status") or transaction_data.get("status"),
                 provider_offer_name=transaction_data.get("offer_name"),
                 provider_due_date=transaction_data.get("due_date"),
                 provider_subscription_status=transaction_data.get("subscription_status"),
@@ -292,7 +379,10 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
         except Exception as sub_err:
             logger.error(f"Erro no processamento da assinatura Kiwify: {str(sub_err)}")
             logger.error(traceback.format_exc())
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(sub_err))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=str(sub_err),
+            )
 
     except HTTPException:
         raise
