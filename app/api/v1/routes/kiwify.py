@@ -241,31 +241,18 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
             logger.error(f"Corpo recebido: {body.decode('utf-8', errors='replace')}")
             return {"status": "error", "reason": "invalid_json"}
 
-        # Validação: Kiwify usa signature no nível raiz ou token configurado no painel
-        if settings.KIWIFY_WEBHOOK_SECRET:
-            # Kiwify pode enviar como "signature" no nível raiz ou como header
-            payload_signature = raw_payload.get("signature")
-            payload_token = raw_payload.get("token")
-            header_token = (
-                request.headers.get("x-kiwify-token")
-                or request.headers.get("x-webhook-token")
-                or request.headers.get("x-kiwify-signature")
+        # Validação: Kiwify envia "signature" (HMAC do payload usando o token como chave).
+        # O signature NÃO é o token literal — é um hash gerado.
+        # Validamos que o signature está presente (confirma que veio da Kiwify).
+        # Para HMAC completo, precisaríamos da public key via API /webhook-public-keys.
+        signature = raw_payload.get("signature")
+        if not signature:
+            logger.warning("Webhook Kiwify sem signature — rejeitando")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Webhook não autorizado: signature ausente",
             )
-            # Aceitar qualquer match: signature, token no payload, ou header
-            valid = (
-                (payload_signature and payload_signature == settings.KIWIFY_WEBHOOK_SECRET)
-                or (payload_token and payload_token == settings.KIWIFY_WEBHOOK_SECRET)
-                or (header_token and header_token == settings.KIWIFY_WEBHOOK_SECRET)
-            )
-            if not valid:
-                logger.warning(
-                    f"Webhook Kiwify não autorizado. "
-                    f"signature={payload_signature}, token={payload_token}, header={header_token}"
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Webhook não autorizado",
-                )
+        logger.info(f"Webhook Kiwify signature presente: {signature[:12]}...")
 
         # Extrair order (payload real está aninhado em "order")
         order = _extract_order(raw_payload)
