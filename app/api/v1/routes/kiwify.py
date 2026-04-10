@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import logging
 import traceback
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,6 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.services.subscription_service import SubscriptionService
 from app.services.webhook_helpers import (
     find_or_create_user,
-    send_subscription_email,
     calculate_expires_at,
 )
 
@@ -227,8 +226,42 @@ def _product_allowed(product_id: Optional[str]) -> bool:
     return product_id in allowed
 
 
+def _send_email_background(
+    user_id: int,
+    user_email: str,
+    user_created: bool,
+    user_has_password: bool,
+    customer_name: Optional[str],
+    has_password_set_token: bool,
+    password_set_token: Optional[str],
+):
+    """Envia email em background thread (após responder 200 à Kiwify)."""
+    try:
+        from app.services.email_service import EmailService
+        email_service = EmailService()
+        user_name = customer_name or "Usuário"
+
+        if user_created:
+            logger.info(f"[BG] Usuário novo {user_email}: email de boas-vindas já enviado via register_from_webhook")
+        elif user_has_password:
+            logger.info(f"[BG] Enviando email de reativação para {user_email}")
+            email_service.send_welcome_back_email(user_email=user_email, user_name=user_name)
+        else:
+            logger.info(f"[BG] Enviando link de definição de senha para {user_email}")
+            if password_set_token:
+                email_service.send_set_password_email(
+                    user_email=user_email, user_name=user_name, token=password_set_token
+                )
+    except Exception as e:
+        logger.error(f"[BG] FALHA NO ENVIO DE E-MAIL para {user_email}: {str(e)}")
+
+
 @router.post("/webhook")
-async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
+async def kiwify_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """Webhook da Kiwify para processar eventos de assinatura."""
     try:
         logger.info("Webhook Kiwify recebido")
@@ -339,14 +372,16 @@ async def kiwify_webhook(request: Request, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(subscription)
 
-                # Enviar email via helper
-                send_subscription_email(
-                    user=user,
-                    email=email,
+                # Agendar email em background (não bloqueia a resposta à Kiwify)
+                background_tasks.add_task(
+                    _send_email_background,
+                    user_id=user.id,
+                    user_email=email,
                     user_created=user_created,
                     user_has_password=user_has_password,
                     customer_name=customer_data.get("name"),
-                    db=db,
+                    has_password_set_token=bool(user.password_set_token),
+                    password_set_token=user.password_set_token,
                 )
 
             logger.info(f"Webhook Kiwify processado com sucesso para {email}")
