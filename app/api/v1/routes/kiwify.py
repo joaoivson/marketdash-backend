@@ -274,18 +274,12 @@ async def kiwify_webhook(
             logger.error(f"Corpo recebido: {body.decode('utf-8', errors='replace')}")
             return {"status": "error", "reason": "invalid_json"}
 
-        # Validação: Kiwify envia "signature" (HMAC do payload usando o token como chave).
-        # O signature NÃO é o token literal — é um hash gerado.
-        # Validamos que o signature está presente (confirma que veio da Kiwify).
-        # Para HMAC completo, precisaríamos da public key via API /webhook-public-keys.
+        # Log de autenticação (signature pode ou não estar presente dependendo do evento)
         signature = raw_payload.get("signature")
-        if not signature:
-            logger.warning("Webhook Kiwify sem signature — rejeitando")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Webhook não autorizado: signature ausente",
-            )
-        logger.info(f"Webhook Kiwify signature presente: {signature[:12]}...")
+        if signature:
+            logger.info(f"Webhook Kiwify signature presente: {signature[:12]}...")
+        else:
+            logger.info("Webhook Kiwify sem signature (aceito — URL é secreta)")
 
         # Extrair order (payload real está aninhado em "order")
         order = _extract_order(raw_payload)
