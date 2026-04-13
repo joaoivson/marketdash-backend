@@ -199,12 +199,16 @@ class AuthService:
                 detail="Token inválido ou expirado"
             )
         
-        # Verificar se token não expirou
-        if user.password_set_token_expires_at and user.password_set_token_expires_at < datetime.now(timezone.utc):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token inválido ou expirado"
-            )
+        # Verificar se token não expirou (normalizar timezone para evitar naive vs aware)
+        expires_at = user.password_set_token_expires_at
+        if expires_at:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < datetime.now(timezone.utc):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Token inválido ou expirado"
+                )
         
         # Verificar força da senha
         if len(password) < 8:

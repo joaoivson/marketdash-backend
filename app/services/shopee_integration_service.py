@@ -42,6 +42,11 @@ CONVERSIONS_QUERY = """
           itemCommission
           shopName
           fraudStatus
+          channelType
+          attributionType
+          globalCategoryLv1Name
+          globalCategoryLv2Name
+          globalCategoryLv3Name
         }
       }
     }
@@ -221,6 +226,10 @@ class ShopeeIntegrationService:
                             "actual_f": actual_f,
                             "item_comm_f": comm_f,
                             "qty": qty,
+                            "channel_type": str(item.get("channelType") or ""),
+                            "category_lv1": str(item.get("globalCategoryLv1Name") or ""),
+                            "category_lv2": str(item.get("globalCategoryLv2Name") or ""),
+                            "category_lv3": str(item.get("globalCategoryLv3Name") or ""),
                         })
 
                 sum_item_comm = sum(ni["item_comm_f"] for ni in node_items)
@@ -248,6 +257,17 @@ class ShopeeIntegrationService:
                     else:
                         commission = 0.0
 
+                    # Categoria: usar a mais específica disponível (lv3 > lv2 > lv1)
+                    category = (
+                        ni.get("category_lv3")
+                        or ni.get("category_lv2")
+                        or ni.get("category_lv1")
+                        or ""
+                    )
+
+                    # sub_id1: priorizar utmContent; fallback para channelType (canal de tráfego)
+                    sub_id = utm_content or ni.get("channel_type", "")
+
                     rows.append(
                         DatasetRow(
                             dataset_id=dataset.id,
@@ -256,7 +276,8 @@ class ShopeeIntegrationService:
                             platform="shopee",
                             product=ni["item_name"],
                             status=ni["order_status"],
-                            sub_id1=utm_content,
+                            category=category,
+                            sub_id1=sub_id,
                             order_id=ni["order_id"],
                             product_id=ni["item_id"],
                             revenue=revenue,

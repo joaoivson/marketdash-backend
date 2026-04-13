@@ -365,6 +365,7 @@ async def kiwify_webhook(
                 subscription.last_validation_at = datetime.now(timezone.utc)
                 db.commit()
                 db.refresh(subscription)
+                db.refresh(user)  # Garantir que password_set_token está atualizado após commit
 
                 # Agendar email em background (não bloqueia a resposta à Kiwify)
                 background_tasks.add_task(

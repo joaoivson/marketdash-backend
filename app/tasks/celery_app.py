@@ -33,9 +33,9 @@ celery_app.conf.include = [
 
 # Celery Beat schedule
 celery_app.conf.beat_schedule = {
-    "sync-shopee-daily-7am": {
+    "sync-shopee-daily-6am": {
         "task": "app.tasks.shopee_tasks.sync_all_shopee_users_task",
-        "schedule": crontab(hour=7, minute=0),  # 7h BRT (timezone já é America/Sao_Paulo)
+        "schedule": crontab(hour=6, minute=0),  # 6h BRT (timezone já é America/Sao_Paulo)
     },
 }
 
