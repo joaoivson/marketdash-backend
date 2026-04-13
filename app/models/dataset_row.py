@@ -17,6 +17,7 @@ class DatasetRow(Base):
     category = Column(String, nullable=True, index=True)
     product = Column(String, nullable=False, index=True)
     status = Column(String, nullable=True, index=True)
+    channel = Column(String, nullable=True, index=True)
     sub_id1 = Column(String, nullable=True, index=True)
     order_id = Column(String, nullable=True, index=True)
     product_id = Column(String, nullable=True, index=True)

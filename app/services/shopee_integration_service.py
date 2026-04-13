@@ -265,9 +265,6 @@ class ShopeeIntegrationService:
                         or ""
                     )
 
-                    # sub_id1: priorizar utmContent; fallback para channelType (canal de tráfego)
-                    sub_id = utm_content or ni.get("channel_type", "")
-
                     rows.append(
                         DatasetRow(
                             dataset_id=dataset.id,
@@ -277,7 +274,8 @@ class ShopeeIntegrationService:
                             product=ni["item_name"],
                             status=ni["order_status"],
                             category=category,
-                            sub_id1=sub_id,
+                            channel=ni.get("channel_type", ""),
+                            sub_id1=utm_content,
                             order_id=ni["order_id"],
                             product_id=ni["item_id"],
                             revenue=revenue,
