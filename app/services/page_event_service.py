@@ -3,6 +3,8 @@ from fastapi import HTTPException, status
 from app.models.capture_site import CaptureSite
 from app.repositories.page_event_repository import PageEventRepository
 from app.schemas.page_event import PageEventCreate
+from app.utils.bot_detection import is_bot
+from app.utils.tracking_dedup import should_count
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,21 @@ class PageEventService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Capture site not found"
             )
+
+        if event_data.preview:
+            return None
+
+        if is_bot(event_data.user_agent):
+            return None
+
+        if not should_count(
+            f"evt:{event_data.event_type}",
+            site.id,
+            ip_address,
+            event_data.user_agent,
+            60,
+        ):
+            return None
 
         event = self.repo.create(
             site_id=event_data.site_id,

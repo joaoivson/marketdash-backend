@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.page_event import PageEventCreate, PageEventResponse, SiteEventStatsResponse
+from app.schemas.page_event import PageEventCreate, SiteEventStatsResponse
 from app.services.page_event_service import PageEventService
 
 router = APIRouter(tags=["events"])
@@ -21,13 +21,20 @@ def get_event_stats(
     return SiteEventStatsResponse(stats=stats)
 
 
-@router.post("", response_model=PageEventResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_204_NO_CONTENT)
 def track_event(
     event_in: PageEventCreate,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Track a page event (public endpoint, no auth required)."""
-    ip_address = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    """Track a page event (public endpoint, no auth required).
+
+    Always returns 204. Bot/preview/duplicate hits are silently skipped.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip_address = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else None
+    )
     service = PageEventService(db)
-    return service.track_event(event_in, ip_address=ip_address)
+    service.track_event(event_in, ip_address=ip_address)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

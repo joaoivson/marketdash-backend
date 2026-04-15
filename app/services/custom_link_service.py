@@ -4,6 +4,8 @@ import uuid
 from app.models.custom_link import CustomLink
 from app.schemas.custom_link import CustomLinkCreate, CustomLinkUpdate, SlugCheckResponse
 from app.repositories.custom_link_repository import CustomLinkRepository
+from app.utils.bot_detection import is_bot
+from app.utils.tracking_dedup import should_count
 
 
 class CustomLinkService:
@@ -66,10 +68,18 @@ class CustomLinkService:
         self.repository.delete(link_id)
         return True
 
-    def handle_redirect(self, slug: str) -> dict:
+    def handle_redirect(
+        self,
+        slug: str,
+        *,
+        ip: str | None = None,
+        user_agent: str | None = None,
+        purpose: str = "",
+    ) -> dict:
         """
         Handle redirect for a given slug.
         Returns dict with 'url' on success, or 'error' and 'status_code' on failure.
+        Clicks are ignored for bots, browser prefetch, and duplicate hits within 60s.
         """
         link = self.repository.get_by_slug(slug)
         if not link:
@@ -80,6 +90,15 @@ class CustomLinkService:
 
         if link.expires_at and link.expires_at < datetime.now(timezone.utc):
             return {"error": "Este link expirou", "status_code": 410}
+
+        if "prefetch" in (purpose or "").lower():
+            return {"url": link.original_url}
+
+        if is_bot(user_agent):
+            return {"url": link.original_url}
+
+        if not should_count("clk", link.id, ip, user_agent, 60):
+            return {"url": link.original_url}
 
         self.repository.increment_click_count(link)
         return {"url": link.original_url}

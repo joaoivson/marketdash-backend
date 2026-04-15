@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -30,10 +30,25 @@ def check_slug(
 @router.get("/r/{slug}")
 def redirect_link(
     slug: str,
+    request: Request,
     service: CustomLinkService = Depends(get_service)
 ):
     """Public endpoint - redirect to the original URL."""
-    result = service.handle_redirect(slug)
+    user_agent = request.headers.get("user-agent")
+    purpose = (
+        request.headers.get("purpose")
+        or request.headers.get("sec-purpose")
+        or request.headers.get("x-moz")
+        or ""
+    )
+    forwarded = request.headers.get("x-forwarded-for", "")
+    ip = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else None
+    )
+
+    result = service.handle_redirect(
+        slug, ip=ip, user_agent=user_agent, purpose=purpose
+    )
 
     if "error" in result:
         raise HTTPException(status_code=result["status_code"], detail=result["error"])

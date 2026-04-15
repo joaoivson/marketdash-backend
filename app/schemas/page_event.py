@@ -14,6 +14,7 @@ class PageEventCreate(BaseModel):
     utm_ad: Optional[str] = None
     referrer: Optional[str] = None
     user_agent: Optional[str] = None
+    preview: bool = False
 
 
 class PageEventResponse(BaseModel):
