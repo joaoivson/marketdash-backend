@@ -14,11 +14,14 @@ def apply_migration(migration_file: str):
     """Apply SQL migration to Supabase database."""
     
     # Supabase connection string from docker-compose.yml
-    database_url = "postgresql://postgres:K%40pilc%402804%40@db.rsejwvxealraianensoz.supabase.co:5432/postgres?sslmode=require"
-    
-    # Decode URL-encoded password: K@pilc@2804@
-    database_url = database_url.replace("%40", "@")
-    
+    # Load environment variables
+    load_dotenv()
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        print("❌ ERROR: DATABASE_URL not found in .env")
+        sys.exit(1)
+    # URL-encoded password is required for psycopg2 to parse correctly when password contains @
+    # database_url = database_url.replace("%40", "@") # DO NOT REPLACE    
     # Read migration file
     if not os.path.exists(migration_file):
         print(f"❌ ERROR: Migration file not found: {migration_file}")
@@ -33,9 +36,17 @@ def apply_migration(migration_file: str):
     try:
         # Connect to Supabase database
         print("🔌 Connecting to Supabase...")
-        conn = psycopg2.connect(database_url)
+        password = "K@pilc@2804@"
+        conn = psycopg2.connect(
+            host="db.iprdyorxqdiivthtcvxf.supabase.co",
+            port=5432,
+            user="postgres",
+            password=password,
+            database="postgres",
+            sslmode="require"
+        )
         conn.autocommit = True
-        cursor = cursor()
+        cursor = conn.cursor()
         
         # Execute migration
         print("⚙️  Executing SQL...")
