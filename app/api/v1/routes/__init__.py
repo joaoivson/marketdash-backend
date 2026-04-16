@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.core.config import settings
-from . import auth, datasets, dashboard, ad_spends, cakto, subscription, clicks, feedback, capture_sites, uploads, custom_links, shopee, page_events, kiwify, payment
+from . import auth, datasets, dashboard, ad_spends, cakto, subscription, clicks, feedback, capture_sites, uploads, custom_links, shopee, page_events, kiwify, payment, user_settings
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth")
@@ -19,6 +19,7 @@ router.include_router(uploads.router, prefix="/uploads", tags=["uploads"])
 router.include_router(custom_links.router, prefix="/links", tags=["custom_links"])
 router.include_router(shopee.router, prefix="/shopee")
 router.include_router(page_events.router, prefix="/events", tags=["events"])
+router.include_router(user_settings.router, prefix="/settings", tags=["settings"])
 
 if settings.USE_JOBS_PIPELINE:
     from . import jobs

@@ -26,4 +26,5 @@ class User(Base):
     capture_sites = relationship("CaptureSite", back_populates="user", cascade="all, delete-orphan")
     custom_links = relationship("CustomLink", back_populates="user", cascade="all, delete-orphan")
     shopee_integration = relationship("ShopeeIntegration", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
