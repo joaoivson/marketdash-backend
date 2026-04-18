@@ -218,6 +218,14 @@ class ShopeeIntegrationService:
                         actual_f = float(item.get("actualAmount") or 0)
                         comm_f = float(item.get("itemCommission") or 0)
                         qty = int(item.get("qty") or 1)
+                        raw_channel = item.get("channelType")
+                        raw_attribution = item.get("attributionType")
+                        logger.debug(
+                            "Shopee item order=%s item=%s channelType=%r attributionType=%r",
+                            order_id, item_id, raw_channel, raw_attribution,
+                        )
+                        # Canal: usa channelType; fallback para attributionType se channelType vazio
+                        channel_val = str(raw_channel or raw_attribution or "").strip()
                         node_items.append({
                             "order_id": order_id,
                             "order_status": order_status,
@@ -226,7 +234,7 @@ class ShopeeIntegrationService:
                             "actual_f": actual_f,
                             "item_comm_f": comm_f,
                             "qty": qty,
-                            "channel_type": str(item.get("channelType") or ""),
+                            "channel_type": channel_val,
                             "category_lv1": str(item.get("globalCategoryLv1Name") or ""),
                             "category_lv2": str(item.get("globalCategoryLv2Name") or ""),
                             "category_lv3": str(item.get("globalCategoryLv3Name") or ""),
@@ -274,7 +282,7 @@ class ShopeeIntegrationService:
                             product=ni["item_name"],
                             status=ni["order_status"],
                             category=category,
-                            channel=ni.get("channel_type", ""),
+                            channel=ni.get("channel_type") or None,
                             sub_id1=utm_content,
                             order_id=ni["order_id"],
                             product_id=ni["item_id"],
