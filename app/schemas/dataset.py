@@ -44,6 +44,7 @@ class DatasetRowBase(BaseModel):
     platform: Optional[str] = None
     category: Optional[str] = None
     status: Optional[str] = None
+    channel: Optional[str] = None
     sub_id1: Optional[str] = None
     order_id: Optional[str] = None
     product_id: Optional[str] = None
