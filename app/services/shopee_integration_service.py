@@ -139,8 +139,11 @@ class ShopeeIntegrationService:
         BRT = timezone(timedelta(hours=-3))
         now = datetime.now(BRT)
         start = now - timedelta(days=90)
-        ts_start = int(start.timestamp())
-        ts_end = int(now.timestamp())
+
+        # A API conversionReport da Shopee restringe a janela de purchaseTime
+        # por request (~poucos dias). Para cobrir os 90 dias, iteramos em chunks
+        # e dentro de cada chunk seguimos a paginação por scrollId.
+        CHUNK_DAYS = 7
 
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
 
@@ -170,143 +173,174 @@ class ShopeeIntegrationService:
         item_seq: Counter = Counter()
 
         total_processed = 0
-        scroll_id: Optional[str] = None
         all_synced_order_ids: set[str] = set()
 
-        while True:
-            scroll_param = f', scrollId: "{scroll_id}"' if scroll_id else ""
-            query = CONVERSIONS_QUERY % (ts_start, ts_end, scroll_param)
+        chunk_start = start
+        while chunk_start < now:
+            chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), now)
+            ts_start = int(chunk_start.timestamp())
+            ts_end = int(chunk_end.timestamp())
 
-            try:
-                result = await shopee_graphql_client.execute_graphql(
-                    integration.app_id, password, query
-                )
-            except HTTPException:
-                break
+            logger.info(
+                "Shopee sync user_id=%s: chunk %s → %s",
+                user_id, chunk_start.date(), chunk_end.date(),
+            )
 
-            report = (result.get("data") or {}).get("conversionReport") or {}
-            nodes = report.get("nodes") or []
-            page_info = report.get("pageInfo") or {}
+            scroll_id: Optional[str] = None
+            page_num = 0
+            chunk_processed = 0
 
-            if not nodes:
-                break
+            while True:
+                page_num += 1
+                scroll_param = f', scrollId: "{scroll_id}"' if scroll_id else ""
+                query = CONVERSIONS_QUERY % (ts_start, ts_end, scroll_param)
 
-            rows = []
-            for node in nodes:
-                purchase_ts = node.get("purchaseTime")
                 try:
-                    row_date = datetime.fromtimestamp(purchase_ts, tz=BRT).date()
-                except Exception:
-                    row_date = now.date()
+                    result = await shopee_graphql_client.execute_graphql(
+                        integration.app_id, password, query
+                    )
+                except HTTPException as exc:
+                    logger.error(
+                        "Shopee paginação falhou user_id=%s chunk=%s→%s page=%d: %s",
+                        user_id, chunk_start.date(), chunk_end.date(),
+                        page_num, exc.detail,
+                    )
+                    raise
 
-                utm_content = str(node.get("utmContent") or "")
-                conversion_status = str(node.get("conversionStatus") or "")
-                # estimatedTotalCommission é a comissão líquida real do nó,
-                # equivalente a "Comissão líquida do afiliado(R$)" no CSV Shopee.
-                # itemCommission no nível do item não contém o valor completo
-                # (~10% menor). A soma de estimatedTotalCommission de todos os
-                # nós bate exatamente com o dashboard Shopee.
-                est_total_comm = float(node.get("estimatedTotalCommission") or 0)
+                report = (result.get("data") or {}).get("conversionReport") or {}
+                nodes = report.get("nodes") or []
+                page_info = report.get("pageInfo") or {}
 
-                # Coletar itens deste nó para distribuir comissão proporcionalmente
-                node_items = []
-                for order in (node.get("orders") or []):
-                    order_id = str(order.get("orderId") or "")
-                    order_status = str(order.get("orderStatus") or conversion_status)
-                    for item in (order.get("items") or []):
-                        item_id = str(item.get("itemId") or "")
-                        actual_f = float(item.get("actualAmount") or 0)
-                        comm_f = float(item.get("itemCommission") or 0)
-                        qty = int(item.get("qty") or 1)
-                        raw_channel = item.get("channelType")
-                        raw_attribution = item.get("attributionType")
-                        logger.debug(
-                            "Shopee item order=%s item=%s channelType=%r attributionType=%r",
-                            order_id, item_id, raw_channel, raw_attribution,
+                if not nodes:
+                    break
+
+                rows = []
+                for node in nodes:
+                    purchase_ts = node.get("purchaseTime")
+                    try:
+                        row_date = datetime.fromtimestamp(purchase_ts, tz=BRT).date()
+                    except Exception:
+                        row_date = now.date()
+
+                    utm_content = str(node.get("utmContent") or "")
+                    conversion_status = str(node.get("conversionStatus") or "")
+                    # estimatedTotalCommission é a comissão líquida real do nó,
+                    # equivalente a "Comissão líquida do afiliado(R$)" no CSV Shopee.
+                    # itemCommission no nível do item não contém o valor completo
+                    # (~10% menor). A soma de estimatedTotalCommission de todos os
+                    # nós bate exatamente com o dashboard Shopee.
+                    est_total_comm = float(node.get("estimatedTotalCommission") or 0)
+
+                    # Coletar itens deste nó para distribuir comissão proporcionalmente
+                    node_items = []
+                    for order in (node.get("orders") or []):
+                        order_id = str(order.get("orderId") or "")
+                        order_status = str(order.get("orderStatus") or conversion_status)
+                        for item in (order.get("items") or []):
+                            item_id = str(item.get("itemId") or "")
+                            actual_f = float(item.get("actualAmount") or 0)
+                            comm_f = float(item.get("itemCommission") or 0)
+                            qty = int(item.get("qty") or 1)
+                            raw_channel = item.get("channelType")
+                            raw_attribution = item.get("attributionType")
+                            logger.debug(
+                                "Shopee item order=%s item=%s channelType=%r attributionType=%r",
+                                order_id, item_id, raw_channel, raw_attribution,
+                            )
+                            # Canal: usa channelType; fallback para attributionType se channelType vazio
+                            channel_val = str(raw_channel or raw_attribution or "").strip()
+                            node_items.append({
+                                "order_id": order_id,
+                                "order_status": order_status,
+                                "item_id": item_id,
+                                "item_name": str(item.get("itemName") or ""),
+                                "actual_f": actual_f,
+                                "item_comm_f": comm_f,
+                                "qty": qty,
+                                "channel_type": channel_val,
+                                "category_lv1": str(item.get("globalCategoryLv1Name") or ""),
+                                "category_lv2": str(item.get("globalCategoryLv2Name") or ""),
+                                "category_lv3": str(item.get("globalCategoryLv3Name") or ""),
+                            })
+
+                    sum_item_comm = sum(ni["item_comm_f"] for ni in node_items)
+
+                    for ni in node_items:
+                        # Seq incremental para row_hash único
+                        base_key = (ni["order_id"], ni["item_id"])
+                        item_seq[base_key] += 1
+                        seq = item_seq[base_key]
+
+                        rh = _row_hash(user_id, ni["order_id"], ni["item_id"], str(row_date), str(seq))
+
+                        # Revenue: actualAmount = "Valor de Compra(R$)" no CSV
+                        # (0 para cancelados, com descontos aplicados)
+                        revenue = ni["actual_f"]
+                        if ni["order_status"].upper() in ["CANCELLED", "INVALID", "REJECTED"]:
+                            revenue = 0.0
+
+                        # Commission: distribui estimatedTotalCommission proporcionalmente
+                        # ao itemCommission de cada item dentro do nó
+                        if sum_item_comm > 0:
+                            commission = ni["item_comm_f"] / sum_item_comm * est_total_comm
+                        elif len(node_items) == 1:
+                            commission = est_total_comm
+                        else:
+                            commission = 0.0
+
+                        # Categoria: usar a mais específica disponível (lv3 > lv2 > lv1)
+                        category = (
+                            ni.get("category_lv3")
+                            or ni.get("category_lv2")
+                            or ni.get("category_lv1")
+                            or ""
                         )
-                        # Canal: usa channelType; fallback para attributionType se channelType vazio
-                        channel_val = str(raw_channel or raw_attribution or "").strip()
-                        node_items.append({
-                            "order_id": order_id,
-                            "order_status": order_status,
-                            "item_id": item_id,
-                            "item_name": str(item.get("itemName") or ""),
-                            "actual_f": actual_f,
-                            "item_comm_f": comm_f,
-                            "qty": qty,
-                            "channel_type": channel_val,
-                            "category_lv1": str(item.get("globalCategoryLv1Name") or ""),
-                            "category_lv2": str(item.get("globalCategoryLv2Name") or ""),
-                            "category_lv3": str(item.get("globalCategoryLv3Name") or ""),
-                        })
 
-                sum_item_comm = sum(ni["item_comm_f"] for ni in node_items)
+                        rows.append(
+                            DatasetRow(
+                                dataset_id=dataset.id,
+                                user_id=user_id,
+                                date=row_date,
+                                platform="shopee",
+                                product=ni["item_name"],
+                                status=ni["order_status"],
+                                category=category,
+                                channel=ni.get("channel_type") or None,
+                                sub_id1=utm_content,
+                                order_id=ni["order_id"],
+                                product_id=ni["item_id"],
+                                revenue=revenue,
+                                commission=commission,
+                                quantity=ni["qty"],
+                                row_hash=rh,
+                            )
+                        )
 
-                for ni in node_items:
-                    # Seq incremental para row_hash único
-                    base_key = (ni["order_id"], ni["item_id"])
-                    item_seq[base_key] += 1
-                    seq = item_seq[base_key]
-
-                    rh = _row_hash(user_id, ni["order_id"], ni["item_id"], str(row_date), str(seq))
-
-                    # Revenue: actualAmount = "Valor de Compra(R$)" no CSV
-                    # (0 para cancelados, com descontos aplicados)
-                    revenue = ni["actual_f"]
-                    if ni["order_status"].upper() in ["CANCELLED", "INVALID", "REJECTED"]:
-                        revenue = 0.0
-
-                    # Commission: distribui estimatedTotalCommission proporcionalmente
-                    # ao itemCommission de cada item dentro do nó
-                    if sum_item_comm > 0:
-                        commission = ni["item_comm_f"] / sum_item_comm * est_total_comm
-                    elif len(node_items) == 1:
-                        commission = est_total_comm
-                    else:
-                        commission = 0.0
-
-                    # Categoria: usar a mais específica disponível (lv3 > lv2 > lv1)
-                    category = (
-                        ni.get("category_lv3")
-                        or ni.get("category_lv2")
-                        or ni.get("category_lv1")
-                        or ""
+                if rows:
+                    row_repo.bulk_create(rows)
+                    total_processed += len(rows)
+                    chunk_processed += len(rows)
+                    # Acumula order_ids inseridos para dedup posterior
+                    all_synced_order_ids.update(
+                        r.order_id for r in rows if r.order_id
                     )
 
-                    rows.append(
-                        DatasetRow(
-                            dataset_id=dataset.id,
-                            user_id=user_id,
-                            date=row_date,
-                            platform="shopee",
-                            product=ni["item_name"],
-                            status=ni["order_status"],
-                            category=category,
-                            channel=ni.get("channel_type") or None,
-                            sub_id1=utm_content,
-                            order_id=ni["order_id"],
-                            product_id=ni["item_id"],
-                            revenue=revenue,
-                            commission=commission,
-                            quantity=ni["qty"],
-                            row_hash=rh,
-                        )
-                    )
+                if not page_info.get("hasNextPage"):
+                    break
 
-            if rows:
-                row_repo.bulk_create(rows)
-                total_processed += len(rows)
-                # Acumula order_ids inseridos para dedup posterior
-                all_synced_order_ids.update(
-                    r.order_id for r in rows if r.order_id
-                )
+                scroll_id = page_info.get("scrollId")
+                if not scroll_id:
+                    break
 
-            if not page_info.get("hasNextPage"):
-                break
+            logger.info(
+                "Shopee sync user_id=%s: chunk %s → %s concluído (%d rows, %d páginas)",
+                user_id, chunk_start.date(), chunk_end.date(),
+                chunk_processed, page_num,
+            )
 
-            scroll_id = page_info.get("scrollId")
-            if not scroll_id:
-                break
+            # Avança para o próximo chunk (+1s para evitar overlap nas bordas
+            # — mantém o seq counter consistente com chunks subsequentes).
+            chunk_start = chunk_end + timedelta(seconds=1)
 
         # ── Dedup: remover rows de outros datasets (ex: CSV importado) ──
         # que possuam os mesmos order_ids já trazidos pela API Shopee.
