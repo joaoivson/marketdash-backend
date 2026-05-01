@@ -138,11 +138,14 @@ class ShopeeIntegrationService:
         # na API são relativos a BRT, então o range deve ser em BRT.
         BRT = timezone(timedelta(hours=-3))
         now = datetime.now(BRT)
-        start = now - timedelta(days=90)
+        # Shopee Open API limita conversionReport aos "últimos 3 meses". Em meses
+        # não-bissextos a janela vale 89 dias; usamos 88 para ter 1 dia de margem
+        # contra drift de timezone entre nosso clock e o da API (erro 11001).
+        start = now - timedelta(days=88)
 
-        # A API conversionReport da Shopee restringe a janela de purchaseTime
-        # por request (~poucos dias). Para cobrir os 90 dias, iteramos em chunks
-        # e dentro de cada chunk seguimos a paginação por scrollId.
+        # A API restringe a janela de purchaseTime por request a poucos dias.
+        # Para cobrir os 88 dias, iteramos em chunks e dentro de cada chunk
+        # seguimos a paginação por scrollId.
         CHUNK_DAYS = 7
 
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
