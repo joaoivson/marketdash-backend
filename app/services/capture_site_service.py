@@ -27,7 +27,7 @@ class CaptureSiteService:
         suggested = f"{slug}-{random_suffix}"
         return SlugCheckResponse(available=False, suggested_slug=suggested)
 
-    MAX_SITES_PER_USER = 15
+    MAX_SITES_PER_USER = 30
 
     def create_site(self, user_id: int, site_in: CaptureSiteCreate) -> CaptureSite:
         existing_sites = self.repository.get_by_user(user_id)

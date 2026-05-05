@@ -30,7 +30,7 @@ class CustomLinkService:
         suggested = f"{slug}-{random_suffix}"
         return SlugCheckResponse(available=False, suggested_slug=suggested)
 
-    MAX_LINKS_PER_USER = 15
+    MAX_LINKS_PER_USER = 30
 
     def create_link(self, user_id: int, link_in: CustomLinkCreate) -> CustomLink:
         existing_links = self.repository.get_by_user(user_id)
