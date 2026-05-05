@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # Shopee Affiliate API — chave Fernet (base64) para criptografar senhas armazenadas
     SHOPEE_ENCRYPTION_KEY: Optional[str] = None
 
+    # pg_cron (Supabase) → endpoint interno do backend. Secret compartilhado (X-Cron-Secret).
+    # Gerar com: openssl rand -hex 32. Quando None, o endpoint /internal/cron/* retorna 503.
+    CRON_SECRET: Optional[str] = None
+
     # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
     DEBUG_LOG_PATH: Optional[str] = None
 

@@ -1,5 +1,4 @@
 from celery import Celery
-from celery.schedules import crontab
 from app.core.config import settings
 
 # Initialize Celery app
@@ -31,13 +30,7 @@ celery_app.conf.include = [
     "app.tasks.shopee_tasks",
 ]
 
-# Celery Beat schedule
-celery_app.conf.beat_schedule = {
-    "sync-shopee-daily-6am": {
-        "task": "app.tasks.shopee_tasks.sync_all_shopee_users_task",
-        "schedule": crontab(hour=6, minute=0),  # 6h BRT (timezone já é America/Sao_Paulo)
-    },
-}
-
 # Auto-discover any other tasks under app.tasks
+# NOTE: Beat schedule removido — sync Shopee agora é disparado via pg_cron + pg_net no Supabase
+# (migration 018), chamando POST /api/v1/internal/cron/shopee-sync às 10h UTC (= 7h BRT).
 celery_app.autodiscover_tasks(["app.tasks"], force=True)

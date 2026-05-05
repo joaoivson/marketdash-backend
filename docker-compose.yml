@@ -43,6 +43,7 @@ services:
       S3_SECRET_KEY: 88f15f3f87f9f415b6980d277dd1d7b42a89e61e7e6d1d04a063901520f3b673
       S3_REGION: us-east-2
       SHOPEE_ENCRYPTION_KEY: ${SHOPEE_ENCRYPTION_KEY}
+      CRON_SECRET: ${CRON_SECRET}
     depends_on:
       db:
         condition: service_healthy
@@ -82,23 +83,8 @@ services:
       redis:
         condition: service_started
 
-  beat:
-    build: .
-    container_name: marketdash_beat
-    command: celery -A app.tasks.celery_app beat --loglevel=info
-    volumes:
-      - .:/app
-      - ../feature-flags.json:/app/feature-flags.json:ro
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: redis://redis:6379/0
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
-      SHOPEE_ENCRYPTION_KEY: ${SHOPEE_ENCRYPTION_KEY}
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
+  # NOTE: serviço `beat` removido — agendamento agora é via pg_cron + pg_net no Supabase
+  # (migration 018). pg_cron chama POST /api/v1/internal/cron/shopee-sync às 10h UTC (7h BRT).
 
   # MinIO for jobs pipeline (USE_JOBS_PIPELINE). Create bucket "uploads" in Console (http://localhost:9000).
   minio:
