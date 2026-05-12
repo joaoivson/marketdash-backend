@@ -133,6 +133,13 @@ def get_current_user_optional(
         return None
 
 
+def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency que requer flag is_admin no usuário. Retorna 403 caso contrário."""
+    if not getattr(current_user, "is_admin", False):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito a administradores")
+    return current_user
+
+
 def require_active_subscription(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

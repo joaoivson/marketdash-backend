@@ -20,16 +20,38 @@ class AuthService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email já cadastrado")
 
         hashed = get_password_hash(user_data.password)
+        referrer_id = self._sanitize_referrer(getattr(user_data, "referrer_user_id", None), self_id=None)
         new_user = User(
             name=user_data.name,
             cpf_cnpj=user_data.cpf_cnpj,
             email=user_data.email,
             hashed_password=hashed,
             is_active=True,
+            referrer_user_id=referrer_id,
         )
         return self.user_repo.create(new_user)
 
-    def login(self, email: str, password: str):
+    def _sanitize_referrer(self, ref: int | None, self_id: int | None) -> int | None:
+        """Valida que o referrer_user_id existe e não é o próprio user. Retorna None se inválido."""
+        if not ref:
+            return None
+        if self_id is not None and ref == self_id:
+            return None
+        if not self.user_repo.get_by_id(ref):
+            return None
+        return ref
+
+    def _maybe_attach_referrer(self, user: User, ref: int | None) -> None:
+        """Atribui referrer_user_id se ainda não tiver. Ignora silenciosamente se já tiver ou ref inválido."""
+        if not ref or user.referrer_user_id is not None:
+            return
+        sanitized = self._sanitize_referrer(ref, self_id=user.id)
+        if sanitized is None:
+            return
+        user.referrer_user_id = sanitized
+        self.user_repo.update(user)
+
+    def login(self, email: str, password: str, referrer_user_id: int | None = None):
         import logging
         from supabase import create_client, Client
         logger = logging.getLogger(__name__)
@@ -56,8 +78,13 @@ class AuthService:
                         hashed_password=get_password_hash(random_pwd),
                         is_active=True,
                         name=auth_response.user.user_metadata.get("name") or auth_response.user.user_metadata.get("full_name"),
+                        referrer_user_id=self._sanitize_referrer(referrer_user_id, self_id=None),
                     )
                     user = self.user_repo.create(new_user)
+                else:
+                    # User já existe localmente. Se ainda não tem referrer e o frontend
+                    # mandou um (primeiro login após clicar em link de afiliado), persistir.
+                    self._maybe_attach_referrer(user, referrer_user_id)
 
                 return {
                     "access_token": auth_response.session.access_token,

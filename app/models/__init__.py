@@ -9,6 +9,7 @@ from app.models.job import Job, JobChunk
 from app.models.capture_site import CaptureSite
 from app.models.custom_link import CustomLink
 from app.models.page_event import PageEvent
+from app.models.commission import Commission
 
-__all__ = ["User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow", "Job", "JobChunk", "CaptureSite", "CustomLink", "PageEvent"]
+__all__ = ["User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow", "Job", "JobChunk", "CaptureSite", "CustomLink", "PageEvent", "Commission"]
 

@@ -31,7 +31,11 @@ def login(
     request: LoginRequest,
     db: Session = Depends(get_db),
 ):
-    return AuthService(UserRepository(db)).login(request.email, request.password)
+    return AuthService(UserRepository(db)).login(
+        request.email,
+        request.password,
+        referrer_user_id=request.referrer_user_id,
+    )
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse, status_code=status.HTTP_200_OK)
@@ -86,6 +90,27 @@ def set_password(
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user=Depends(get_current_user)):
     return current_user
+
+
+@router.post("/attach-ref", status_code=status.HTTP_204_NO_CONTENT)
+def attach_referrer(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Define o referrer_user_id do usuário se ele ainda não tiver um.
+    Chamado pelo frontend após login bem-sucedido quando há `affiliate_ref` no localStorage.
+    Idempotente — se user já tem referrer, ignora silenciosamente.
+    """
+    ref = payload.get("referrer_user_id") if isinstance(payload, dict) else None
+    if ref is not None:
+        try:
+            ref_int = int(ref)
+        except (TypeError, ValueError):
+            return None
+        AuthService(UserRepository(db))._maybe_attach_referrer(current_user, ref_int)
+    return None
 
 
 @router.put("/users/{user_id}", response_model=UserResponse)

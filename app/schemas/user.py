@@ -11,11 +11,15 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+    referrer_user_id: Optional[int] = None
 
 
 class UserResponse(UserBase):
     id: int
     is_active: bool
+    is_admin: bool = False
+    pix_key: Optional[str] = None
+    referrer_user_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -62,4 +66,5 @@ class ForgotPasswordResponse(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+    referrer_user_id: Optional[int] = None  # capturado de localStorage["affiliate_ref"] no primeiro login
 

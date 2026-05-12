@@ -398,6 +398,21 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
             # Commit final do status da assinatura
             if action == "activate":
                 subscription.last_validation_at = datetime.now(timezone.utc)
+
+                # Programa de afiliados: se o usuário foi indicado, cria comissão
+                # idempotente (unique index em cakto_transaction_id evita duplicação).
+                try:
+                    from app.services.affiliate_service import AffiliateService
+                    AffiliateService(db).create_commission_from_payment(
+                        referred_user=user,
+                        subscription=subscription,
+                        amount=transaction_data.get("amount"),
+                        cakto_transaction_id=transaction_data.get("transaction_id"),
+                    )
+                except Exception as aff_err:
+                    # Falha de comissão não deve quebrar o webhook — só logar.
+                    logger.error("Erro ao criar comissão de afiliado: %s", aff_err)
+
                 db.commit()
                 db.refresh(subscription)
                 
