@@ -64,18 +64,23 @@ async def proxy_graphql(
     return ShopeeGraphQLResponse(**result)
 
 
-@router.post("/sync", status_code=status.HTTP_200_OK)
-async def manual_sync(
+@router.post("/sync", status_code=status.HTTP_202_ACCEPTED)
+def manual_sync(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Dispara sincronização manual dos dados Shopee."""
+    """
+    Enfileira sincronização Shopee no Celery worker e retorna 202 imediato.
+    O sync real (88 dias em chunks + GraphQL) leva minutos; resposta síncrona
+    estoura timeout de gateway (Cloudflare ~100s). Frontend deve fazer polling
+    em GET /credentials.last_sync_at para detectar conclusão.
+    """
     svc = _service(db)
-    status_info = svc.get_status(current_user.id)
-    if not status_info:
+    if not svc.get_status(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Integração Shopee não configurada.",
         )
-    await svc.sync_user(current_user.id, db)
-    return {"detail": "Sincronização concluída com sucesso."}
+    from app.tasks.shopee_tasks import sync_shopee_user_task
+    task = sync_shopee_user_task.delay(current_user.id, empty_attempt=0)
+    return {"status": "accepted", "task_id": task.id, "detail": "Sincronização enfileirada."}
