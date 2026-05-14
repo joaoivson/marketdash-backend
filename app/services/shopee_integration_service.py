@@ -217,6 +217,22 @@ class ShopeeIntegrationService:
                 if not nodes:
                     break
 
+                # DEBUG temporário: log sample da resposta pra investigar channelType vazio
+                if page_num == 1:
+                    sample_node = nodes[0]
+                    sample_orders = sample_node.get("orders") or []
+                    sample_items = (sample_orders[0].get("items") or []) if sample_orders else []
+                    sample_item = sample_items[0] if sample_items else {}
+                    logger.info(
+                        "Shopee SAMPLE user=%s chunk=%s node_keys=%s item_keys=%s channelType=%r attributionType=%r utmContent=%r",
+                        user_id, chunk_start.date(),
+                        list(sample_node.keys()),
+                        list(sample_item.keys()),
+                        sample_item.get("channelType"),
+                        sample_item.get("attributionType"),
+                        sample_node.get("utmContent"),
+                    )
+
                 rows = []
                 for node in nodes:
                     purchase_ts = node.get("purchaseTime")
