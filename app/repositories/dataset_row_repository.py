@@ -26,6 +26,7 @@ class DatasetRowRepository:
                 'user_id': row.user_id,
                 'date': row.date,
                 'platform': row.platform,
+                'channel': row.channel,
                 'category': row.category,
                 'product': row.product,
                 'status': row.status,
@@ -62,6 +63,7 @@ class DatasetRowRepository:
                 'category': stmt.excluded.category,
                 'platform': stmt.excluded.platform,
                 'product': stmt.excluded.product,
+                'channel': stmt.excluded.channel,
             }
         )
         
