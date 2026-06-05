@@ -33,6 +33,9 @@ def init_db():
     # This must happen before create_all()
     from app.models import User, Dataset, DatasetRow, Subscription, AdSpend, ClickRow, Job, JobChunk, CaptureSite, CustomLink, PageEvent  # noqa: F401
     from app.models.user_settings import UserSettings  # noqa: F401
+    from app.models.shopee_integration import ShopeeIntegration  # noqa: F401
+    from app.models.facebook_integration import FacebookIntegration  # noqa: F401
+    from app.models.campaign import Campaign, CampaignDailyInsight  # noqa: F401
     
     logger = logging.getLogger(__name__)
     

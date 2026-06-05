@@ -53,8 +53,18 @@ class Settings(BaseSettings):
     S3_SECRET_KEY: Optional[str] = None
     S3_REGION: Optional[str] = None
 
-    # Shopee Affiliate API — chave Fernet (base64) para criptografar senhas armazenadas
+    # Shopee Affiliate API — chave Fernet (base64) para criptografar senhas armazenadas.
+    # A MESMA chave é reutilizada para criptografar os access tokens do Facebook.
     SHOPEE_ENCRYPTION_KEY: Optional[str] = None
+
+    # Facebook Marketing API (campanhas). Criar app em developers.facebook.com.
+    # Permissões necessárias: ads_read (leitura) + ads_management (pausar/ativar/orçamento).
+    FACEBOOK_APP_ID: Optional[str] = None
+    FACEBOOK_APP_SECRET: Optional[str] = None
+    FACEBOOK_API_VERSION: str = "v21.0"
+    # Redirect URI registrada no app do Facebook (deve bater exatamente com a do frontend).
+    # Ex.: https://app.marketdash.com.br/dashboard/configuracoes
+    FACEBOOK_OAUTH_REDIRECT_URI: Optional[str] = None
 
     # pg_cron (Supabase) → endpoint interno do backend. Secret compartilhado (X-Cron-Secret).
     # Gerar com: openssl rand -hex 32. Quando None, o endpoint /internal/cron/* retorna 503.

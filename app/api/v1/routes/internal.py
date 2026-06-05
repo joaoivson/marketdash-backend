@@ -66,6 +66,30 @@ def cron_shopee_sync(
     return {"status": "accepted", "task_id": task.id}
 
 
+@router.post("/cron/facebook-sync", status_code=status.HTTP_202_ACCEPTED)
+def cron_facebook_sync(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """
+    Disparado pelo pg_cron via pg_net (diário).
+
+    Enfileira sync_all_facebook_users_task no Celery worker e retorna imediatamente.
+    """
+    caller_ip = request.client.host if request.client else "unknown"
+    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
+
+    from app.tasks.facebook_tasks import sync_all_facebook_users_task
+
+    task = sync_all_facebook_users_task.delay()
+    logger.info(
+        "cron.facebook-sync dispatched task_id=%s caller_ip=%s source=%s",
+        task.id, caller_ip, request.headers.get("X-Cron-Source", "unknown"),
+    )
+    return {"status": "accepted", "task_id": task.id}
+
+
 @router.get("/cron/health", status_code=status.HTTP_200_OK)
 def cron_health(
     request: Request,

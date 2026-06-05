@@ -14,10 +14,13 @@ from app.models.page_event import PageEvent
 from app.models.commission import Commission
 from app.models.user_settings import UserSettings
 from app.models.shopee_integration import ShopeeIntegration
+from app.models.facebook_integration import FacebookIntegration
+from app.models.campaign import Campaign, CampaignDailyInsight
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
     "Job", "JobChunk", "CaptureSite", "CustomLink", "PageEvent", "Commission",
-    "UserSettings", "ShopeeIntegration",
+    "UserSettings", "ShopeeIntegration", "FacebookIntegration",
+    "Campaign", "CampaignDailyInsight",
 ]
 

@@ -1,0 +1,209 @@
+import logging
+from datetime import date
+from typing import Dict, List, Optional
+
+from sqlalchemy import distinct, func
+from sqlalchemy.orm import Session
+
+from app.models.campaign import Campaign, CampaignDailyInsight
+from app.models.dataset_row import DatasetRow
+
+logger = logging.getLogger(__name__)
+
+# Heurística para "Pedido Direto" (ajustável). Marca pedidos cujo canal indica
+# atribuição direta da Shopee. Confirmar regra real com o produto.
+DIRECT_CHANNEL_PATTERN = "%direct%"
+
+
+class CampaignRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    # ----------------------------- campaigns ----------------------------- #
+
+    def list_by_user(self, user_id: int) -> List[Campaign]:
+        return (
+            self.db.query(Campaign)
+            .filter(Campaign.user_id == user_id)
+            .order_by(Campaign.name.asc())
+            .all()
+        )
+
+    def get_by_id(self, campaign_id: int, user_id: int) -> Optional[Campaign]:
+        return (
+            self.db.query(Campaign)
+            .filter(Campaign.id == campaign_id, Campaign.user_id == user_id)
+            .first()
+        )
+
+    def get_by_fb_id(self, user_id: int, fb_campaign_id: str) -> Optional[Campaign]:
+        return (
+            self.db.query(Campaign)
+            .filter(Campaign.user_id == user_id, Campaign.fb_campaign_id == fb_campaign_id)
+            .first()
+        )
+
+    def upsert_campaign(self, user_id: int, fb_campaign_id: str, fields: dict) -> Campaign:
+        """Cria ou atualiza uma campanha pelo (user_id, fb_campaign_id).
+
+        IMPORTANTE: preserva `sub_id` (vínculo manual) entre syncs — só os
+        campos vindos do Facebook são sobrescritos.
+        """
+        existing = self.get_by_fb_id(user_id, fb_campaign_id)
+        if existing:
+            for key, value in fields.items():
+                setattr(existing, key, value)
+            existing.last_synced_at = func.now()
+            self.db.flush()
+            return existing
+
+        campaign = Campaign(
+            user_id=user_id,
+            fb_campaign_id=fb_campaign_id,
+            last_synced_at=func.now(),
+            **fields,
+        )
+        self.db.add(campaign)
+        self.db.flush()
+        return campaign
+
+    def set_sub_id(self, campaign: Campaign, sub_id: Optional[str]) -> Campaign:
+        campaign.sub_id = sub_id
+        self.db.flush()
+        return campaign
+
+    # -------------------------- daily insights --------------------------- #
+
+    def delete_insights_window(self, campaign_id: int, since: date, until: date) -> int:
+        deleted = (
+            self.db.query(CampaignDailyInsight)
+            .filter(
+                CampaignDailyInsight.campaign_id == campaign_id,
+                CampaignDailyInsight.date >= since,
+                CampaignDailyInsight.date <= until,
+            )
+            .delete(synchronize_session="fetch")
+        )
+        self.db.flush()
+        return deleted
+
+    def bulk_create_insights(self, items: List[CampaignDailyInsight]) -> List[CampaignDailyInsight]:
+        if not items:
+            return []
+        self.db.add_all(items)
+        self.db.flush()
+        return items
+
+    def list_insights(
+        self,
+        user_id: int,
+        campaign_id: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[CampaignDailyInsight]:
+        query = (
+            self.db.query(CampaignDailyInsight)
+            .filter(CampaignDailyInsight.user_id == user_id)
+        )
+        if campaign_id is not None:
+            query = query.filter(CampaignDailyInsight.campaign_id == campaign_id)
+        if start_date:
+            query = query.filter(CampaignDailyInsight.date >= start_date)
+        if end_date:
+            query = query.filter(CampaignDailyInsight.date <= end_date)
+        return query.order_by(CampaignDailyInsight.date.desc()).all()
+
+    # ------------------- agregação de comissões (DatasetRow) ------------------- #
+
+    def aggregate_by_subids(
+        self,
+        user_id: int,
+        sub_ids: List[str],
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[str, dict]:
+        """Agrega comissão/faturamento/pedidos de DatasetRow por sub_id1.
+
+        Retorna { sub_id: {commission, revenue, orders, direct_orders} }.
+        """
+        if not sub_ids:
+            return {}
+
+        base = self.db.query(DatasetRow).filter(
+            DatasetRow.user_id == user_id,
+            DatasetRow.sub_id1.in_(sub_ids),
+        )
+        if start_date:
+            base = base.filter(DatasetRow.date >= start_date)
+        if end_date:
+            base = base.filter(DatasetRow.date <= end_date)
+
+        # Agregados de valor + total de pedidos distintos por sub_id.
+        rows = (
+            base.with_entities(
+                DatasetRow.sub_id1.label("sub_id"),
+                func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
+                func.coalesce(func.sum(DatasetRow.revenue), 0.0).label("revenue"),
+                func.count(distinct(DatasetRow.order_id)).label("orders"),
+            )
+            .group_by(DatasetRow.sub_id1)
+            .all()
+        )
+
+        # Pedidos diretos (heurística por canal) por sub_id.
+        direct_rows = (
+            base.filter(DatasetRow.channel.ilike(DIRECT_CHANNEL_PATTERN))
+            .with_entities(
+                DatasetRow.sub_id1.label("sub_id"),
+                func.count(distinct(DatasetRow.order_id)).label("direct_orders"),
+            )
+            .group_by(DatasetRow.sub_id1)
+            .all()
+        )
+        direct_map = {r.sub_id: int(r.direct_orders or 0) for r in direct_rows}
+
+        result: Dict[str, dict] = {}
+        for r in rows:
+            result[r.sub_id] = {
+                "commission": float(r.commission or 0.0),
+                "revenue": float(r.revenue or 0.0),
+                "orders": int(r.orders or 0),
+                "direct_orders": direct_map.get(r.sub_id, 0),
+            }
+        return result
+
+    def daily_by_subid(
+        self,
+        user_id: int,
+        sub_id: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[date, dict]:
+        """Agrega comissão/faturamento/pedidos por dia para um único sub_id."""
+        base = self.db.query(DatasetRow).filter(
+            DatasetRow.user_id == user_id,
+            DatasetRow.sub_id1 == sub_id,
+        )
+        if start_date:
+            base = base.filter(DatasetRow.date >= start_date)
+        if end_date:
+            base = base.filter(DatasetRow.date <= end_date)
+
+        rows = (
+            base.with_entities(
+                DatasetRow.date.label("date"),
+                func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
+                func.coalesce(func.sum(DatasetRow.revenue), 0.0).label("revenue"),
+                func.count(distinct(DatasetRow.order_id)).label("orders"),
+            )
+            .group_by(DatasetRow.date)
+            .all()
+        )
+        return {
+            r.date: {
+                "commission": float(r.commission or 0.0),
+                "revenue": float(r.revenue or 0.0),
+                "orders": int(r.orders or 0),
+            }
+            for r in rows
+        }
