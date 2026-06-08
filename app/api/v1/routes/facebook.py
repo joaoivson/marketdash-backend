@@ -71,8 +71,19 @@ def select_ad_accounts(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Seleciona uma ou mais contas de anúncio de onde as campanhas serão sincronizadas."""
-    return _service(db).select_ad_accounts(current_user.id, payload.account_ids)
+    """Seleciona uma ou mais contas de anúncio e dispara um sync imediato.
+
+    Não há botão de sincronizar: o sync roda automaticamente ao escolher as contas
+    e, depois, de hora em hora via pg_cron.
+    """
+    result = _service(db).select_ad_accounts(current_user.id, payload.account_ids)
+    if result.ad_account_ids:
+        try:
+            from app.tasks.facebook_tasks import sync_facebook_user_task
+            sync_facebook_user_task.delay(current_user.id)
+        except Exception as exc:  # broker indisponível: o cron horário cobre mesmo assim
+            logger.warning("Falha ao enfileirar sync após seleção de contas user_id=%s: %s", current_user.id, exc)
+    return result
 
 
 @router.get("/status", response_model=FacebookIntegrationResponse | None)
