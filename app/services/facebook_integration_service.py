@@ -50,6 +50,13 @@ class FacebookIntegrationService:
         self.repo = repo
         self.db: Session = repo.db
 
+    @staticmethod
+    def _to_response(integration) -> FacebookIntegrationResponse:
+        """Monta a resposta incluindo a lista de contas (ad_account_ids)."""
+        resp = FacebookIntegrationResponse.model_validate(integration)
+        resp.ad_account_ids = integration.account_ids_list()
+        return resp
+
     # ------------------------------------------------------------------ #
     #  OAuth                                                              #
     # ------------------------------------------------------------------ #
@@ -94,7 +101,7 @@ class FacebookIntegrationService:
         )
         self.db.commit()
         self.db.refresh(integration)
-        return FacebookIntegrationResponse.model_validate(integration)
+        return self._to_response(integration)
 
     # ------------------------------------------------------------------ #
     #  Conta de anúncios                                                  #
@@ -134,13 +141,23 @@ class FacebookIntegrationService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integração Facebook não encontrada.")
         self.db.commit()
         self.db.refresh(integration)
-        return FacebookIntegrationResponse.model_validate(integration)
+        return self._to_response(integration)
+
+    def select_ad_accounts(self, user_id: int, account_ids: list[str]) -> FacebookIntegrationResponse:
+        """Salva uma ou mais contas de anúncio selecionadas (checkboxes)."""
+        normalized = [a if a.startswith("act_") else f"act_{a}" for a in account_ids if a]
+        integration = self.repo.set_ad_accounts(user_id, normalized)
+        if not integration:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integração Facebook não encontrada.")
+        self.db.commit()
+        self.db.refresh(integration)
+        return self._to_response(integration)
 
     def get_status(self, user_id: int) -> Optional[FacebookIntegrationResponse]:
         integration = self.repo.get_by_user_id(user_id)
         if not integration:
             return None
-        return FacebookIntegrationResponse.model_validate(integration)
+        return self._to_response(integration)
 
     def disconnect(self, user_id: int) -> None:
         deleted = self.repo.delete_by_user_id(user_id)
@@ -173,83 +190,91 @@ class FacebookIntegrationService:
         Retorna o número de campanhas processadas. Atualiza last_sync_at.
         """
         integration = self.repo.get_by_user_id(user_id)
-        if not integration or not integration.is_active or not integration.ad_account_id:
+        account_ids = integration.account_ids_list() if integration else []
+        if not integration or not integration.is_active or not account_ids:
             logger.info("Facebook sync ignorado user_id=%s (sem integração/conta ativa)", user_id)
             return 0
 
         token = decrypt_value(integration.encrypted_access_token)
-        ad_account_id = integration.ad_account_id
         camp_repo = CampaignRepository(db)
 
         now = datetime.now(BRT)
         since = (now - timedelta(days=SYNC_WINDOW_DAYS)).date()
         until = now.date()
 
-        try:
-            campaigns = await fb.list_campaigns(token, ad_account_id)
-        except HTTPException:
-            db.rollback()
-            raise
-
         processed = 0
-        for c in campaigns:
-            fb_campaign_id = str(c.get("id") or "")
-            if not fb_campaign_id:
+        for ad_account_id in account_ids:
+            try:
+                campaigns = await fb.list_campaigns(token, ad_account_id)
+            except HTTPException as exc:
+                # Não aborta o sync inteiro se uma conta falhar — segue para a próxima.
+                logger.warning(
+                    "Facebook list_campaigns falhou user_id=%s conta=%s: %s",
+                    user_id, ad_account_id, exc.detail,
+                )
                 continue
 
-            campaign = camp_repo.upsert_campaign(
-                user_id=user_id,
-                fb_campaign_id=fb_campaign_id,
-                fields={
-                    "ad_account_id": ad_account_id,
-                    "name": c.get("name") or "(sem nome)",
-                    "objective": c.get("objective"),
-                    "status": c.get("status"),
-                    "effective_status": c.get("effective_status"),
-                    "daily_budget": _budget_to_brl(c.get("daily_budget")),
-                    "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
-                },
-            )
-
-            # Insights diários: full refresh da janela para garantir valores atuais.
-            try:
-                insights = await fb.get_campaign_insights(
-                    token, fb_campaign_id, since.isoformat(), until.isoformat()
-                )
-            except HTTPException as exc:
-                logger.warning(
-                    "Facebook insights falhou user_id=%s campaign=%s: %s",
-                    user_id, fb_campaign_id, exc.detail,
-                )
-                insights = []
-
-            camp_repo.delete_insights_window(campaign.id, since, until)
-
-            rows: list[CampaignDailyInsight] = []
-            for ins in insights:
-                day_str = ins.get("date_start")
-                try:
-                    day = date.fromisoformat(day_str)
-                except (TypeError, ValueError):
+            for c in campaigns:
+                fb_campaign_id = str(c.get("id") or "")
+                if not fb_campaign_id:
                     continue
-                rows.append(
-                    CampaignDailyInsight(
-                        user_id=user_id,
-                        campaign_id=campaign.id,
-                        fb_campaign_id=fb_campaign_id,
-                        date=day,
-                        spend=_to_float(ins.get("spend")),
-                        clicks=_to_int(ins.get("clicks")),
-                        impressions=_to_int(ins.get("impressions")),
-                        cpc=_to_float(ins.get("cpc")) or None,
-                        ctr=_to_float(ins.get("ctr")) or None,
-                        reach=_to_int(ins.get("reach")) or None,
-                    )
+
+                campaign = camp_repo.upsert_campaign(
+                    user_id=user_id,
+                    fb_campaign_id=fb_campaign_id,
+                    fields={
+                        "ad_account_id": ad_account_id,
+                        "name": c.get("name") or "(sem nome)",
+                        "objective": c.get("objective"),
+                        "status": c.get("status"),
+                        "effective_status": c.get("effective_status"),
+                        "daily_budget": _budget_to_brl(c.get("daily_budget")),
+                        "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
+                    },
                 )
-            camp_repo.bulk_create_insights(rows)
-            processed += 1
+
+                # Insights diários: full refresh da janela para garantir valores atuais.
+                try:
+                    insights = await fb.get_campaign_insights(
+                        token, fb_campaign_id, since.isoformat(), until.isoformat()
+                    )
+                except HTTPException as exc:
+                    logger.warning(
+                        "Facebook insights falhou user_id=%s campaign=%s: %s",
+                        user_id, fb_campaign_id, exc.detail,
+                    )
+                    insights = []
+
+                camp_repo.delete_insights_window(campaign.id, since, until)
+
+                rows: list[CampaignDailyInsight] = []
+                for ins in insights:
+                    day_str = ins.get("date_start")
+                    try:
+                        day = date.fromisoformat(day_str)
+                    except (TypeError, ValueError):
+                        continue
+                    rows.append(
+                        CampaignDailyInsight(
+                            user_id=user_id,
+                            campaign_id=campaign.id,
+                            fb_campaign_id=fb_campaign_id,
+                            date=day,
+                            spend=_to_float(ins.get("spend")),
+                            clicks=_to_int(ins.get("clicks")),
+                            impressions=_to_int(ins.get("impressions")),
+                            cpc=_to_float(ins.get("cpc")) or None,
+                            ctr=_to_float(ins.get("ctr")) or None,
+                            reach=_to_int(ins.get("reach")) or None,
+                        )
+                    )
+                camp_repo.bulk_create_insights(rows)
+                processed += 1
 
         self.repo.update_last_sync(user_id)
         db.commit()
-        logger.info("Facebook sync concluído user_id=%s: %d campanhas", user_id, processed)
+        logger.info(
+            "Facebook sync concluído user_id=%s: %d campanhas (%d contas)",
+            user_id, processed, len(account_ids),
+        )
         return processed

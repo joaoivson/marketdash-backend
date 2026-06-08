@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -29,12 +29,19 @@ class FacebookAdAccountSelect(BaseModel):
     ad_account_name: Optional[str] = None
 
 
+class FacebookAdAccountsSelect(BaseModel):
+    """Seleção de uma ou mais contas de anúncio (formato 'act_123' ou só o número)."""
+    account_ids: List[str]
+
+
 class FacebookIntegrationResponse(BaseModel):
     id: int
     user_id: int
     fb_user_name: Optional[str] = None
     ad_account_id: Optional[str] = None
     ad_account_name: Optional[str] = None
+    # Contas selecionadas (preenchido pelo service a partir de account_ids_list()).
+    ad_account_ids: List[str] = []
     is_active: bool
     last_sync_at: Optional[datetime] = None
     token_expires_at: Optional[datetime] = None

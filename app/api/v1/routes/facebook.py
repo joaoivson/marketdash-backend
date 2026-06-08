@@ -10,6 +10,7 @@ from app.repositories.facebook_integration_repository import FacebookIntegration
 from app.schemas.facebook_integration import (
     FacebookAdAccount,
     FacebookAdAccountSelect,
+    FacebookAdAccountsSelect,
     FacebookIntegrationResponse,
     FacebookOAuthCallback,
     FacebookOAuthUrlResponse,
@@ -60,8 +61,18 @@ def select_ad_account(
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
-    """Seleciona a conta de anúncio de onde as campanhas serão sincronizadas."""
+    """[Legado] Seleciona UMA conta de anúncio."""
     return _service(db).select_ad_account(current_user.id, payload.ad_account_id, payload.ad_account_name)
+
+
+@router.put("/ad-accounts", response_model=FacebookIntegrationResponse)
+def select_ad_accounts(
+    payload: FacebookAdAccountsSelect,
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    """Seleciona uma ou mais contas de anúncio de onde as campanhas serão sincronizadas."""
+    return _service(db).select_ad_accounts(current_user.id, payload.account_ids)
 
 
 @router.get("/status", response_model=FacebookIntegrationResponse | None)
@@ -91,10 +102,10 @@ def manual_sync(
     """Enfileira a sincronização de campanhas/insights no Celery worker (202 imediato)."""
     svc = _service(db)
     status_obj = svc.get_status(current_user.id)
-    if not status_obj or not status_obj.ad_account_id:
+    if not status_obj or not status_obj.ad_account_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Conecte o Facebook e selecione uma conta de anúncio antes de sincronizar.",
+            detail="Conecte o Facebook e selecione ao menos uma conta de anúncio antes de sincronizar.",
         )
     from app.tasks.facebook_tasks import sync_facebook_user_task
     task = sync_facebook_user_task.delay(current_user.id)

@@ -1,7 +1,9 @@
+import json
 import logging
 from datetime import datetime
 from typing import List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
@@ -22,12 +24,15 @@ class FacebookIntegrationRepository:
         )
 
     def get_all_active(self) -> List[FacebookIntegration]:
-        """Integrações ativas com conta selecionada — usado pelo job diário."""
+        """Integrações ativas com ao menos uma conta selecionada — usado pelo cron."""
         return (
             self.db.query(FacebookIntegration)
             .filter(
                 FacebookIntegration.is_active == True,  # noqa: E712
-                FacebookIntegration.ad_account_id.isnot(None),
+                or_(
+                    FacebookIntegration.ad_accounts_json.isnot(None),
+                    FacebookIntegration.ad_account_id.isnot(None),
+                ),
             )
             .all()
         )
@@ -71,6 +76,17 @@ class FacebookIntegrationRepository:
             return None
         integration.ad_account_id = ad_account_id
         integration.ad_account_name = ad_account_name
+        self.db.flush()
+        return integration
+
+    def set_ad_accounts(self, user_id: int, account_ids: List[str]) -> Optional[FacebookIntegration]:
+        """Salva a lista de contas selecionadas (JSON). Mantém ad_account_id legado = primeira."""
+        integration = self.get_by_user_id(user_id)
+        if not integration:
+            return None
+        ids = [a for a in account_ids if a]
+        integration.ad_accounts_json = json.dumps(ids) if ids else None
+        integration.ad_account_id = ids[0] if ids else None
         self.db.flush()
         return integration
 

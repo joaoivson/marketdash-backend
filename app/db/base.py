@@ -10,6 +10,7 @@ def _apply_safe_migrations(engine, logger):
     """Add missing columns to existing tables. Each statement is idempotent."""
     migrations = [
         "ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS facebook_pixel_id VARCHAR",
+        "ALTER TABLE facebook_integrations ADD COLUMN IF NOT EXISTS ad_accounts_json TEXT",
     ]
     from sqlalchemy import text
     try:

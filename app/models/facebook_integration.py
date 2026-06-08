@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -25,9 +27,12 @@ class FacebookIntegration(Base):
     encrypted_access_token = Column(Text, nullable=False)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Conta de anúncios selecionada (formato "act_123456789")
+    # Conta de anúncios "principal" (legado/compat — primeira selecionada). Formato "act_123".
     ad_account_id = Column(String(64), nullable=True)
     ad_account_name = Column(String(255), nullable=True)
+
+    # Múltiplas contas selecionadas (JSON: ["act_123", "act_456"]). Fonte da verdade do sync.
+    ad_accounts_json = Column(Text, nullable=True)
 
     # Escopos concedidos no OAuth (csv) — ex: "ads_read,ads_management"
     scopes = Column(Text, nullable=True)
@@ -39,3 +44,14 @@ class FacebookIntegration(Base):
 
     # Relationship
     user = relationship("User", back_populates="facebook_integration")
+
+    def account_ids_list(self) -> list[str]:
+        """Lista de contas selecionadas (act_...). Faz fallback para a coluna legada."""
+        if self.ad_accounts_json:
+            try:
+                value = json.loads(self.ad_accounts_json)
+                if isinstance(value, list):
+                    return [str(x) for x in value if x]
+            except (ValueError, TypeError):
+                pass
+        return [self.ad_account_id] if self.ad_account_id else []
