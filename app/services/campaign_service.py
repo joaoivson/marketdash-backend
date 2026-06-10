@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import date
 from typing import List, Optional
 
@@ -14,6 +15,8 @@ from app.schemas.campaign import (
     CampaignListResponse,
     CampaignMetrics,
     CampaignResponse,
+    SubIdOption,
+    SubIdOptionsResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,6 +24,12 @@ logger = logging.getLogger(__name__)
 # Limiar de ROAS para classificar a saúde da campanha (ver faixa de cor no mockup).
 ROAS_HEALTHY = 1.5
 ROAS_BREAKEVEN = 1.0
+
+# Filtros de status aceitos pela lista (situação real no Meta).
+STATUS_FILTERS = ("all", "active", "paused")
+
+# Parte textual de um sub_id (ex.: "legging500280526" -> "legging"), ignorando os números.
+_SUBID_WORD_RE = re.compile(r"[a-zA-Z]+")
 
 
 def _is_active(campaign: Campaign) -> bool:
@@ -88,16 +97,19 @@ class CampaignService:
         user_id: int,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
-        only_active: bool = False,
+        status_filter: str = "all",
         search: Optional[str] = None,
     ) -> CampaignListResponse:
+        status_filter = status_filter if status_filter in STATUS_FILTERS else "all"
         campaigns = self.repo.list_by_user(user_id)
 
         if search:
             term = search.strip().lower()
             campaigns = [c for c in campaigns if term in (c.name or "").lower()]
-        if only_active:
+        if status_filter == "active":
             campaigns = [c for c in campaigns if _is_active(c)]
+        elif status_filter == "paused":
+            campaigns = [c for c in campaigns if not _is_active(c)]
 
         # Insights agregados por campaign_id no período.
         insights = self.repo.list_insights(user_id, start_date=start_date, end_date=end_date)
@@ -108,7 +120,7 @@ class CampaignService:
             agg["clicks"] += ins.clicks or 0
             agg["impressions"] += ins.impressions or 0
 
-        # Comissões agregadas pelos sub_ids vinculados.
+        # Comissões agregadas pelos sub_ids vinculados (mesmo recorte de período do gasto).
         linked_sub_ids = [c.sub_id for c in campaigns if c.sub_id]
         comm_map = self.repo.aggregate_by_subids(user_id, linked_sub_ids, start_date, end_date)
 
@@ -116,13 +128,66 @@ class CampaignService:
         for c in campaigns:
             agg = spend_map.get(c.id, {"spend": 0.0, "clicks": 0, "impressions": 0})
             comm = comm_map.get(c.sub_id, {}) if c.sub_id else {}
+            # Só entram campanhas com movimentação no período: gasto, entrega (cliques/
+            # impressões) ou venda atribuída ao sub_id vinculado. Remove as zeradas.
+            has_movement = (
+                agg["spend"] > 0
+                or agg["clicks"] > 0
+                or agg["impressions"] > 0
+                or comm.get("orders", 0) > 0
+            )
+            if not has_movement:
+                continue
             responses.append(self._build_response(c, agg["spend"], agg["clicks"], agg["impressions"], comm))
 
-        # Ordena: pior ROAS primeiro (igual ao mockup desktop), não vinculadas no topo.
-        responses.sort(key=lambda r: (r.linked, r.metrics.roas if r.metrics.spend > 0 else float("inf")))
+        # Ordena por maior gasto no topo. Vínculo não afeta a ordem.
+        responses.sort(key=lambda r: r.metrics.spend, reverse=True)
 
         kpis = self._compute_kpis(responses)
         return CampaignListResponse(kpis=kpis, campaigns=responses)
+
+    def sub_id_options(self, user_id: int, campaign_id: int) -> SubIdOptionsResponse:
+        """Sub IDs com histórico de venda para o modal de vínculo.
+
+        Ordena: primeiro os sugeridos (nome-base bate com o nome da campanha),
+        por nº de pedidos desc; depois os demais, também por pedidos desc. Sub IDs
+        já vinculados a OUTRA campanha vêm marcados (o frontend bloqueia).
+        """
+        campaign = self.repo.get_by_id(campaign_id, user_id)
+        if not campaign:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada.")
+
+        summary = self.repo.sub_id_sales_summary(user_id)
+        linked = self.repo.linked_sub_ids(user_id)
+        name_lower = (campaign.name or "").lower()
+
+        options: List[SubIdOption] = []
+        for row in summary:
+            sub = row["sub_id"]
+            match = _SUBID_WORD_RE.match(sub or "")
+            word = match.group(0).lower() if match else ""
+            suggested = len(word) >= 3 and word in name_lower
+
+            link = linked.get(sub)
+            # O vínculo atual da própria campanha não conta como "vinculado a outra".
+            if link and link[0] != campaign.id:
+                linked_campaign_id, linked_campaign_name = link
+            else:
+                linked_campaign_id, linked_campaign_name = None, None
+
+            options.append(
+                SubIdOption(
+                    sub_id=sub,
+                    orders=row["orders"],
+                    commission=round(row["commission"], 2),
+                    suggested=suggested,
+                    linked_campaign_id=linked_campaign_id,
+                    linked_campaign_name=linked_campaign_name,
+                )
+            )
+
+        options.sort(key=lambda o: (not o.suggested, -o.orders))
+        return SubIdOptionsResponse(options=options)
 
     def _compute_kpis(self, responses: List[CampaignResponse]) -> CampaignKPIs:
         total_spend = sum(r.metrics.spend for r in responses)
@@ -187,13 +252,44 @@ class CampaignService:
 
         return CampaignDetailResponse(campaign=response, daily=daily)
 
-    def set_link(self, user_id: int, campaign_id: int, sub_id: Optional[str]) -> CampaignResponse:
+    def set_link(
+        self,
+        user_id: int,
+        campaign_id: int,
+        sub_id: Optional[str],
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> CampaignResponse:
         campaign = self.repo.get_by_id(campaign_id, user_id)
         if not campaign:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada.")
+
         normalized = sub_id.strip() if sub_id and sub_id.strip() else None
+
+        # Vínculo é 1:1 — um Sub ID só pode pertencer a uma campanha.
+        if normalized:
+            owner = self.repo.find_by_sub_id(user_id, normalized, exclude_campaign_id=campaign_id)
+            if owner:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f'O Sub ID "{normalized}" já está vinculado à campanha "{owner.name}".',
+                )
+
         self.repo.set_sub_id(campaign, normalized)
         self.db.commit()
         self.db.refresh(campaign)
-        # Retorna sem métricas pesadas recalculadas — frontend recarrega a lista.
-        return self._build_response(campaign, 0.0, 0, 0, {})
+
+        # Recalcula na hora, no MESMO recorte de período da tela: gasto (Facebook) +
+        # comissão/pedidos (Shopee via sub_id). Assim a linha já mostra ROAS/lucro corretos.
+        insights = self.repo.list_insights(
+            user_id, campaign_id=campaign.id, start_date=start_date, end_date=end_date
+        )
+        spend = sum(i.spend or 0.0 for i in insights)
+        clicks = sum(i.clicks or 0 for i in insights)
+        impressions = sum(i.impressions or 0 for i in insights)
+        comm = (
+            self.repo.aggregate_by_subids(user_id, [normalized], start_date, end_date).get(normalized, {})
+            if normalized
+            else {}
+        )
+        return self._build_response(campaign, spend, clicks, impressions, comm)

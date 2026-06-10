@@ -72,6 +72,26 @@ class CampaignRepository:
         self.db.flush()
         return campaign
 
+    def find_by_sub_id(
+        self, user_id: int, sub_id: str, exclude_campaign_id: Optional[int] = None
+    ) -> Optional[Campaign]:
+        """Campanha (do usuário) já vinculada a `sub_id`. Usado para garantir o vínculo 1:1."""
+        query = self.db.query(Campaign).filter(
+            Campaign.user_id == user_id, Campaign.sub_id == sub_id
+        )
+        if exclude_campaign_id is not None:
+            query = query.filter(Campaign.id != exclude_campaign_id)
+        return query.first()
+
+    def linked_sub_ids(self, user_id: int) -> Dict[str, tuple]:
+        """{ sub_id: (campaign_id, campaign_name) } de todas as campanhas já vinculadas."""
+        rows = (
+            self.db.query(Campaign.id, Campaign.name, Campaign.sub_id)
+            .filter(Campaign.user_id == user_id, Campaign.sub_id.isnot(None))
+            .all()
+        )
+        return {r.sub_id: (r.id, r.name) for r in rows}
+
     # -------------------------- daily insights --------------------------- #
 
     def delete_insights_window(self, campaign_id: int, since: date, until: date) -> int:
@@ -207,3 +227,31 @@ class CampaignRepository:
             }
             for r in rows
         }
+
+    def sub_id_sales_summary(self, user_id: int) -> List[dict]:
+        """Todos os sub_ids do usuário que JÁ tiveram venda (histórico, sem recorte de período).
+
+        Retorna [{sub_id, orders, commission}] — usado pelo modal de vínculo.
+        """
+        rows = (
+            self.db.query(
+                DatasetRow.sub_id1.label("sub_id"),
+                func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
+                func.count(distinct(DatasetRow.order_id)).label("orders"),
+            )
+            .filter(
+                DatasetRow.user_id == user_id,
+                DatasetRow.sub_id1.isnot(None),
+                DatasetRow.sub_id1 != "",
+            )
+            .group_by(DatasetRow.sub_id1)
+            .all()
+        )
+        return [
+            {
+                "sub_id": r.sub_id,
+                "orders": int(r.orders or 0),
+                "commission": float(r.commission or 0.0),
+            }
+            for r in rows
+        ]

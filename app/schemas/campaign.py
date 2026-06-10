@@ -74,6 +74,22 @@ class CampaignDetailResponse(BaseModel):
     daily: List[CampaignDailyPoint]
 
 
+class SubIdOption(BaseModel):
+    """Um Sub ID com histórico de venda, oferecido no modal de vínculo."""
+    sub_id: str
+    orders: int = 0
+    commission: float = 0.0
+    # True quando o nome-base do sub_id aparece no nome da campanha (sugestão).
+    suggested: bool = False
+    # Preenchidos quando o sub_id já está vinculado a OUTRA campanha (bloqueado).
+    linked_campaign_id: Optional[int] = None
+    linked_campaign_name: Optional[str] = None
+
+
+class SubIdOptionsResponse(BaseModel):
+    options: List[SubIdOption]
+
+
 # ------------------------------ updates ------------------------------ #
 
 
