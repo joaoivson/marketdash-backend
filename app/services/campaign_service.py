@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.models.campaign import Campaign
 from app.repositories.campaign_repository import CampaignRepository
+from app.repositories.user_settings_repository import UserSettingsRepository
+from app.services.user_settings_service import UserSettingsService
 from app.schemas.campaign import (
     CampaignDailyPoint,
     CampaignDetailResponse,
@@ -49,23 +51,41 @@ def _health(linked: bool, spend: float, roas: float) -> str:
     return "healthy"
 
 
-def _compute_metrics(spend: float, clicks: int, impressions: int, comm: dict) -> CampaignMetrics:
+def _compute_metrics(
+    spend: float,
+    clicks: int,
+    impressions: int,
+    comm: dict,
+    ad_rate: float = 0.0,
+    comm_rate: float = 0.0,
+) -> CampaignMetrics:
+    """ad_rate/comm_rate são FRAÇÕES (ex.: 0.18). Sem imposto = 0 → líquido == bruto."""
     commission = comm.get("commission", 0.0)
     revenue = comm.get("revenue", 0.0)
     orders = comm.get("orders", 0)
     direct_orders = comm.get("direct_orders", 0)
+
+    spend_with_tax = spend * (1 + ad_rate)
+    commission_net = commission * (1 - comm_rate)
+    profit = commission_net - spend_with_tax
+    # ROAS Real do afiliado = comissão líquida / gasto com imposto (breakeven 1.0x).
+    # NÃO usa revenue (faturamento), que inflava o ROAS (27x). Comissão é o que entra no bolso.
+    roas = round(commission_net / spend_with_tax, 2) if spend_with_tax > 0 else 0.0
+
     return CampaignMetrics(
         spend=round(spend, 2),
+        spend_with_tax=round(spend_with_tax, 2),
         clicks=clicks,
         impressions=impressions,
         cpc=round(spend / clicks, 2) if clicks > 0 else None,
         ctr=round(clicks / impressions * 100, 2) if impressions > 0 else None,
         commission=round(commission, 2),
+        commission_net=round(commission_net, 2),
         revenue=round(revenue, 2),
         orders=orders,
         direct_orders=direct_orders,
-        profit=round(commission - spend, 2),
-        roas=round(revenue / spend, 2) if spend > 0 else 0.0,
+        profit=round(profit, 2),
+        roas=roas,
     )
 
 
@@ -74,9 +94,25 @@ class CampaignService:
         self.repo = repo
         self.db: Session = repo.db
 
-    def _build_response(self, campaign: Campaign, spend: float, clicks: int, impressions: int, comm: dict) -> CampaignResponse:
+    def _tax_rates(self, user_id: int) -> tuple:
+        """Retorna (ad_rate, comm_rate, has_tax) — frações. has_tax=False se ambos 0."""
+        s = UserSettingsService(UserSettingsRepository(self.db)).get_settings(user_id)
+        ad_rate = (s.get("ad_tax_rate") or 0.0) / 100.0
+        comm_rate = (s.get("commission_tax_rate") or 0.0) / 100.0
+        return ad_rate, comm_rate, (ad_rate > 0 or comm_rate > 0)
+
+    def _build_response(
+        self,
+        campaign: Campaign,
+        spend: float,
+        clicks: int,
+        impressions: int,
+        comm: dict,
+        ad_rate: float = 0.0,
+        comm_rate: float = 0.0,
+    ) -> CampaignResponse:
         linked = bool(campaign.sub_id)
-        metrics = _compute_metrics(spend, clicks, impressions, comm)
+        metrics = _compute_metrics(spend, clicks, impressions, comm, ad_rate, comm_rate)
         return CampaignResponse(
             id=campaign.id,
             fb_campaign_id=campaign.fb_campaign_id,
@@ -101,6 +137,7 @@ class CampaignService:
         search: Optional[str] = None,
     ) -> CampaignListResponse:
         status_filter = status_filter if status_filter in STATUS_FILTERS else "all"
+        ad_rate, comm_rate, has_tax = self._tax_rates(user_id)
         campaigns = self.repo.list_by_user(user_id)
 
         if search:
@@ -138,13 +175,15 @@ class CampaignService:
             )
             if not has_movement:
                 continue
-            responses.append(self._build_response(c, agg["spend"], agg["clicks"], agg["impressions"], comm))
+            responses.append(
+                self._build_response(c, agg["spend"], agg["clicks"], agg["impressions"], comm, ad_rate, comm_rate)
+            )
 
         # Ordena por maior gasto no topo. Vínculo não afeta a ordem.
         responses.sort(key=lambda r: r.metrics.spend, reverse=True)
 
         kpis = self._compute_kpis(responses)
-        return CampaignListResponse(kpis=kpis, campaigns=responses)
+        return CampaignListResponse(kpis=kpis, campaigns=responses, has_tax=has_tax)
 
     def sub_id_options(self, user_id: int, campaign_id: int) -> SubIdOptionsResponse:
         """Sub IDs com histórico de venda para o modal de vínculo.
@@ -193,14 +232,17 @@ class CampaignService:
         total_spend = sum(r.metrics.spend for r in responses)
         total_clicks = sum(r.metrics.clicks for r in responses)
         total_commission = sum(r.metrics.commission for r in responses)
-        total_revenue = sum(r.metrics.revenue for r in responses)
+        total_spend_with_tax = sum(r.metrics.spend_with_tax for r in responses)
+        total_commission_net = sum(r.metrics.commission_net for r in responses)
         total_daily_budget = sum(r.daily_budget or 0.0 for r in responses if r.is_active)
         return CampaignKPIs(
             avg_cpc=round(total_spend / total_clicks, 2) if total_clicks > 0 else None,
             total_spend=round(total_spend, 2),
+            total_spend_with_tax=round(total_spend_with_tax, 2),
             total_commission=round(total_commission, 2),
-            total_profit=round(total_commission - total_spend, 2),
-            avg_roas=round(total_revenue / total_spend, 2) if total_spend > 0 else 0.0,
+            total_commission_net=round(total_commission_net, 2),
+            total_profit=round(total_commission_net - total_spend_with_tax, 2),
+            avg_roas=round(total_commission_net / total_spend_with_tax, 2) if total_spend_with_tax > 0 else 0.0,
             total_daily_budget=round(total_daily_budget, 2),
         )
 
@@ -215,6 +257,7 @@ class CampaignService:
         if not campaign:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada.")
 
+        ad_rate, comm_rate, has_tax = self._tax_rates(user_id)
         insights = self.repo.list_insights(user_id, campaign_id=campaign_id, start_date=start_date, end_date=end_date)
         total_spend = sum(i.spend or 0.0 for i in insights)
         total_clicks = sum(i.clicks or 0 for i in insights)
@@ -224,9 +267,9 @@ class CampaignService:
             self.repo.aggregate_by_subids(user_id, [campaign.sub_id], start_date, end_date).get(campaign.sub_id, {})
             if campaign.sub_id else {}
         )
-        response = self._build_response(campaign, total_spend, total_clicks, total_impr, comm)
+        response = self._build_response(campaign, total_spend, total_clicks, total_impr, comm, ad_rate, comm_rate)
 
-        # Dia a dia: combina insights (FB) com comissões (DatasetRow) por data.
+        # Dia a dia: combina insights (FB) com comissões (DatasetRow) por data. Já com imposto.
         daily_comm = self.repo.daily_by_subid(user_id, campaign.sub_id, start_date, end_date) if campaign.sub_id else {}
         daily: List[CampaignDailyPoint] = []
         for ins in sorted(insights, key=lambda i: i.date, reverse=True):
@@ -234,23 +277,27 @@ class CampaignService:
             spend = ins.spend or 0.0
             commission = c.get("commission", 0.0)
             revenue = c.get("revenue", 0.0)
+            spend_wt = spend * (1 + ad_rate)
+            comm_net = commission * (1 - comm_rate)
             daily.append(
                 CampaignDailyPoint(
                     date=ins.date,
                     spend=round(spend, 2),
+                    spend_with_tax=round(spend_wt, 2),
                     clicks=ins.clicks or 0,
                     impressions=ins.impressions or 0,
                     cpc=round(spend / ins.clicks, 2) if ins.clicks else None,
                     ctr=ins.ctr,
                     commission=round(commission, 2),
+                    commission_net=round(comm_net, 2),
                     revenue=round(revenue, 2),
                     orders=c.get("orders", 0),
-                    profit=round(commission - spend, 2),
-                    roas=round(revenue / spend, 2) if spend > 0 else 0.0,
+                    profit=round(comm_net - spend_wt, 2),
+                    roas=round(comm_net / spend_wt, 2) if spend_wt > 0 else 0.0,
                 )
             )
 
-        return CampaignDetailResponse(campaign=response, daily=daily)
+        return CampaignDetailResponse(campaign=response, daily=daily, has_tax=has_tax)
 
     def set_link(
         self,
@@ -292,4 +339,5 @@ class CampaignService:
             if normalized
             else {}
         )
-        return self._build_response(campaign, spend, clicks, impressions, comm)
+        ad_rate, comm_rate, _ = self._tax_rates(user_id)
+        return self._build_response(campaign, spend, clicks, impressions, comm, ad_rate, comm_rate)

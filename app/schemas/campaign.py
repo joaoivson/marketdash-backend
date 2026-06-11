@@ -7,16 +7,18 @@ from pydantic import BaseModel
 class CampaignDailyPoint(BaseModel):
     """Uma linha do 'dia a dia' de uma campanha, no período filtrado."""
     date: date_type
-    spend: float = 0.0
+    spend: float = 0.0               # gasto bruto (sem imposto)
+    spend_with_tax: float = 0.0      # gasto com imposto (= spend se sem imposto)
     clicks: int = 0
     impressions: int = 0
     cpc: Optional[float] = None
     ctr: Optional[float] = None
-    commission: float = 0.0
+    commission: float = 0.0          # comissão bruta
+    commission_net: float = 0.0      # comissão líquida (= commission se sem imposto)
     revenue: float = 0.0
     orders: int = 0
-    profit: float = 0.0
-    roas: float = 0.0
+    profit: float = 0.0              # lucro líquido = commission_net - spend_with_tax
+    roas: float = 0.0                # ROAS Real = commission_net / spend_with_tax
 
 
 class CampaignMetrics(BaseModel):
@@ -25,17 +27,19 @@ class CampaignMetrics(BaseModel):
     Gasto/CPC/CTR/cliques/impressões vêm do Facebook (CampaignDailyInsight).
     Comissão/faturamento/pedidos vêm de DatasetRow via o vínculo sub_id.
     """
-    spend: float = 0.0
+    spend: float = 0.0               # gasto bruto (sem imposto)
+    spend_with_tax: float = 0.0      # gasto com imposto (= spend se sem imposto)
     clicks: int = 0
     impressions: int = 0
     cpc: Optional[float] = None
     ctr: Optional[float] = None
-    commission: float = 0.0
+    commission: float = 0.0          # comissão bruta
+    commission_net: float = 0.0      # comissão líquida (= commission se sem imposto)
     revenue: float = 0.0
     orders: int = 0
     direct_orders: int = 0
-    profit: float = 0.0
-    roas: float = 0.0
+    profit: float = 0.0              # lucro líquido = commission_net - spend_with_tax
+    roas: float = 0.0                # ROAS Real = commission_net / spend_with_tax
 
 
 class CampaignResponse(BaseModel):
@@ -57,21 +61,26 @@ class CampaignResponse(BaseModel):
 class CampaignKPIs(BaseModel):
     """KPIs do topo da tela Campanhas (agregados do período)."""
     avg_cpc: Optional[float] = None
-    total_spend: float = 0.0
-    total_commission: float = 0.0
-    total_profit: float = 0.0
-    avg_roas: float = 0.0
+    total_spend: float = 0.0                 # gasto bruto
+    total_spend_with_tax: float = 0.0        # gasto com imposto
+    total_commission: float = 0.0            # comissão bruta
+    total_commission_net: float = 0.0        # comissão líquida
+    total_profit: float = 0.0                # lucro líquido
+    avg_roas: float = 0.0                     # ROAS Real médio
     total_daily_budget: float = 0.0
 
 
 class CampaignListResponse(BaseModel):
     kpis: CampaignKPIs
     campaigns: List[CampaignResponse]
+    # True quando o usuário cadastrou imposto (front mostra bruto+líquido lado a lado).
+    has_tax: bool = False
 
 
 class CampaignDetailResponse(BaseModel):
     campaign: CampaignResponse
     daily: List[CampaignDailyPoint]
+    has_tax: bool = False
 
 
 class SubIdOption(BaseModel):
