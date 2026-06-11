@@ -15,6 +15,17 @@ logger = logging.getLogger(__name__)
 DIRECT_CHANNEL_PATTERN = "%direct%"
 
 
+def _norm_sub_id():
+    """Normaliza o sub_id1 removendo os separadores vazios finais da Shopee.
+
+    A Shopee grava o utmContent como 'subid1-subid2-...-subid5'; com só o subid1
+    preenchido, sobra '----' no fim (ex.: 'basecoreana100280526----'). Removemos os
+    '-' finais para casar com o sub_id "limpo" que o usuário vincula à campanha e
+    para exibir valores legíveis no modal.
+    """
+    return func.rtrim(DatasetRow.sub_id1, "-")
+
+
 class CampaignRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -149,24 +160,25 @@ class CampaignRepository:
         if not sub_ids:
             return {}
 
+        norm = _norm_sub_id()
         base = self.db.query(DatasetRow).filter(
             DatasetRow.user_id == user_id,
-            DatasetRow.sub_id1.in_(sub_ids),
+            norm.in_(sub_ids),
         )
         if start_date:
             base = base.filter(DatasetRow.date >= start_date)
         if end_date:
             base = base.filter(DatasetRow.date <= end_date)
 
-        # Agregados de valor + total de pedidos distintos por sub_id.
+        # Agregados de valor + total de pedidos distintos por sub_id (normalizado).
         rows = (
             base.with_entities(
-                DatasetRow.sub_id1.label("sub_id"),
+                norm.label("sub_id"),
                 func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
                 func.coalesce(func.sum(DatasetRow.revenue), 0.0).label("revenue"),
                 func.count(distinct(DatasetRow.order_id)).label("orders"),
             )
-            .group_by(DatasetRow.sub_id1)
+            .group_by(norm)
             .all()
         )
 
@@ -174,10 +186,10 @@ class CampaignRepository:
         direct_rows = (
             base.filter(DatasetRow.channel.ilike(DIRECT_CHANNEL_PATTERN))
             .with_entities(
-                DatasetRow.sub_id1.label("sub_id"),
+                norm.label("sub_id"),
                 func.count(distinct(DatasetRow.order_id)).label("direct_orders"),
             )
-            .group_by(DatasetRow.sub_id1)
+            .group_by(norm)
             .all()
         )
         direct_map = {r.sub_id: int(r.direct_orders or 0) for r in direct_rows}
@@ -202,7 +214,7 @@ class CampaignRepository:
         """Agrega comissão/faturamento/pedidos por dia para um único sub_id."""
         base = self.db.query(DatasetRow).filter(
             DatasetRow.user_id == user_id,
-            DatasetRow.sub_id1 == sub_id,
+            _norm_sub_id() == sub_id,
         )
         if start_date:
             base = base.filter(DatasetRow.date >= start_date)
@@ -233,18 +245,19 @@ class CampaignRepository:
 
         Retorna [{sub_id, orders, commission}] — usado pelo modal de vínculo.
         """
+        norm = _norm_sub_id()
         rows = (
             self.db.query(
-                DatasetRow.sub_id1.label("sub_id"),
+                norm.label("sub_id"),
                 func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
                 func.count(distinct(DatasetRow.order_id)).label("orders"),
             )
             .filter(
                 DatasetRow.user_id == user_id,
                 DatasetRow.sub_id1.isnot(None),
-                DatasetRow.sub_id1 != "",
+                norm != "",
             )
-            .group_by(DatasetRow.sub_id1)
+            .group_by(norm)
             .all()
         )
         return [
