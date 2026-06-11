@@ -10,9 +10,9 @@ from app.models.dataset_row import DatasetRow
 
 logger = logging.getLogger(__name__)
 
-# Heurística para "Pedido Direto" (ajustável). Marca pedidos cujo canal indica
-# atribuição direta da Shopee. Confirmar regra real com o produto.
-DIRECT_CHANNEL_PATTERN = "%direct%"
+# Atribuição DIRETA da Shopee: comprou na mesma loja do clique (ORDERED_IN_SAME_SHOP);
+# o resto (ex.: ORDERED_IN_DIFFERENT_SHOP) é cookie/cross-shop. Vem do attributionType.
+DIRECT_ATTRIBUTION_TYPE = "ORDERED_IN_SAME_SHOP"
 
 
 def _norm_sub_id():
@@ -182,9 +182,9 @@ class CampaignRepository:
             .all()
         )
 
-        # Pedidos diretos (heurística por canal) por sub_id.
+        # Pedidos diretos (attributionType = mesma loja do clique) por sub_id.
         direct_rows = (
-            base.filter(DatasetRow.channel.ilike(DIRECT_CHANNEL_PATTERN))
+            base.filter(DatasetRow.attribution_type == DIRECT_ATTRIBUTION_TYPE)
             .with_entities(
                 norm.label("sub_id"),
                 func.count(distinct(DatasetRow.order_id)).label("direct_orders"),

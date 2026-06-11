@@ -31,6 +31,7 @@ class CampaignMetrics(BaseModel):
     spend_with_tax: float = 0.0      # gasto com imposto (= spend se sem imposto)
     clicks: int = 0
     impressions: int = 0
+    reach: int = 0
     cpc: Optional[float] = None
     ctr: Optional[float] = None
     commission: float = 0.0          # comissão bruta

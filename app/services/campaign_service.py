@@ -1,5 +1,6 @@
 import logging
 import re
+import unicodedata
 from datetime import date
 from typing import List, Optional
 
@@ -34,6 +35,17 @@ STATUS_FILTERS = ("all", "active", "paused")
 _SUBID_WORD_RE = re.compile(r"[a-zA-Z]+")
 
 
+def _normalize(s: str) -> str:
+    """Remove acento, espaço e pontuação, e baixa a caixa — p/ comparar similaridade.
+
+    'Comente "COBRE LEITO"' -> 'comentecobreleito' ; 'cobreleito2304' -> 'cobreleito2304'.
+    Assim 'cobreleito' (do sub_id) casa com o nome da campanha que vem com espaço.
+    """
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
 def _is_active(campaign: Campaign) -> bool:
     eff = (campaign.effective_status or campaign.status or "").upper()
     return eff == "ACTIVE"
@@ -58,6 +70,7 @@ def _compute_metrics(
     comm: dict,
     ad_rate: float = 0.0,
     comm_rate: float = 0.0,
+    reach: int = 0,
 ) -> CampaignMetrics:
     """ad_rate/comm_rate são FRAÇÕES (ex.: 0.18). Sem imposto = 0 → líquido == bruto."""
     commission = comm.get("commission", 0.0)
@@ -77,6 +90,7 @@ def _compute_metrics(
         spend_with_tax=round(spend_with_tax, 2),
         clicks=clicks,
         impressions=impressions,
+        reach=reach,
         cpc=round(spend / clicks, 2) if clicks > 0 else None,
         ctr=round(clicks / impressions * 100, 2) if impressions > 0 else None,
         commission=round(commission, 2),
@@ -110,9 +124,10 @@ class CampaignService:
         comm: dict,
         ad_rate: float = 0.0,
         comm_rate: float = 0.0,
+        reach: int = 0,
     ) -> CampaignResponse:
         linked = bool(campaign.sub_id)
-        metrics = _compute_metrics(spend, clicks, impressions, comm, ad_rate, comm_rate)
+        metrics = _compute_metrics(spend, clicks, impressions, comm, ad_rate, comm_rate, reach)
         return CampaignResponse(
             id=campaign.id,
             fb_campaign_id=campaign.fb_campaign_id,
@@ -152,10 +167,11 @@ class CampaignService:
         insights = self.repo.list_insights(user_id, start_date=start_date, end_date=end_date)
         spend_map: dict[int, dict] = {}
         for ins in insights:
-            agg = spend_map.setdefault(ins.campaign_id, {"spend": 0.0, "clicks": 0, "impressions": 0})
+            agg = spend_map.setdefault(ins.campaign_id, {"spend": 0.0, "clicks": 0, "impressions": 0, "reach": 0})
             agg["spend"] += ins.spend or 0.0
             agg["clicks"] += ins.clicks or 0
             agg["impressions"] += ins.impressions or 0
+            agg["reach"] += ins.reach or 0
 
         # Comissões agregadas pelos sub_ids vinculados (mesmo recorte de período do gasto).
         linked_sub_ids = [c.sub_id for c in campaigns if c.sub_id]
@@ -163,7 +179,7 @@ class CampaignService:
 
         responses: List[CampaignResponse] = []
         for c in campaigns:
-            agg = spend_map.get(c.id, {"spend": 0.0, "clicks": 0, "impressions": 0})
+            agg = spend_map.get(c.id, {"spend": 0.0, "clicks": 0, "impressions": 0, "reach": 0})
             comm = comm_map.get(c.sub_id, {}) if c.sub_id else {}
             # Só entram campanhas com movimentação no período: gasto, entrega (cliques/
             # impressões) ou venda atribuída ao sub_id vinculado. Remove as zeradas.
@@ -176,7 +192,9 @@ class CampaignService:
             if not has_movement:
                 continue
             responses.append(
-                self._build_response(c, agg["spend"], agg["clicks"], agg["impressions"], comm, ad_rate, comm_rate)
+                self._build_response(
+                    c, agg["spend"], agg["clicks"], agg["impressions"], comm, ad_rate, comm_rate, agg["reach"]
+                )
             )
 
         # Ordena por maior gasto no topo. Vínculo não afeta a ordem.
@@ -198,14 +216,16 @@ class CampaignService:
 
         summary = self.repo.sub_id_sales_summary(user_id)
         linked = self.repo.linked_sub_ids(user_id)
-        name_lower = (campaign.name or "").lower()
+        norm_name = _normalize(campaign.name)
 
         options: List[SubIdOption] = []
         for row in summary:
             sub = row["sub_id"]
             match = _SUBID_WORD_RE.match(sub or "")
             word = match.group(0).lower() if match else ""
-            suggested = len(word) >= 3 and word in name_lower
+            # Marca TODOS os sub_ids cujo nome-base aparece no nome da campanha
+            # (comparação sem espaço/acento/maiúscula).
+            suggested = len(word) >= 3 and word in norm_name
 
             link = linked.get(sub)
             # O vínculo atual da própria campanha não conta como "vinculado a outra".
@@ -262,12 +282,15 @@ class CampaignService:
         total_spend = sum(i.spend or 0.0 for i in insights)
         total_clicks = sum(i.clicks or 0 for i in insights)
         total_impr = sum(i.impressions or 0 for i in insights)
+        total_reach = sum(i.reach or 0 for i in insights)
 
         comm = (
             self.repo.aggregate_by_subids(user_id, [campaign.sub_id], start_date, end_date).get(campaign.sub_id, {})
             if campaign.sub_id else {}
         )
-        response = self._build_response(campaign, total_spend, total_clicks, total_impr, comm, ad_rate, comm_rate)
+        response = self._build_response(
+            campaign, total_spend, total_clicks, total_impr, comm, ad_rate, comm_rate, total_reach
+        )
 
         # Dia a dia: combina insights (FB) com comissões (DatasetRow) por data. Já com imposto.
         daily_comm = self.repo.daily_by_subid(user_id, campaign.sub_id, start_date, end_date) if campaign.sub_id else {}
@@ -334,10 +357,11 @@ class CampaignService:
         spend = sum(i.spend or 0.0 for i in insights)
         clicks = sum(i.clicks or 0 for i in insights)
         impressions = sum(i.impressions or 0 for i in insights)
+        reach = sum(i.reach or 0 for i in insights)
         comm = (
             self.repo.aggregate_by_subids(user_id, [normalized], start_date, end_date).get(normalized, {})
             if normalized
             else {}
         )
         ad_rate, comm_rate, _ = self._tax_rates(user_id)
-        return self._build_response(campaign, spend, clicks, impressions, comm, ad_rate, comm_rate)
+        return self._build_response(campaign, spend, clicks, impressions, comm, ad_rate, comm_rate, reach)

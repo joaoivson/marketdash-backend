@@ -18,6 +18,8 @@ class DatasetRow(Base):
     product = Column(String, nullable=False, index=True)
     status = Column(String, nullable=True, index=True)
     channel = Column(String, nullable=True, index=True)
+    # attributionType da Shopee (ORDERED_IN_SAME_SHOP = direto; DIFFERENT_SHOP = cookie/cross).
+    attribution_type = Column(String, nullable=True, index=True)
     sub_id1 = Column(String, nullable=True, index=True)
     order_id = Column(String, nullable=True, index=True)
     product_id = Column(String, nullable=True, index=True)

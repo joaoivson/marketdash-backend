@@ -66,28 +66,32 @@ def export_campaigns(
         current_user.id, start_date=start_date, end_date=end_date, status_filter=status, search=search
     )
 
+    has_tax = data.has_tax
     wb = Workbook()
     ws = wb.active
     ws.title = "Campanhas"
     ws.append(
-        ["Campanha", "Sub ID vinculado", "Status", "Gasto", "Comissão", "Lucro", "ROAS", "CPC", "Pedidos"]
+        ["Campanha", "Sub ID vinculado", "Status", "Orçamento", "Gasto", "Comissão", "Lucro", "ROAS Real", "CPC", "Pedidos"]
     )
     for c in data.campaigns:
         m = c.metrics
+        gasto = m.spend_with_tax if has_tax else m.spend
+        comissao = m.commission_net if has_tax else m.commission
         ws.append(
             [
                 c.name,
                 c.sub_id or "",
                 "Ativa" if c.is_active else "Pausada",
-                round(m.spend, 2),
-                round(m.commission, 2) if c.linked else 0,
+                round(c.daily_budget or 0, 2),
+                round(gasto, 2),
+                round(comissao, 2) if c.linked else 0,
                 round(m.profit, 2) if c.linked else 0,
                 round(m.roas, 2) if c.linked and m.spend > 0 else 0,
                 round(m.cpc, 2) if m.cpc else 0,
                 m.orders if c.linked else 0,
             ]
         )
-    widths = [46, 22, 10, 12, 12, 12, 8, 10, 10]
+    widths = [46, 22, 10, 11, 12, 12, 12, 9, 9, 9]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[chr(64 + i)].width = w
 
