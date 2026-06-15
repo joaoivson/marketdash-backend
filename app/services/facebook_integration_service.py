@@ -261,10 +261,11 @@ class FacebookIntegrationService:
                             fb_campaign_id=fb_campaign_id,
                             date=day,
                             spend=_to_float(ins.get("spend")),
-                            clicks=_to_int(ins.get("clicks")),
+                            # Cliques no link (alinha com o Gerenciador do Meta), fallback p/ clicks.
+                            clicks=_to_int(ins.get("inline_link_clicks") or ins.get("clicks")),
                             impressions=_to_int(ins.get("impressions")),
-                            cpc=_to_float(ins.get("cpc")) or None,
-                            ctr=_to_float(ins.get("ctr")) or None,
+                            cpc=_to_float(ins.get("cost_per_inline_link_click") or ins.get("cpc")) or None,
+                            ctr=_to_float(ins.get("inline_link_click_ctr") or ins.get("ctr")) or None,
                             reach=_to_int(ins.get("reach")) or None,
                         )
                     )

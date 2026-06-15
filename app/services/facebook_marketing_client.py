@@ -184,7 +184,13 @@ async def get_campaign_insights(
     Retorna uma lista de dicts (um por dia) com spend/clicks/impressions/cpc/ctr/reach.
     """
     params = {
-        "fields": "spend,clicks,impressions,cpc,ctr,reach,date_start,date_stop",
+        # inline_link_* = métricas de "clique no link" (o que o Gerenciador mostra por padrão
+        # e o que importa p/ afiliado: clique que vai pra Shopee). clicks/cpc/ctr "secos" são
+        # de TODOS os cliques (curtida, etc.) e ficam acima do real.
+        "fields": (
+            "spend,clicks,inline_link_clicks,impressions,cpc,cost_per_inline_link_click,"
+            "ctr,inline_link_click_ctr,reach,date_start,date_stop"
+        ),
         "level": "campaign",
         "time_increment": 1,
         "time_range": '{"since":"%s","until":"%s"}' % (since, until),

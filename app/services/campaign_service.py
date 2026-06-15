@@ -279,47 +279,85 @@ class CampaignService:
 
         ad_rate, comm_rate, has_tax = self._tax_rates(user_id)
         insights = self.repo.list_insights(user_id, campaign_id=campaign_id, start_date=start_date, end_date=end_date)
-        total_spend = sum(i.spend or 0.0 for i in insights)
-        total_clicks = sum(i.clicks or 0 for i in insights)
-        total_impr = sum(i.impressions or 0 for i in insights)
-        total_reach = sum(i.reach or 0 for i in insights)
-
-        comm = (
+        ins_by_date = {i.date: i for i in insights}
+        # Comissão por dia (Shopee) e agregado do período (p/ direct_orders, que não é por dia).
+        daily_comm = self.repo.daily_by_subid(user_id, campaign.sub_id, start_date, end_date) if campaign.sub_id else {}
+        comm_period = (
             self.repo.aggregate_by_subids(user_id, [campaign.sub_id], start_date, end_date).get(campaign.sub_id, {})
             if campaign.sub_id else {}
         )
-        response = self._build_response(
-            campaign, total_spend, total_clicks, total_impr, comm, ad_rate, comm_rate, total_reach
-        )
 
-        # Dia a dia: combina insights (FB) com comissões (DatasetRow) por data. Já com imposto.
-        daily_comm = self.repo.daily_by_subid(user_id, campaign.sub_id, start_date, end_date) if campaign.sub_id else {}
+        # Dia a dia: UNIÃO de datas com gasto (insight) OU comissão (Shopee) — senão comissão
+        # de um dia sem gasto fica órfã (entra no total, some do dia a dia). Já com imposto.
         daily: List[CampaignDailyPoint] = []
-        for ins in sorted(insights, key=lambda i: i.date, reverse=True):
-            c = daily_comm.get(ins.date, {})
-            spend = ins.spend or 0.0
+        for d in sorted(set(ins_by_date) | set(daily_comm), reverse=True):
+            ins = ins_by_date.get(d)
+            c = daily_comm.get(d, {})
+            spend = (ins.spend or 0.0) if ins else 0.0
+            clicks = (ins.clicks or 0) if ins else 0
+            impressions = (ins.impressions or 0) if ins else 0
+            ctr = ins.ctr if ins else None
             commission = c.get("commission", 0.0)
-            revenue = c.get("revenue", 0.0)
-            spend_wt = spend * (1 + ad_rate)
-            comm_net = commission * (1 - comm_rate)
+            spend_wt = round(spend * (1 + ad_rate), 2)
+            comm_net = round(commission * (1 - comm_rate), 2)
             daily.append(
                 CampaignDailyPoint(
-                    date=ins.date,
+                    date=d,
                     spend=round(spend, 2),
-                    spend_with_tax=round(spend_wt, 2),
-                    clicks=ins.clicks or 0,
-                    impressions=ins.impressions or 0,
-                    cpc=round(spend / ins.clicks, 2) if ins.clicks else None,
-                    ctr=ins.ctr,
+                    spend_with_tax=spend_wt,
+                    clicks=clicks,
+                    impressions=impressions,
+                    cpc=round(spend / clicks, 2) if clicks else None,
+                    ctr=ctr,
                     commission=round(commission, 2),
-                    commission_net=round(comm_net, 2),
-                    revenue=round(revenue, 2),
+                    commission_net=comm_net,
+                    revenue=round(c.get("revenue", 0.0), 2),
                     orders=c.get("orders", 0),
                     profit=round(comm_net - spend_wt, 2),
                     roas=round(comm_net / spend_wt, 2) if spend_wt > 0 else 0.0,
                 )
             )
 
+        # Card = SOMA dos valores diários (já arredondados) → a soma do dia a dia fecha
+        # exato com o card. direct_orders vem do agregado do período (não existe por dia).
+        sum_spend = round(sum(p.spend for p in daily), 2)
+        sum_spend_wt = round(sum(p.spend_with_tax for p in daily), 2)
+        sum_comm = round(sum(p.commission for p in daily), 2)
+        sum_comm_net = round(sum(p.commission_net for p in daily), 2)
+        sum_clicks = sum(p.clicks for p in daily)
+        sum_impr = sum(p.impressions for p in daily)
+        sum_reach = sum(i.reach or 0 for i in insights)
+        metrics = CampaignMetrics(
+            spend=sum_spend,
+            spend_with_tax=sum_spend_wt,
+            clicks=sum_clicks,
+            impressions=sum_impr,
+            reach=sum_reach,
+            cpc=round(sum_spend / sum_clicks, 2) if sum_clicks > 0 else None,
+            ctr=round(sum_clicks / sum_impr * 100, 2) if sum_impr > 0 else None,
+            commission=sum_comm,
+            commission_net=sum_comm_net,
+            revenue=round(comm_period.get("revenue", 0.0), 2),
+            orders=comm_period.get("orders", 0),
+            direct_orders=comm_period.get("direct_orders", 0),
+            profit=round(sum_comm_net - sum_spend_wt, 2),
+            roas=round(sum_comm_net / sum_spend_wt, 2) if sum_spend_wt > 0 else 0.0,
+        )
+        linked = bool(campaign.sub_id)
+        response = CampaignResponse(
+            id=campaign.id,
+            fb_campaign_id=campaign.fb_campaign_id,
+            name=campaign.name,
+            status=campaign.status,
+            effective_status=campaign.effective_status,
+            objective=campaign.objective,
+            daily_budget=campaign.daily_budget,
+            sub_id=campaign.sub_id,
+            linked=linked,
+            is_active=_is_active(campaign),
+            health=_health(linked, metrics.spend, metrics.roas),
+            metrics=metrics,
+        )
         return CampaignDetailResponse(campaign=response, daily=daily, has_tax=has_tax)
 
     def set_link(
