@@ -21,7 +21,8 @@ def sync_facebook_user_task(self, user_id: int):
     except Exception as exc:
         logger.error("sync_facebook_user_task falhou user_id=%s: %s", user_id, exc)
         db.rollback()
-        raise self.retry(exc=exc, countdown=300)
+        # exc pode ser HTTPException (não-picklável) → reempacota p/ o retry não quebrar.
+        raise self.retry(exc=RuntimeError(str(exc)), countdown=300)
     finally:
         db.close()
 
@@ -37,7 +38,8 @@ def sync_all_facebook_users_task():
         repo = FacebookIntegrationRepository(db)
         integrations = repo.get_all_active()
         for integ in integrations:
-            sync_facebook_user_task.delay(integ.user_id)
+            # priority=6: sync horário do FB fica acima da Shopee (9), abaixo do botão manual (0).
+            sync_facebook_user_task.apply_async(args=[integ.user_id], priority=6)
         logger.info("sync_all_facebook_users_task: %d tarefas agendadas", len(integrations))
         return {"dispatched": len(integrations)}
     finally:

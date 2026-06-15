@@ -80,7 +80,7 @@ def select_ad_accounts(
     if result.ad_account_ids:
         try:
             from app.tasks.facebook_tasks import sync_facebook_user_task
-            sync_facebook_user_task.delay(current_user.id)
+            sync_facebook_user_task.apply_async(args=[current_user.id], priority=0)
         except Exception as exc:  # broker indisponível: o cron horário cobre mesmo assim
             logger.warning("Falha ao enfileirar sync após seleção de contas user_id=%s: %s", current_user.id, exc)
     return result
@@ -119,5 +119,6 @@ def manual_sync(
             detail="Conecte o Facebook e selecione ao menos uma conta de anúncio antes de sincronizar.",
         )
     from app.tasks.facebook_tasks import sync_facebook_user_task
-    task = sync_facebook_user_task.delay(current_user.id)
+    # priority=0 (máxima): o botão "Atualizar dados" fura a fila na frente do batch da Shopee.
+    task = sync_facebook_user_task.apply_async(args=[current_user.id], priority=0)
     return {"status": "accepted", "task_id": task.id, "detail": "Sincronização enfileirada."}

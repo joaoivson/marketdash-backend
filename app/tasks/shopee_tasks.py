@@ -43,6 +43,7 @@ def sync_shopee_user_task(self, user_id: int, empty_attempt: int = 0):
             sync_shopee_user_task.apply_async(
                 kwargs={"user_id": user_id, "empty_attempt": next_attempt},
                 eta=eta,
+                priority=9,
             )
         elif commissions == 0:
             logger.warning(
@@ -54,7 +55,9 @@ def sync_shopee_user_task(self, user_id: int, empty_attempt: int = 0):
 
     except Exception as exc:
         logger.error("sync_shopee_user_task falhou user_id=%s: %s", user_id, exc)
-        raise self.retry(exc=exc, countdown=300)
+        # exc pode ser HTTPException (erro transitório da Shopee), que NÃO é picklável e
+        # quebra o retry (UnpickleableExceptionWrapper). Reempacota num erro picklável.
+        raise self.retry(exc=RuntimeError(str(exc)), countdown=300)
     finally:
         db.close()
 
@@ -70,7 +73,10 @@ def sync_all_shopee_users_task():
         repo = ShopeeIntegrationRepository(db)
         integrations = repo.get_all_active()
         for integ in integrations:
-            sync_shopee_user_task.delay(integ.user_id, empty_attempt=0)
+            # priority=9 (baixa): full-refresh pesado do cron não bloqueia o sync manual do FB.
+            sync_shopee_user_task.apply_async(
+                kwargs={"user_id": integ.user_id, "empty_attempt": 0}, priority=9
+            )
         logger.info("sync_all_shopee_users_task: %d tarefas agendadas", len(integrations))
         return {"dispatched": len(integrations)}
     finally:

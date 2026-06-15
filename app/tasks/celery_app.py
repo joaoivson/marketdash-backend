@@ -21,6 +21,12 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     task_time_limit=1200,
     task_soft_time_limit=1100,
+    # PRIORIDADE DE FILA (Redis): o sync manual do Facebook (botão "Atualizar dados")
+    # usa priority=0 (máxima) e fura a fila na frente dos full-refresh pesados da Shopee
+    # (cron, priority=9). Sem isso o botão fica minutos atrás do batch da Shopee.
+    # priority menor = mais prioritário. Steps padrão do Redis: [0,3,6,9].
+    broker_transport_options={"queue_order_strategy": "priority"},
+    task_default_priority=5,
 )
 
 # Explicitly include task modules so the worker always registers them (avoids "unregistered task" in production).
