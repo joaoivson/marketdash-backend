@@ -39,6 +39,22 @@ class SubscriptionService:
         provider_order_id: Optional[str] = None,
     ):
         """Atualiza ou cria subscription com dados do provider (Cakto/Kiwify)."""
+        # Guard anti-cancelamento-de-assinatura-antiga: webhooks chegam FORA DE ORDEM
+        # (ex.: "Assinatura cancelada" da sub velha depois da "Compra aprovada" da nova).
+        # Como há uma linha por usuário (last-write-wins), um cancelamento de OUTRA transação
+        # derrubava quem acabou de comprar. Só desativamos se o cancelamento for da transação
+        # vigente; cancelamento de transação diferente (sub antiga) é ignorado.
+        if not is_active:
+            current = self.repo.get_by_user_id(user_id)
+            incoming_txn = (provider_transaction_id or cakto_transaction_id or "").strip() or None
+            current_txn = (current.provider_transaction_id or current.cakto_transaction_id) if current else None
+            if current and current.is_active and incoming_txn and current_txn and incoming_txn != current_txn:
+                logger.info(
+                    "Cancelamento ignorado p/ user %s: assinatura ativa (txn=%s) e cancelamento de OUTRA txn (%s).",
+                    user_id, current_txn, incoming_txn,
+                )
+                return current
+
         normalized_offer_name = None
         if isinstance(cakto_offer_name, str):
             stripped_offer = cakto_offer_name.strip()
