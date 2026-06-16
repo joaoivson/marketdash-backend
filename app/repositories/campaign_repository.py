@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
+from app.models.ad_spend import AdSpend
 from app.models.campaign import Campaign, CampaignDailyInsight
 from app.models.dataset_row import DatasetRow
 
@@ -105,25 +106,81 @@ class CampaignRepository:
 
     # -------------------------- daily insights --------------------------- #
 
-    def delete_insights_window(self, campaign_id: int, since: date, until: date) -> int:
-        deleted = (
-            self.db.query(CampaignDailyInsight)
-            .filter(
-                CampaignDailyInsight.campaign_id == campaign_id,
-                CampaignDailyInsight.date >= since,
-                CampaignDailyInsight.date <= until,
-            )
-            .delete(synchronize_session="fetch")
-        )
-        self.db.flush()
-        return deleted
+    def upsert_insights(self, items: List[CampaignDailyInsight]) -> int:
+        """Upsert de insights por (campaign_id, date) — preserva histórico (sem delete).
 
-    def bulk_create_insights(self, items: List[CampaignDailyInsight]) -> List[CampaignDailyInsight]:
+        Idempotente: re-sincronizar a janela sobrescreve spend/clicks/etc do dia, sem
+        apagar dias fora da janela. O banco é a fonte de verdade, não a API.
+        """
         if not items:
-            return []
-        self.db.add_all(items)
+            return 0
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        payload = [
+            {
+                "user_id": it.user_id,
+                "campaign_id": it.campaign_id,
+                "fb_campaign_id": it.fb_campaign_id,
+                "date": it.date,
+                "spend": it.spend,
+                "clicks": it.clicks,
+                "impressions": it.impressions,
+                "cpc": it.cpc,
+                "ctr": it.ctr,
+                "reach": it.reach,
+            }
+            for it in items
+        ]
+        stmt = pg_insert(CampaignDailyInsight).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_insight_campaign_date",
+            set_={
+                "spend": stmt.excluded.spend,
+                "clicks": stmt.excluded.clicks,
+                "impressions": stmt.excluded.impressions,
+                "cpc": stmt.excluded.cpc,
+                "ctr": stmt.excluded.ctr,
+                "reach": stmt.excluded.reach,
+                "fb_campaign_id": stmt.excluded.fb_campaign_id,
+                "updated_at": func.now(),
+            },
+        )
+        self.db.execute(stmt)
         self.db.flush()
-        return items
+        return len(payload)
+
+    def rebuild_ad_spend_from_meta(self, user_id: int) -> int:
+        """Reconstrói o AdSpend do usuário como PROJEÇÃO PURA do gasto do Meta.
+
+        Apaga o AdSpend do usuário e reinsere o agregado por (dia, sub_id da campanha
+        vinculada) a partir de TODOS os CampaignDailyInsight do banco (não da resposta da
+        API — robusto a falha transitória). É a fonte do gasto do Dashboard agora que o
+        lançamento manual ("Custos de Anúncios") foi descontinuado — sem dupla contagem.
+        Campanhas sem sub_id vinculado entram com sub_id NULL (contam no total, não no
+        filtro por sub_id).
+        """
+        agg = (
+            self.db.query(
+                CampaignDailyInsight.date,
+                Campaign.sub_id,
+                func.sum(CampaignDailyInsight.spend).label("total"),
+            )
+            .join(Campaign, Campaign.id == CampaignDailyInsight.campaign_id)
+            .filter(CampaignDailyInsight.user_id == user_id)
+            .group_by(CampaignDailyInsight.date, Campaign.sub_id)
+            .all()
+        )
+        self.db.query(AdSpend).filter(AdSpend.user_id == user_id).delete(synchronize_session=False)
+        self.db.flush()
+        new_rows = [
+            AdSpend(user_id=user_id, date=d, sub_id=sub_id, amount=float(total or 0.0))
+            for (d, sub_id, total) in agg
+            if (total or 0) > 0
+        ]
+        if new_rows:
+            self.db.add_all(new_rows)
+            self.db.flush()
+        return len(new_rows)
 
     def list_insights(
         self,

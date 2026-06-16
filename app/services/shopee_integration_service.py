@@ -150,8 +150,13 @@ class ShopeeIntegrationService:
 
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
 
-        # Full refresh: apaga dados Shopee do período e re-insere com valores
-        # corretos da API, garantindo que revenue/commission estejam sempre atualizados.
+        # Re-sync da janela por DELETE+REINSERT (decisão consciente — NÃO migrar p/ upsert):
+        # apaga só os últimos 88 dias (date >= start) e re-insere com os valores atuais da API.
+        # Isso já cumpre o objetivo do doc de persistência: (a) status muda por semanas
+        # (Pendente→Concluído→Cancelado) e a janela inteira é reconferida a cada ciclo;
+        # (b) NÃO duplica (delete antes do insert); (c) registros >88 dias NÃO são tocados →
+        # histórico preservado no banco. Upsert por row_hash traria risco de duplicação porque
+        # o seq do hash não é determinístico entre syncs; o ganho não compensa o risco.
         deleted = (
             db.query(DatasetRow)
             .filter(

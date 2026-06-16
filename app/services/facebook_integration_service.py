@@ -19,8 +19,11 @@ from app.services import facebook_marketing_client as fb
 
 logger = logging.getLogger(__name__)
 
-# Janela de insights sincronizada (cobre os filtros 7d/14d/mês da tela).
+# Janela de insights na 1ª carga (backfill): cobre os filtros 7d/14d/mês da tela.
 SYNC_WINDOW_DAYS = 90
+# Ciclos após o backfill: revisa só os últimos dias quentes (o gasto do Meta ainda
+# muda ~3 dias por ajustes/reembolsos, depois estabiliza). O upsert preserva o resto.
+INCREMENTAL_WINDOW_DAYS = 3
 BRT = timezone(timedelta(hours=-3))
 
 
@@ -199,7 +202,10 @@ class FacebookIntegrationService:
         camp_repo = CampaignRepository(db)
 
         now = datetime.now(BRT)
-        since = (now - timedelta(days=SYNC_WINDOW_DAYS)).date()
+        # 1ª carga (sem last_sync_at): backfill de 90 dias. Ciclos seguintes: só os ~3 dias
+        # quentes (o upsert preserva o histórico já gravado). Banco = fonte de verdade.
+        window_days = SYNC_WINDOW_DAYS if integration.last_sync_at is None else INCREMENTAL_WINDOW_DAYS
+        since = (now - timedelta(days=window_days)).date()
         until = now.date()
 
         processed = 0
@@ -233,7 +239,7 @@ class FacebookIntegrationService:
                     },
                 )
 
-                # Insights diários: full refresh da janela para garantir valores atuais.
+                # Insights diários: UPSERT da janela (preserva histórico, atualiza valores).
                 try:
                     insights = await fb.get_campaign_insights(
                         token, fb_campaign_id, since.isoformat(), until.isoformat()
@@ -244,8 +250,6 @@ class FacebookIntegrationService:
                         user_id, fb_campaign_id, exc.detail,
                     )
                     insights = []
-
-                camp_repo.delete_insights_window(campaign.id, since, until)
 
                 rows: list[CampaignDailyInsight] = []
                 for ins in insights:
@@ -269,11 +273,15 @@ class FacebookIntegrationService:
                             reach=_to_int(ins.get("reach")) or None,
                         )
                     )
-                camp_repo.bulk_create_insights(rows)
+                camp_repo.upsert_insights(rows)
                 processed += 1
 
+        # Espelha o gasto do Meta na tabela AdSpend (fonte do gasto do Dashboard).
+        # AdSpend = projeção pura dos insights; o lançamento manual foi descontinuado.
+        mirrored = camp_repo.rebuild_ad_spend_from_meta(user_id)
         self.repo.update_last_sync(user_id)
         db.commit()
+        logger.info("AdSpend espelhado do Meta user_id=%s: %d linhas", user_id, mirrored)
         logger.info(
             "Facebook sync concluído user_id=%s: %d campanhas (%d contas)",
             user_id, processed, len(account_ids),
