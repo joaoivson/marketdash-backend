@@ -266,8 +266,12 @@ class ShopeeIntegrationService:
                                 "Shopee item order=%s item=%s channelType=%r attributionType=%r",
                                 order_id, item_id, raw_channel, raw_attribution,
                             )
-                            # Canal: usa channelType; fallback para attributionType se channelType vazio
-                            channel_val = str(raw_channel or raw_attribution or "").strip()
+                            # Canal: usa SOMENTE channelType (o campo de origem real da Shopee).
+                            # NÃO faz fallback p/ attributionType (que é direto/cookie, gravado à parte
+                            # em attribution_type) — senão o donut "Comissão por canal" do dashboard
+                            # mostrava "ORDERED_IN_SAME_SHOP"/genérico em vez do canal. Vazio → o front
+                            # agrupa como "Outros".
+                            channel_val = str(raw_channel or "").strip()
                             node_items.append({
                                 "order_id": order_id,
                                 "order_status": order_status,

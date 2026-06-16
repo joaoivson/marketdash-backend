@@ -45,6 +45,9 @@ class DatasetRowBase(BaseModel):
     category: Optional[str] = None
     status: Optional[str] = None
     channel: Optional[str] = None
+    # attributionType da Shopee (ORDERED_IN_SAME_SHOP = direto; demais = cookie/indireto).
+    # Exposto p/ o Dashboard contar pedidos diretos vs indiretos (igual à tela de Campanhas).
+    attribution_type: Optional[str] = None
     sub_id1: Optional[str] = None
     order_id: Optional[str] = None
     product_id: Optional[str] = None
