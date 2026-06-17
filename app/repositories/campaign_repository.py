@@ -106,6 +106,14 @@ class CampaignRepository:
 
     # -------------------------- daily insights --------------------------- #
 
+    def earliest_insight_date(self, user_id: int):
+        """Data do insight mais antigo do usuário — usado pra decidir se precisa backfill de 90d."""
+        return (
+            self.db.query(func.min(CampaignDailyInsight.date))
+            .filter(CampaignDailyInsight.user_id == user_id)
+            .scalar()
+        )
+
     def upsert_insights(self, items: List[CampaignDailyInsight]) -> int:
         """Upsert de insights por (campaign_id, date) — preserva histórico (sem delete).
 

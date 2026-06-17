@@ -207,9 +207,17 @@ class FacebookIntegrationService:
         db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(user_id)})
 
         now = datetime.now(BRT)
-        # 1ª carga (sem last_sync_at): backfill de 90 dias. Ciclos seguintes: só os ~3 dias
-        # quentes (o upsert preserva o histórico já gravado). Banco = fonte de verdade.
-        window_days = SYNC_WINDOW_DAYS if integration.last_sync_at is None else INCREMENTAL_WINDOW_DAYS
+        # Backfill de 90 dias quando NÃO há histórico suficiente no banco: 1ª carga
+        # (last_sync_at None) OU usuário que migrou pro modelo novo e só tem os últimos dias
+        # (nunca fez o backfill). Sem isso, o usuário existente fica preso em 3d e o Dashboard
+        # não mostra gasto/cliques histórico. Depois do backfill, passa a incremental (3d).
+        earliest = camp_repo.earliest_insight_date(user_id)
+        needs_backfill = (
+            integration.last_sync_at is None
+            or earliest is None
+            or earliest > (now.date() - timedelta(days=7))
+        )
+        window_days = SYNC_WINDOW_DAYS if needs_backfill else INCREMENTAL_WINDOW_DAYS
         since = (now - timedelta(days=window_days)).date()
         until = now.date()
 
