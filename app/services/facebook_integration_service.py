@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -201,6 +202,10 @@ class FacebookIntegrationService:
         token = decrypt_value(integration.encrypted_access_token)
         camp_repo = CampaignRepository(db)
 
+        # Serializa syncs concorrentes do MESMO usuário (cron inline + botão manual/worker) —
+        # evita corrida no rebuild do AdSpend (delete+insert). Lock por-transação, liberado no commit.
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(user_id)})
+
         now = datetime.now(BRT)
         # 1ª carga (sem last_sync_at): backfill de 90 dias. Ciclos seguintes: só os ~3 dias
         # quentes (o upsert preserva o histórico já gravado). Banco = fonte de verdade.
@@ -287,3 +292,37 @@ class FacebookIntegrationService:
             user_id, processed, len(account_ids),
         )
         return processed
+
+
+async def run_facebook_sync_all() -> dict:
+    """Sincroniza TODOS os usuários Facebook ativos INLINE — sem Celery/worker.
+
+    Disparado pelo cron do Supabase (pg_cron → pg_net → POST /internal/cron/facebook-sync),
+    que agenda esta função num BackgroundTask do FastAPI: roda no próprio processo da API.
+    Falha de um usuário não derruba os demais (cada sync_user é atômico e dá commit por user).
+    """
+    from app.db.session import SessionLocal
+    from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
+
+    # Lista os usuários ativos numa sessão curta, depois sincroniza cada um na SUA PRÓPRIA
+    # sessão (isola falha e evita estado cruzado entre usuários após commit/rollback).
+    db0 = SessionLocal()
+    try:
+        user_ids = [i.user_id for i in FacebookIntegrationRepository(db0).get_all_active()]
+    finally:
+        db0.close()
+
+    synced = 0
+    for uid in user_ids:
+        db = SessionLocal()
+        try:
+            svc = FacebookIntegrationService(FacebookIntegrationRepository(db))
+            await svc.sync_user(uid, db)
+            synced += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.error("FB sync inline falhou user_id=%s: %s", uid, exc)
+            db.rollback()
+        finally:
+            db.close()
+    logger.info("FB sync inline (pg_cron, sem worker): %d/%d usuários", synced, len(user_ids))
+    return {"synced": synced, "total": len(user_ids)}

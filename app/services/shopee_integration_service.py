@@ -317,11 +317,13 @@ class ShopeeIntegrationService:
                         else:
                             commission = 0.0
 
-                        # Categoria: usar a mais específica disponível (lv3 > lv2 > lv1)
+                        # Categoria PRINCIPAL (nível 1) — o dashboard agrupa pela categoria-mãe
+                        # (Casa e Decoração, Roupas Femininas, Beleza...). Fallback p/ os níveis
+                        # abaixo só se a lv1 não vier.
                         category = (
-                            ni.get("category_lv3")
+                            ni.get("category_lv1")
                             or ni.get("category_lv2")
-                            or ni.get("category_lv1")
+                            or ni.get("category_lv3")
                             or ""
                         )
 

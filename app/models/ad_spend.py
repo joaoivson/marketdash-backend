@@ -11,6 +11,9 @@ class AdSpend(Base):
     sub_id = Column(String, nullable=True, index=True)  # ex: dispenser01
     amount = Column(Float, nullable=False)
     clicks = Column(Integer, nullable=True, default=0)
+    # Origem do dado: 'manual' (lançamento antigo, descontinuado) ou 'meta' (integração).
+    # O Meta é autoritativo nos dias que cobre; manual de dias anteriores é preservado.
+    source = Column(String(16), nullable=False, default="manual")
 
     # Relationships
     user = relationship("User", back_populates="ad_spends")

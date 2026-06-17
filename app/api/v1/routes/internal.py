@@ -8,7 +8,7 @@ Autenticação por secret compartilhado. Aceita ambos os formatos para compatibi
 import hmac
 import logging
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
 
 from app.core.config import settings
 
@@ -67,27 +67,30 @@ def cron_shopee_sync(
 
 
 @router.post("/cron/facebook-sync", status_code=status.HTTP_202_ACCEPTED)
-def cron_facebook_sync(
+async def cron_facebook_sync(
     request: Request,
+    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
 ):
     """
-    Disparado pelo pg_cron via pg_net (diário).
+    Disparado pelo pg_cron via pg_net (de hora em hora).
 
-    Enfileira sync_all_facebook_users_task no Celery worker e retorna imediatamente.
+    Roda o sync de TODOS os usuários Facebook INLINE, num BackgroundTask do FastAPI —
+    SEM Celery/worker. Retorna 202 na hora (satisfaz o timeout do pg_net) e o sync
+    continua no próprio processo da API.
     """
     caller_ip = request.client.host if request.client else "unknown"
     _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
 
-    from app.tasks.facebook_tasks import sync_all_facebook_users_task
+    from app.services.facebook_integration_service import run_facebook_sync_all
 
-    task = sync_all_facebook_users_task.delay()
+    background_tasks.add_task(run_facebook_sync_all)
     logger.info(
-        "cron.facebook-sync dispatched task_id=%s caller_ip=%s source=%s",
-        task.id, caller_ip, request.headers.get("X-Cron-Source", "unknown"),
+        "cron.facebook-sync (inline/background, sem worker) caller_ip=%s source=%s",
+        caller_ip, request.headers.get("X-Cron-Source", "unknown"),
     )
-    return {"status": "accepted", "task_id": task.id}
+    return {"status": "accepted", "mode": "background-inline"}
 
 
 @router.get("/cron/health", status_code=status.HTTP_200_OK)

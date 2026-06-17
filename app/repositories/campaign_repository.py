@@ -150,32 +150,56 @@ class CampaignRepository:
         return len(payload)
 
     def rebuild_ad_spend_from_meta(self, user_id: int) -> int:
-        """Reconstrói o AdSpend do usuário como PROJEÇÃO PURA do gasto do Meta.
+        """Projeta o GASTO e os CLIQUES do Meta na tabela AdSpend (fonte do Dashboard).
 
-        Apaga o AdSpend do usuário e reinsere o agregado por (dia, sub_id da campanha
-        vinculada) a partir de TODOS os CampaignDailyInsight do banco (não da resposta da
-        API — robusto a falha transitória). É a fonte do gasto do Dashboard agora que o
-        lançamento manual ("Custos de Anúncios") foi descontinuado — sem dupla contagem.
-        Campanhas sem sub_id vinculado entram com sub_id NULL (contam no total, não no
-        filtro por sub_id).
+        Agrega por (dia, sub_id da campanha vinculada) a partir de TODOS os
+        CampaignDailyInsight do banco (não da resposta da API — robusto a falha transitória).
+        Regras (rodada 5 / frente C):
+        - O Meta é AUTORITATIVO nos dias que cobre: substitui o manual daqueles dias
+          (preservado no backup ad_spends_manual_backup, migration 028).
+        - O manual de dias ANTERIORES à cobertura do Meta PERMANECE (não zera o que o
+          pessoal já usava). Sem dupla contagem (1 origem por dia coberto).
+        - Inclui gasto/cliques SEM vínculo (sub_id NULL) → contam no total do Dashboard.
+        Idempotente: re-rodar reconstrói só as linhas source='meta'.
         """
         agg = (
             self.db.query(
                 CampaignDailyInsight.date,
                 Campaign.sub_id,
-                func.sum(CampaignDailyInsight.spend).label("total"),
+                func.sum(CampaignDailyInsight.spend).label("spend"),
+                func.sum(CampaignDailyInsight.clicks).label("clicks"),
             )
             .join(Campaign, Campaign.id == CampaignDailyInsight.campaign_id)
             .filter(CampaignDailyInsight.user_id == user_id)
             .group_by(CampaignDailyInsight.date, Campaign.sub_id)
             .all()
         )
-        self.db.query(AdSpend).filter(AdSpend.user_id == user_id).delete(synchronize_session=False)
+        covered_dates = {row[0] for row in agg}
+
+        # Limpa a projeção Meta anterior (idempotência).
+        self.db.query(AdSpend).filter(
+            AdSpend.user_id == user_id, AdSpend.source == "meta"
+        ).delete(synchronize_session=False)
+        # Meta substitui o manual SÓ nos dias que cobre; manual de dias anteriores fica.
+        if covered_dates:
+            self.db.query(AdSpend).filter(
+                AdSpend.user_id == user_id,
+                AdSpend.source != "meta",
+                AdSpend.date.in_(covered_dates),
+            ).delete(synchronize_session=False)
         self.db.flush()
+
         new_rows = [
-            AdSpend(user_id=user_id, date=d, sub_id=sub_id, amount=float(total or 0.0))
-            for (d, sub_id, total) in agg
-            if (total or 0) > 0
+            AdSpend(
+                user_id=user_id,
+                date=d,
+                sub_id=sub_id,
+                amount=float(spend or 0.0),
+                clicks=int(clicks or 0),
+                source="meta",
+            )
+            for (d, sub_id, spend, clicks) in agg
+            if (spend or 0) > 0 or (clicks or 0) > 0
         ]
         if new_rows:
             self.db.add_all(new_rows)
