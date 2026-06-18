@@ -7,6 +7,7 @@ from app.api.v1.dependencies import get_current_user, require_active_subscriptio
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.custom_link import CustomLinkCreate, CustomLinkUpdate, CustomLinkResponse, SlugCheckResponse
+from app.schemas.custom_link_insight import LinkInsightResponse
 from app.repositories.custom_link_repository import CustomLinkRepository
 from app.services.custom_link_service import CustomLinkService
 
@@ -76,6 +77,26 @@ def create_link(
         return service.create_link(current_user.id, link_in)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@router.get("/{link_id}/insight", response_model=LinkInsightResponse)
+def get_link_insight(
+    link_id: int,
+    granularity: str = Query("day", description="Granularidade da série: day ou month"),
+    current_user: User = Depends(require_active_subscription),
+    service: CustomLinkService = Depends(get_service)
+):
+    """Insight de cliques de um link: KPIs + série temporal (day=14 dias, month=6 meses)."""
+    if granularity not in ("day", "month"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="granularity deve ser 'day' ou 'month'",
+        )
+
+    insight = service.get_insight(link_id, current_user.id, granularity)
+    if insight is None:
+        raise HTTPException(status_code=404, detail="Link não encontrado ou não autorizado")
+    return insight
 
 
 @router.put("/{link_id}", response_model=CustomLinkResponse)

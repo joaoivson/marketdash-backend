@@ -10,6 +10,7 @@ from app.models.click_row import ClickRow
 from app.models.job import Job, JobChunk
 from app.models.capture_site import CaptureSite
 from app.models.custom_link import CustomLink
+from app.models.custom_link_event import CustomLinkEvent
 from app.models.page_event import PageEvent
 from app.models.commission import Commission
 from app.models.user_settings import UserSettings
@@ -19,7 +20,7 @@ from app.models.campaign import Campaign, CampaignDailyInsight
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
-    "Job", "JobChunk", "CaptureSite", "CustomLink", "PageEvent", "Commission",
+    "Job", "JobChunk", "CaptureSite", "CustomLink", "CustomLinkEvent", "PageEvent", "Commission",
     "UserSettings", "ShopeeIntegration", "FacebookIntegration",
     "Campaign", "CampaignDailyInsight",
 ]

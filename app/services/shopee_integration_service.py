@@ -1,8 +1,10 @@
 import hashlib
+import json
 import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -51,6 +53,19 @@ CONVERSIONS_QUERY = """
         }
       }
     }
+  }
+}
+"""
+
+
+# Mutation generateShortLink — valores inlinados na string da query (NÃO pré-serializar
+# o payload; execute_graphql serializa o payload UMA vez e assina sobre ele). Chaves do
+# objeto GraphQL ficam SEM aspas; valores escapados via json.dumps. %s na ordem:
+#   1) originUrl (string JSON-escaped)  2) subIds (array GraphQL "[...]")
+GENERATE_SHORT_LINK_TEMPLATE = """
+mutation {
+  generateShortLink(input: {originUrl: %s, subIds: %s}) {
+    shortLink
   }
 }
 """
@@ -123,6 +138,49 @@ class ShopeeIntegrationService:
         return await shopee_graphql_client.execute_graphql(
             integration.app_id, password, query, variables
         )
+
+    async def generate_short_link(
+        self, user_id: int, origin_url: str, sub_id: Optional[str]
+    ) -> str:
+        """
+        Gera um short link de afiliado Shopee a partir de uma URL de origem.
+        Efêmero: não persiste nada nem toca custom_links.
+        """
+        # Valida que a URL é da Shopee ANTES de chamar a API — domínio inválido
+        # faz a Shopee retornar erro 11001 (URL fora do programa de afiliados).
+        parsed = urlparse(origin_url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https") or not host:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="URL precisa ser da Shopee",
+            )
+        is_shopee = host == "shopee.com.br" or host.startswith("shopee.") or ".shopee." in host
+        if not is_shopee:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="URL precisa ser da Shopee",
+            )
+
+        subs = [sub_id] if sub_id else []
+        sub_ids_gql = "[" + ",".join(json.dumps(s) for s in subs) + "]"
+        mutation = GENERATE_SHORT_LINK_TEMPLATE % (json.dumps(origin_url), sub_ids_gql)
+
+        # Erros da Shopee (HTTPException levantadas por execute_graphql) propagam.
+        result = await self.proxy_graphql(user_id, mutation, None)
+        short_link = (
+            (result.get("data") or {})
+            .get("generateShortLink", {})
+            .get("shortLink")
+        )
+        if not short_link:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Não foi possível gerar o short link.",
+            )
+
+        logger.info("Shopee short link gerado user_id=%s: %s", user_id, short_link)
+        return short_link
 
     # ------------------------------------------------------------------ #
     #  Sincronização de dados                                              #

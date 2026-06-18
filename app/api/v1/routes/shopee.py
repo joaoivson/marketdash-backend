@@ -13,6 +13,7 @@ from app.schemas.shopee_integration import (
     ShopeeGraphQLResponse,
     ShopeeIntegrationResponse,
 )
+from app.schemas.shopee_short_link import ShortLinkRequest, ShortLinkResponse
 from app.services.shopee_integration_service import ShopeeIntegrationService
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,19 @@ async def proxy_graphql(
     """Proxy para queries GraphQL da Shopee Affiliate API."""
     result = await _service(db).proxy_graphql(current_user.id, payload.query, payload.variables)
     return ShopeeGraphQLResponse(**result)
+
+
+@router.post("/short-link", response_model=ShortLinkResponse)
+async def generate_short_link(
+    payload: ShortLinkRequest,
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    """Converte uma URL da Shopee em short link de afiliado (efêmero, não persiste)."""
+    short_link = await _service(db).generate_short_link(
+        current_user.id, payload.originUrl, payload.subId
+    )
+    return ShortLinkResponse(shortLink=short_link)
 
 
 @router.post("/sync", status_code=status.HTTP_202_ACCEPTED)

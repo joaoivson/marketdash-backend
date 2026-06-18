@@ -32,7 +32,7 @@ def init_db():
     
     # Import all models to register them with Base.metadata
     # This must happen before create_all()
-    from app.models import User, Dataset, DatasetRow, Subscription, AdSpend, ClickRow, Job, JobChunk, CaptureSite, CustomLink, PageEvent  # noqa: F401
+    from app.models import User, Dataset, DatasetRow, Subscription, AdSpend, ClickRow, Job, JobChunk, CaptureSite, CustomLink, CustomLinkEvent, PageEvent  # noqa: F401
     from app.models.user_settings import UserSettings  # noqa: F401
     from app.models.shopee_integration import ShopeeIntegration  # noqa: F401
     from app.models.facebook_integration import FacebookIntegration  # noqa: F401

@@ -1,6 +1,7 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from app.models.custom_link import CustomLink
+from app.models.custom_link_event import CustomLinkEvent
 from app.schemas.custom_link import CustomLinkCreate, CustomLinkUpdate
 
 
@@ -51,6 +52,9 @@ class CustomLinkRepository:
     def increment_click_count(self, db_obj: CustomLink) -> CustomLink:
         db_obj.click_count += 1
         self.db.add(db_obj)
+        # Ponto ÚNICO pós-dedup/bot: grava também 1 evento (forward-only) com timestamp
+        # para a série do insight, na MESMA transação. click_count segue sendo o total.
+        self.db.add(CustomLinkEvent(custom_link_id=db_obj.id, user_id=db_obj.user_id))
         self.db.commit()
         self.db.refresh(db_obj)
         return db_obj
