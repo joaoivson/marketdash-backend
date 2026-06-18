@@ -45,6 +45,8 @@ def test_status_empty_like_is_none(raw):
     "Pedido na mesma loja",
     "ORDERED_IN_SAME_SHOP",
     "ordered in same shop",
+    "Ordered in Same Shop",          # texto real da API GraphQL
+    "Ordered In Same Shop (7d)",     # variação com sufixo -> fallback por substring
 ])
 def test_attribution_direct(raw):
     assert normalize_attribution_type(raw) == DIRECT_ATTRIBUTION
@@ -53,6 +55,7 @@ def test_attribution_direct(raw):
 @pytest.mark.parametrize("raw", [
     "Pedido em loja diferente",
     "ORDERED_IN_DIFFERENT_SHOP",
+    "Ordered in Different Shop",      # texto real da API GraphQL
 ])
 def test_attribution_cross(raw):
     assert normalize_attribution_type(raw) == CROSS_ATTRIBUTION

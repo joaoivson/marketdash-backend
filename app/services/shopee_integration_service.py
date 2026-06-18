@@ -15,7 +15,7 @@ from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
 from app.schemas.shopee_integration import ShopeeIntegrationResponse
 from app.services import shopee_graphql_client
-from app.utils.shopee_normalize import normalize_order_status
+from app.utils.shopee_normalize import normalize_order_status, normalize_attribution_type
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +287,10 @@ class ShopeeIntegrationService:
                                 "item_comm_f": comm_f,
                                 "qty": qty,
                                 "channel_type": channel_val,
-                                "attribution_type": str(raw_attribution or "").strip(),
+                                # A API retorna texto ("Ordered in Same Shop"/"...Different Shop");
+                                # normaliza p/ a constante canônica usada no KPI "Diretos"
+                                # (ORDERED_IN_SAME_SHOP). Sem isso o texto cru nunca casava → 0 diretos.
+                                "attribution_type": normalize_attribution_type(raw_attribution),
                                 "category_lv1": str(item.get("globalCategoryLv1Name") or ""),
                                 "category_lv2": str(item.get("globalCategoryLv2Name") or ""),
                                 "category_lv3": str(item.get("globalCategoryLv3Name") or ""),

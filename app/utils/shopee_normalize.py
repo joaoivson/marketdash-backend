@@ -74,10 +74,26 @@ _ATTRIBUTION_MAP = {
 
 def normalize_attribution_type(raw: Optional[str]) -> Optional[str]:
     """Converte o tipo de atribuição para a constante canônica da Shopee.
-    Desconhecido/vazio → None (não conta como pedido direto)."""
+
+    Fontes possíveis do MESMO conceito:
+    - API GraphQL (conversionReport.items.attributionType): "Ordered in Same Shop" /
+      "Ordered in Different Shop" (texto, conforme docs Shopee/Apify).
+    - CSV de comissões: "Pedido na mesma loja" / "Pedido em loja diferente".
+    - Versões antigas assumiam a constante "ORDERED_IN_SAME_SHOP".
+    Convergem todas para ORDERED_IN_SAME_SHOP (direto) / ORDERED_IN_DIFFERENT_SHOP (cookie).
+    Desconhecido/vazio → None (não conta como pedido direto).
+    """
     if raw is None:
         return None
     key = _norm_key(str(raw))
     if key in _EMPTY_KEYS:
         return None
-    return _ATTRIBUTION_MAP.get(key)
+    exact = _ATTRIBUTION_MAP.get(key)
+    if exact:
+        return exact
+    # Fallback por substring p/ variações não previstas (sufixos, pontuação, etc).
+    if "same shop" in key or "same_shop" in key or "mesma loja" in key:
+        return DIRECT_ATTRIBUTION
+    if "different shop" in key or "different_shop" in key or "loja diferente" in key:
+        return CROSS_ATTRIBUTION
+    return None
