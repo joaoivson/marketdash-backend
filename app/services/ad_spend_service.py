@@ -1,3 +1,4 @@
+import math
 from typing import List, Optional
 from datetime import date
 
@@ -11,10 +12,16 @@ from app.repositories.ad_spend_repository import AdSpendRepository
 class AdSpendService:
     @staticmethod
     def _serialize(item: AdSpend) -> dict:
+        # Saneia o amount: NaN/Infinity NÃO são JSON válido e quebram a resposta inteira
+        # (500 no backend ou res.json() estourando no front) → o frontend recebe lista vazia
+        # e o card "Gasto Anúncios" do Dashboard zera. Uma única linha corrompida derruba tudo.
+        amount = item.amount
+        if amount is None or not math.isfinite(amount):
+            amount = 0.0
         return {
             "id": item.id,
             "date": item.date,
-            "amount": item.amount,
+            "amount": amount,
             "sub_id": item.sub_id,
             "clicks": item.clicks or 0,
         }
