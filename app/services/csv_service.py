@@ -6,6 +6,8 @@ from io import BytesIO
 import logging
 import unicodedata
 
+from app.utils.shopee_normalize import normalize_order_status, normalize_attribution_type
+
 logger = logging.getLogger(__name__)
 
 # Colunas alvo
@@ -30,6 +32,9 @@ ALIASES = {
     "quantity": {"quantity", "quantidade", "qtd", "item_count", "count", "vendas", "sales_count"},
 
     "status": {"status", "status_do_pedido", "status_pedido"},
+    # Tipo de Atribuição da Shopee: "Pedido na mesma loja" (direto) vs
+    # "Pedido em loja diferente" (cookie/cross). Alimenta o KPI "Diretos".
+    "attribution_type": {"tipo_de_atribuicao", "tipo_atribuicao", "atribuicao", "attribution_type", "attributiontype"},
     "category": {"categoria", "categoria_global", "categoria_global_l1"},
     "sub_id1": {"sub_id1", "subid1"},
     "channel": {"channel", "canal", "origem", "origem_do_pedido", "plataforma", "platform", "referenciador", "referrer"},
@@ -214,7 +219,15 @@ class CSVService:
                         errors.append(f"Coluna '{target}' ausente; preenchendo com 0.")
 
             # Status, categoria, sub_id1, plataforma, order_id, product_id
-            out["status"] = df[col_map["status"]].astype(str).str.strip() if "status" in col_map else None
+            # Status normalizado p/ PT canônico (Concluído/Pendente/Cancelado), igual ao CSV.
+            out["status"] = (
+                df[col_map["status"]].map(normalize_order_status) if "status" in col_map else None
+            )
+            # Tipo de Atribuição → constante canônica da Shopee (direto vs cookie/cross).
+            out["attribution_type"] = (
+                df[col_map["attribution_type"]].map(normalize_attribution_type)
+                if "attribution_type" in col_map else None
+            )
             out["category"] = df[col_map["category"]].astype(str).str.strip() if "category" in col_map else None
             out["sub_id1"] = df[col_map["sub_id1"]].astype(str).str.strip() if "sub_id1" in col_map else None
             out["platform"] = df[col_map["platform"]].astype(str).str.strip() if "platform" in col_map else None

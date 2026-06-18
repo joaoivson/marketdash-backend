@@ -15,6 +15,7 @@ from app.repositories.dataset_row_repository import DatasetRowRepository
 from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
 from app.schemas.shopee_integration import ShopeeIntegrationResponse
 from app.services import shopee_graphql_client
+from app.utils.shopee_normalize import normalize_order_status
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +335,10 @@ class ShopeeIntegrationService:
                                 date=row_date,
                                 platform="shopee",
                                 product=ni["item_name"],
-                                status=ni["order_status"],
+                                # Status em PT canônico (Concluído/Pendente/Cancelado), igual ao CSV.
+                                # A checagem de revenue acima usa o status raw (EN) da API, então
+                                # normalizar aqui não afeta o zeramento de cancelados/inválidos.
+                                status=normalize_order_status(ni["order_status"]),
                                 category=category,
                                 channel=ni.get("channel_type") or None,
                                 attribution_type=ni.get("attribution_type") or None,

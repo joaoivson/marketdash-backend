@@ -25,11 +25,13 @@ class DatasetRowRepository:
                 'dataset_id': row.dataset_id,
                 'user_id': row.user_id,
                 'date': row.date,
+                'time': row.time,
                 'platform': row.platform,
                 'channel': row.channel,
                 'category': row.category,
                 'product': row.product,
                 'status': row.status,
+                'attribution_type': row.attribution_type,
                 'sub_id1': row.sub_id1,
                 'order_id': row.order_id,
                 'product_id': row.product_id,
@@ -59,11 +61,13 @@ class DatasetRowRepository:
                 'profit': stmt.excluded.profit,
                 'quantity': stmt.excluded.quantity,
                 'date': stmt.excluded.date,
+                'time': stmt.excluded.time,
                 'sub_id1': stmt.excluded.sub_id1,
                 'category': stmt.excluded.category,
                 'platform': stmt.excluded.platform,
                 'product': stmt.excluded.product,
                 'channel': stmt.excluded.channel,
+                'attribution_type': stmt.excluded.attribution_type,
             }
         )
         

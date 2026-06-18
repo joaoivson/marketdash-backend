@@ -61,7 +61,7 @@ class DatasetService:
             return
 
         # 1. Agrupamento e Consolidação (Groupby) — incluir time quando CSV trouxer datetime
-        group_cols = ['date', 'time', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        group_cols = ['date', 'time', 'platform', 'category', 'product', 'status', 'attribution_type', 'sub_id1', 'order_id', 'product_id']
         if 'time' not in df.columns:
             df['time'] = None
         for col in group_cols:
@@ -143,6 +143,7 @@ class DatasetService:
                     platform=row_clean["platform"],
                     category=row_clean["category"],
                     status=row_clean["status"],
+                    attribution_type=row_clean.get("attribution_type"),
                     sub_id1=row_clean["sub_id1"],
                     order_id=row_clean["order_id"],
                     product_id=row_clean["product_id"],
@@ -177,7 +178,7 @@ class DatasetService:
             )
 
         # 1. Agrupamento e Consolidação (Groupby) — incluir time quando CSV trouxer datetime
-        group_cols = ['date', 'time', 'platform', 'category', 'product', 'status', 'sub_id1', 'order_id', 'product_id']
+        group_cols = ['date', 'time', 'platform', 'category', 'product', 'status', 'attribution_type', 'sub_id1', 'order_id', 'product_id']
         if 'time' not in df.columns:
             df['time'] = None
         for col in group_cols:
@@ -273,6 +274,7 @@ class DatasetService:
                     platform=row_clean["platform"],
                     category=row_clean["category"],
                     status=row_clean["status"],
+                    attribution_type=row_clean.get("attribution_type"),
                     sub_id1=row_clean["sub_id1"],
                     order_id=row_clean["order_id"],
                     product_id=row_clean["product_id"],
@@ -360,10 +362,13 @@ class DatasetService:
             "dataset_id": row.dataset_id,
             "user_id": row.user_id,
             "date": row.date,
+            "time": row.time,
             "product": row.product,
             "platform": row.platform,
             "category": row.category,
             "status": row.status,
+            "channel": row.channel,
+            "attribution_type": row.attribution_type,
             "sub_id1": row.sub_id1,
             "order_id": row.order_id,
             "product_id": row.product_id,
