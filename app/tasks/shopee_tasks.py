@@ -12,7 +12,12 @@ MAX_RETRY_HOURS = 12                   # para de tentar após 12h (ex: 7h → 19
 MAX_EMPTY_RETRIES = MAX_RETRY_HOURS    # 1 tentativa por hora
 
 
-@celery_app.task(bind=True, max_retries=3, soft_time_limit=600, time_limit=700)
+# O backfill de 88 dias de contas grandes (milhares de pedidos, dezenas de páginas por
+# chunk) pode passar de 10 min. Com o limite antigo (600s) a task estourava o
+# soft_time_limit, era MORTA e re-tentava do ZERO (DELETE+reinsert) num LOOP que nunca
+# concluía (a sincronização ficava "girando" pra sempre). Limite generoso (50 min) pra o
+# backfill completar de uma vez; tasks normais (incrementais) terminam em segundos.
+@celery_app.task(bind=True, max_retries=3, soft_time_limit=3000, time_limit=3300)
 def sync_shopee_user_task(self, user_id: int, empty_attempt: int = 0):
     """
     Sincroniza comissões Shopee para um único usuário.
