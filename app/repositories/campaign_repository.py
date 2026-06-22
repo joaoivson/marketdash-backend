@@ -182,7 +182,10 @@ class CampaignRepository:
             .group_by(CampaignDailyInsight.date, Campaign.sub_id)
             .all()
         )
-        covered_dates = {row[0] for row in agg}
+        # Só é "coberto" o dia em que o Meta traz gasto/cliques reais (>0). Dia com Meta
+        # zerado NÃO entra aqui → o gasto manual daquele dia é preservado (corrige o R$0
+        # artificial de quem tinha manual e o Meta veio sem dado no período).
+        covered_dates = {row[0] for row in agg if (row[2] or 0) > 0 or (row[3] or 0) > 0}
 
         # Limpa a projeção Meta anterior (idempotência).
         self.db.query(AdSpend).filter(
