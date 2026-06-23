@@ -7,6 +7,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_value, encrypt_value
@@ -466,7 +467,45 @@ class ShopeeIntegrationService:
         return total_processed
 
     async def sync_user(self, user_id: int, db: Session) -> int:
-        """Sincroniza comissões e atualiza last_sync_at. Retorna número de conversões inseridas."""
+        """Sincroniza comissões e atualiza last_sync_at. Retorna número de conversões inseridas.
+
+        Serializa por usuário com advisory lock do Postgres numa conexão DEDICADA (autocommit):
+        se JÁ há um sync em andamento para este user — outro worker, concurrency>1, ou tarefa
+        duplicada na fila — esta NO-OP na hora (retorna 0) em vez de rodar um DELETE+REINSERT
+        concorrente. Era a causa raiz da corrida/churn (dois syncs apagando+reinserindo as mesmas
+        linhas, lock contention, dashboard piscando zero) e do acúmulo de fila (duplicados que
+        levavam ~5 min cada agora viram no-op instantâneo). A conexão dedicada mantém o lock vivo
+        através dos commits por chunk; fechá-la no finally libera o lock mesmo em falha. Fail-open:
+        se o lock não puder ser adquirido por erro de infra, segue sem serialização (comportamento
+        antigo) em vez de travar o sync.
+        """
+        LOCK_NS = 819100  # namespace fixo p/ não colidir com outros advisory locks da base
+        lock_conn = None
+        try:
+            lock_conn = db.get_bind().connect().execution_options(isolation_level="AUTOCOMMIT")
+            acquired = lock_conn.execute(
+                text("SELECT pg_try_advisory_lock(:ns, :uid)"),
+                {"ns": LOCK_NS, "uid": user_id},
+            ).scalar()
+            if not acquired:
+                lock_conn.close()
+                logger.info(
+                    "Shopee sync user_id=%s: já há um sync em andamento — ignorando (no-op)",
+                    user_id,
+                )
+                return 0
+        except Exception as exc:
+            logger.warning(
+                "Shopee sync user_id=%s: advisory lock indisponível (%s); seguindo sem lock",
+                user_id, exc,
+            )
+            if lock_conn is not None:
+                try:
+                    lock_conn.close()
+                except Exception:
+                    pass
+                lock_conn = None
+
         try:
             commissions = await self.sync_commissions(user_id, db)
             self.repo.update_last_sync(user_id)
@@ -480,3 +519,16 @@ class ShopeeIntegrationService:
             db.rollback()
             logger.error("Shopee sync falhou user_id=%s: %s", user_id, exc)
             raise
+        finally:
+            if lock_conn is not None:
+                try:
+                    lock_conn.execute(
+                        text("SELECT pg_advisory_unlock(:ns, :uid)"),
+                        {"ns": LOCK_NS, "uid": user_id},
+                    )
+                except Exception:
+                    pass
+                try:
+                    lock_conn.close()  # fechar a conexão também libera advisory locks remanescentes
+                except Exception:
+                    pass
