@@ -10,9 +10,13 @@ class DatasetRowRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def bulk_create(self, rows: Iterable[DatasetRow]) -> None:
+    def bulk_create(self, rows: Iterable[DatasetRow], commit: bool = True) -> None:
         """
         Bulk insert usando ON CONFLICT DO NOTHING para evitar erros de constraint único.
+
+        commit=False: executa o INSERT mas NÃO commita — usado pelo re-sync atômico da Shopee,
+        que faz DELETE+REINSERT em lotes numa única transação (commit único no fim) pra o
+        dashboard nunca enxergar o estado intermediário vazio.
         """
         rows_list = list(rows)
         if not rows_list:
@@ -72,7 +76,8 @@ class DatasetRowRepository:
         )
         
         self.db.execute(stmt)
-        self.db.commit()
+        if commit:
+            self.db.commit()
 
     def list_by_dataset(
         self,

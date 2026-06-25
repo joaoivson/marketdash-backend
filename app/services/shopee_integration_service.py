@@ -192,7 +192,11 @@ class ShopeeIntegrationService:
         if not integration or not integration.is_active:
             return 0
 
+        # Captura credenciais ANTES do commit do dataset (expire_on_commit=True expira o objeto
+        # `integration`; usar `integration.app_id` no loop recarregaria do banco, reabrindo
+        # transação durante as chamadas lentas da API).
         password = decrypt_value(integration.encrypted_password)
+        app_id = integration.app_id
 
         # Shopee Brasil opera em BRT (UTC-3). Os timestamps de purchaseTime
         # na API são relativos a BRT, então o range deve ser em BRT.
@@ -209,28 +213,11 @@ class ShopeeIntegrationService:
         CHUNK_DAYS = 7
 
         dataset = _get_or_create_shopee_dataset(user_id, "transaction", db)
-
-        # Re-sync da janela por DELETE+REINSERT (decisão consciente — NÃO migrar p/ upsert):
-        # apaga só os últimos 88 dias (date >= start) e re-insere com os valores atuais da API.
-        # Isso já cumpre o objetivo do doc de persistência: (a) status muda por semanas
-        # (Pendente→Concluído→Cancelado) e a janela inteira é reconferida a cada ciclo;
-        # (b) NÃO duplica (delete antes do insert); (c) registros >88 dias NÃO são tocados →
-        # histórico preservado no banco. Upsert por row_hash traria risco de duplicação porque
-        # o seq do hash não é determinístico entre syncs; o ganho não compensa o risco.
-        deleted = (
-            db.query(DatasetRow)
-            .filter(
-                DatasetRow.user_id == user_id,
-                DatasetRow.platform == "shopee",
-                DatasetRow.date >= start.date(),
-            )
-            .delete(synchronize_session="fetch")
-        )
-        if deleted:
-            logger.info(
-                "Shopee full refresh: removidos %d rows antigos user_id=%s",
-                deleted, user_id,
-            )
+        ds_id = dataset.id  # captura o id ANTES do commit (expire_on_commit expira o objeto)
+        # Commita o dataset AGORA (transação curta) pra NÃO segurar uma transação aberta durante
+        # as chamadas lentas da API. O DELETE+REINSERT da janela é feito de forma ATÔMICA só no
+        # FIM (depois de buscar tudo) — ver o bloco "Re-sync ATÔMICO" no fim de sync_commissions.
+        db.commit()
 
         row_repo = DatasetRowRepository(db)
         # Contador sequencial para gerar row_hash único por item.
@@ -242,6 +229,9 @@ class ShopeeIntegrationService:
 
         total_processed = 0
         all_synced_order_ids: set[str] = set()
+        # Acumula TODAS as rows de TODAS as páginas/chunks em memória (a parte lenta = API).
+        # O INSERT no banco só acontece no fim, de forma atômica.
+        all_rows: list[DatasetRow] = []
 
         chunk_start = start
         while chunk_start < now:
@@ -265,7 +255,7 @@ class ShopeeIntegrationService:
 
                 try:
                     result = await shopee_graphql_client.execute_graphql(
-                        integration.app_id, password, query
+                        app_id, password, query
                     )
                 except HTTPException as exc:
                     logger.error(
@@ -298,7 +288,7 @@ class ShopeeIntegrationService:
                         sample_node.get("utmContent"),
                     )
 
-                rows = []
+                page_rows = []
                 for node in nodes:
                     purchase_ts = node.get("purchaseTime")
                     try:
@@ -390,9 +380,9 @@ class ShopeeIntegrationService:
                             or ""
                         )
 
-                        rows.append(
+                        page_rows.append(
                             DatasetRow(
-                                dataset_id=dataset.id,
+                                dataset_id=ds_id,
                                 user_id=user_id,
                                 date=row_date,
                                 platform="shopee",
@@ -414,13 +404,13 @@ class ShopeeIntegrationService:
                             )
                         )
 
-                if rows:
-                    row_repo.bulk_create(rows)
-                    total_processed += len(rows)
-                    chunk_processed += len(rows)
-                    # Acumula order_ids inseridos para dedup posterior
+                if page_rows:
+                    all_rows.extend(page_rows)
+                    total_processed += len(page_rows)
+                    chunk_processed += len(page_rows)
+                    # Acumula order_ids para o dedup posterior
                     all_synced_order_ids.update(
-                        r.order_id for r in rows if r.order_id
+                        r.order_id for r in page_rows if r.order_id
                     )
 
                 if not page_info.get("hasNextPage"):
@@ -440,6 +430,26 @@ class ShopeeIntegrationService:
             # — mantém o seq counter consistente com chunks subsequentes).
             chunk_start = chunk_end + timedelta(seconds=1)
 
+        # ── Re-sync ATÔMICO ──────────────────────────────────────────────────────
+        # Toda a API já foi buscada (parte lenta, SEM transação aberta). Agora a troca dos dados
+        # acontece numa ÚNICA transação curta: DELETE da janela de 88 dias + dedup + reinsert em
+        # lotes, com COMMIT único (no sync_user). Leitores (dashboard) enxergam os dados ANTIGOS
+        # até o commit; depois, os novos — NUNCA o estado vazio (antes piscava ~5 min por sync).
+        # Se algo falhar antes do commit → rollback e os dados ANTIGOS ficam intactos.
+        deleted = (
+            db.query(DatasetRow)
+            .filter(
+                DatasetRow.user_id == user_id,
+                DatasetRow.platform == "shopee",
+                DatasetRow.date >= start.date(),
+            )
+            .delete(synchronize_session="fetch")
+        )
+        if deleted:
+            logger.info(
+                "Shopee full refresh: removidos %d rows antigos user_id=%s", deleted, user_id,
+            )
+
         # ── Dedup: remover rows de outros datasets (ex: CSV importado) ──
         # que possuam os mesmos order_ids já trazidos pela API Shopee.
         # Isso evita contagem dupla no dashboard quando o usuário importou
@@ -449,7 +459,7 @@ class ShopeeIntegrationService:
                 db.query(DatasetRow)
                 .filter(
                     DatasetRow.user_id == user_id,
-                    DatasetRow.dataset_id != dataset.id,
+                    DatasetRow.dataset_id != ds_id,
                     DatasetRow.order_id.in_(list(all_synced_order_ids)),
                 )
                 .delete(synchronize_session="fetch")
@@ -459,6 +469,12 @@ class ShopeeIntegrationService:
                     "Shopee dedup: removidos %d rows duplicados de outros datasets user_id=%s",
                     stale, user_id,
                 )
+
+        # Reinsert em LOTES (respeita o limite de ~65k binds por statement do Postgres), SEM
+        # commit — o sync_user commita DELETE + dedup + todos os inserts numa transação só.
+        INSERT_BATCH = 500
+        for i in range(0, len(all_rows), INSERT_BATCH):
+            row_repo.bulk_create(all_rows[i:i + INSERT_BATCH], commit=False)
 
         logger.info(
             "Shopee sync user_id=%s: %d rows processados",
