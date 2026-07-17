@@ -14,6 +14,9 @@ FACEBOOK_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 FACEBOOK_API_VERSION=v21.0
 # Deve ser EXATAMENTE igual à redirect URI registrada no app e usada pelo frontend:
 FACEBOOK_OAUTH_REDIRECT_URI=https://app.marketdash.com.br/dashboard/configuracoes
+# Login do Facebook para Empresas — ID da configuração (User access token + ads_read/ads_management).
+# Substitui o parâmetro `scope` no diálogo OAuth. Sem isso, contas externas em Live falham com "Recurso indisponível".
+FACEBOOK_OAUTH_CONFIG_ID=xxxxxxxxxxxxxxxx
 
 # O token de acesso é criptografado com a MESMA chave Fernet do Shopee:
 SHOPEE_ENCRYPTION_KEY=<chave Fernet base64 já existente>
@@ -32,6 +35,10 @@ SHOPEE_ENCRYPTION_KEY=<chave Fernet base64 já existente>
    (e a URL de homologação/local que for usar, ex. `http://localhost:8080/dashboard/configuracoes`).
 5. Copie **App ID** e **App Secret** (Configurações → Básico) para o `.env`.
 6. Permissões necessárias: **`ads_read`** (leitura) e **`ads_management`** (pausar/ativar/orçamento).
+7. Em **Login do Facebook para Empresas → Configurações**, crie uma configuração:
+   - Tipo de token: **User access token** (não System User)
+   - Permissões: `ads_read`, `ads_management`
+   - Copie o **`config_id`** gerado para `FACEBOOK_OAUTH_CONFIG_ID`
 
 ### App Review (obrigatório para clientes)
 

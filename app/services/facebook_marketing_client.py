@@ -107,15 +107,30 @@ async def _get_paginated(url: str, params: dict) -> list[dict]:
 
 
 def build_oauth_url(redirect_uri: str, state: str, scopes: Optional[list[str]] = None) -> str:
-    """Monta a URL do diálogo de login do Facebook (frontend redireciona o usuário)."""
+    """Monta a URL do diálogo de Login do Facebook para Empresas.
+
+    Apps Business usam `config_id` (não `scope`). Sem FACEBOOK_OAUTH_CONFIG_ID o diálogo
+    em Live retorna "Recurso indisponível" para contas externas.
+    """
     app_id, _ = _require_app_credentials()
+    config_id = (settings.FACEBOOK_OAUTH_CONFIG_ID or "").strip()
+    if not config_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "FACEBOOK_OAUTH_CONFIG_ID não configurado. Crie a configuração em "
+                "Login do Facebook para Empresas e defina a variável no servidor."
+            ),
+        )
     params = {
         "client_id": app_id,
         "redirect_uri": redirect_uri,
         "state": state,
-        "scope": ",".join(scopes or DEFAULT_SCOPES),
+        "config_id": config_id,
         "response_type": "code",
     }
+    # `scopes` mantido na assinatura por compatibilidade; Login for Business ignora scope.
+    _ = scopes
     return f"{OAUTH_DIALOG_BASE}/{_api_version()}/dialog/oauth?{urlencode(params)}"
 
 

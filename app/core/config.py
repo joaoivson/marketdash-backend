@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # Redirect URI registrada no app do Facebook (deve bater exatamente com a do frontend).
     # Ex.: https://app.marketdash.com.br/dashboard/configuracoes
     FACEBOOK_OAUTH_REDIRECT_URI: Optional[str] = None
+    # Login do Facebook para Empresas: ID da configuração OAuth (substitui `scope` no diálogo).
+    # Painel → Login do Facebook para Empresas → Configurações → criar config (User access token).
+    FACEBOOK_OAUTH_CONFIG_ID: Optional[str] = None
 
     # pg_cron (Supabase) → endpoint interno do backend. Secret compartilhado (X-Cron-Secret).
     # Gerar com: openssl rand -hex 32. Quando None, o endpoint /internal/cron/* retorna 503.
