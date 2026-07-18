@@ -122,12 +122,16 @@ def build_oauth_url(redirect_uri: str, state: str, scopes: Optional[list[str]] =
                 "Login do Facebook para Empresas e defina a variável no servidor."
             ),
         )
+    # Login for Business + response_type=code exige override_default_response_type=true
+    # (docs Meta / FB.login). Sem isso o diálogo pode falhar com "Recurso indisponível".
+    # Ref: https://developers.facebook.com/docs/facebook-login/facebook-login-for-business/
     params = {
         "client_id": app_id,
         "redirect_uri": redirect_uri,
         "state": state,
         "config_id": config_id,
         "response_type": "code",
+        "override_default_response_type": "true",
     }
     # `scopes` mantido na assinatura por compatibilidade; Login for Business ignora scope.
     _ = scopes
