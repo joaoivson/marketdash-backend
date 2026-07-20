@@ -29,6 +29,7 @@ engine = create_engine(DATABASE_URL)
 MIGRATIONS = [
     ("027_shopee_sync_full_and_incremental.sql", "Shopee sync dividido (full + incremental)"),
     ("028_trigger_shopee_sync_parametrized.sql", "Parametrizar trigger_shopee_sync"),
+    ("029_shopee_sync_hourly_all_day.sql", "Shopee sync de hora em hora o dia inteiro (00-23h BRT)"),
 ]
 
 def apply_migrations():
