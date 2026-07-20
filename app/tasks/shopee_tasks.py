@@ -41,7 +41,15 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
         svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
         commissions = asyncio.run(svc.sync_user(user_id, db, days_back=days_back))
 
-        if commissions == 0 and empty_attempt < MAX_EMPTY_RETRIES:
+        if commissions == 0 and days_back <= 3:
+            # Sync incremental (cron horário): SEM retry chain — o próximo disparo
+            # do cron já cobre o atraso da Shopee. Reagendar aqui empilhava até 12
+            # tasks/hora por usuário sem vendas e derrubou o banco (incidente 20/07).
+            logger.info(
+                "Shopee sync user_id=%s: 0 conversões em %d dias (incremental, sem retry).",
+                user_id, days_back,
+            )
+        elif commissions == 0 and empty_attempt < MAX_EMPTY_RETRIES:
             next_attempt = empty_attempt + 1
             eta = datetime.now(timezone.utc) + timedelta(seconds=RETRY_INTERVAL_SECONDS)
             hours_elapsed = next_attempt

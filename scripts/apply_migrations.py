@@ -26,10 +26,12 @@ if not DATABASE_URL:
 engine = create_engine(DATABASE_URL)
 
 # Migrations em ordem
+# 029 virou no-op (incidente 20/07 — ver comentário no arquivo).
+# 030 (sync horário seguro) fica FORA da lista: aplicar manualmente só depois
+# do deploy do fix de retry no backend do Vault (api.hml).
 MIGRATIONS = [
     ("027_shopee_sync_full_and_incremental.sql", "Shopee sync dividido (full + incremental)"),
     ("028_trigger_shopee_sync_parametrized.sql", "Parametrizar trigger_shopee_sync"),
-    ("029_shopee_sync_hourly_all_day.sql", "Shopee sync de hora em hora o dia inteiro (00-23h BRT)"),
 ]
 
 def apply_migrations():
