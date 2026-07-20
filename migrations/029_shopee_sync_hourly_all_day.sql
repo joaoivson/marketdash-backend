@@ -11,61 +11,50 @@
 DO $$
 DECLARE
   hour_utc INT;
-  jobname TEXT;
-  sched TEXT;
-  j record;
+  v_jobname TEXT;
+  v_sched TEXT;
 BEGIN
   -- Remover jobs antigos (9-12h BRT que não cobrem todo o dia)
-  FOR j IN
-    SELECT * FROM (VALUES
-      ('shopee-sync-9h-brt'),
-      ('shopee-sync-10h-brt'),
-      ('shopee-sync-11h-brt'),
-      ('shopee-sync-12h-brt')
-    ) AS t(name)
-  LOOP
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = j.name) THEN
-      PERFORM cron.unschedule(j.name);
-    END IF;
-  END LOOP;
+  PERFORM cron.unschedule('shopee-sync-9h-brt');
+  PERFORM cron.unschedule('shopee-sync-10h-brt');
+  PERFORM cron.unschedule('shopee-sync-11h-brt');
+  PERFORM cron.unschedule('shopee-sync-12h-brt');
 
   -- Adicionar jobs para CADA HORA do dia (00-23h BRT)
   -- BRT = UTC - 3, então:
   -- 00:00 BRT = 03:00 UTC, 01:00 BRT = 04:00 UTC, ..., 23:00 BRT = 02:00 UTC (próximo dia)
   FOR hour_utc IN 3..23 LOOP
-    jobname := 'shopee-sync-' || (hour_utc - 3) || 'h-brt';  -- 0h, 1h, ..., 20h
-    sched := '0 ' || hour_utc || ' * * *';  -- Minuto 0 de cada hora UTC
+    v_jobname := 'shopee-sync-' || (hour_utc - 3) || 'h-brt';  -- 0h, 1h, ..., 20h
+    v_sched := '0 ' || hour_utc || ' * * *';  -- Minuto 0 de cada hora UTC
 
     -- Pular 01:00 BRT (04:00 UTC) — já tem job de full sync
     IF hour_utc = 4 THEN
       CONTINUE;
     END IF;
 
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = jobname) THEN
-      PERFORM cron.unschedule(jobname);
-    END IF;
+    -- Remover se já existe
+    BEGIN
+      PERFORM cron.unschedule(v_jobname);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
 
-    PERFORM cron.schedule(
-      jobname,
-      sched,
-      $cron$ SELECT public.trigger_shopee_sync('incremental'); $cron$
-    );
+    PERFORM cron.schedule(v_jobname, v_sched, $cron$ SELECT public.trigger_shopee_sync('incremental'); $cron$);
   END LOOP;
 
   -- Adicionar jobs para 21h-23h BRT (00-02h UTC do próximo dia)
   FOR hour_utc IN 0..2 LOOP
-    jobname := 'shopee-sync-' || (hour_utc + 21) || 'h-brt';  -- 21h, 22h, 23h
-    sched := '0 ' || hour_utc || ' * * *';  -- Minuto 0 de cada hora UTC
+    v_jobname := 'shopee-sync-' || (hour_utc + 21) || 'h-brt';  -- 21h, 22h, 23h
+    v_sched := '0 ' || hour_utc || ' * * *';  -- Minuto 0 de cada hora UTC
 
-    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = jobname) THEN
-      PERFORM cron.unschedule(jobname);
-    END IF;
+    -- Remover se já existe
+    BEGIN
+      PERFORM cron.unschedule(v_jobname);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
 
-    PERFORM cron.schedule(
-      jobname,
-      sched,
-      $cron$ SELECT public.trigger_shopee_sync('incremental'); $cron$
-    );
+    PERFORM cron.schedule(v_jobname, v_sched, $cron$ SELECT public.trigger_shopee_sync('incremental'); $cron$);
   END LOOP;
 
 END $$;
