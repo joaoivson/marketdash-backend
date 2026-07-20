@@ -98,3 +98,52 @@ def manual_sync(
     from app.tasks.shopee_tasks import sync_shopee_user_task
     task = sync_shopee_user_task.delay(current_user.id, empty_attempt=0)
     return {"status": "accepted", "task_id": task.id, "detail": "Sincronização enfileirada."}
+
+
+@router.post("/sync/manual", status_code=status.HTTP_202_ACCEPTED)
+def manual_sync_with_period(
+    period: int = 7,  # Período em dias: 7, 14, 30, 60, 90
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    """
+    Enfileira sincronização Shopee com período customizável.
+
+    Query params:
+    - period: 7, 14, 30, 60, ou 90 dias (default: 7)
+              90 dias = reconcile completo (~3 meses)
+              Valores fora deste range são clampados a 1-90.
+
+    Resposta: 202 Accepted + task_id para polling via GET /shopee/credentials
+    """
+    # Validar período
+    if period not in [7, 14, 30, 60, 90]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Período inválido: {period}. Use 7, 14, 30, 60 ou 90 dias.",
+        )
+
+    svc = _service(db)
+    if not svc.get_status(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Integração Shopee não configurada.",
+        )
+
+    from app.tasks.shopee_tasks import sync_shopee_user_task
+
+    # Enfileira task com período customizado
+    task = sync_shopee_user_task.delay(current_user.id, days_back=period, empty_attempt=0)
+
+    duration_label = f"{period} dias"
+    if period == 90:
+        duration_label += " (reconcile completo — pode levar 5+ min)"
+    elif period == 7:
+        duration_label += " (padrão — recomendado)"
+
+    return {
+        "status": "accepted",
+        "task_id": task.id,
+        "detail": f"Sincronização de {duration_label} enfileirada.",
+        "period_days": period,
+    }

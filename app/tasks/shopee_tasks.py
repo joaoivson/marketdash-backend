@@ -18,9 +18,16 @@ MAX_EMPTY_RETRIES = MAX_RETRY_HOURS    # 1 tentativa por hora
 # concluía (a sincronização ficava "girando" pra sempre). Limite generoso (50 min) pra o
 # backfill completar de uma vez; tasks normais (incrementais) terminam em segundos.
 @celery_app.task(bind=True, max_retries=3, soft_time_limit=3000, time_limit=3300)
-def sync_shopee_user_task(self, user_id: int, empty_attempt: int = 0):
+def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt: int = 0):
     """
     Sincroniza comissões Shopee para um único usuário.
+
+    Args:
+        user_id: ID do usuário
+        days_back: Número de dias a sincronizar (padrão: 88 = ~3 meses)
+                   88 = sync incremental (padrão)
+                   90 = reconcile completo
+        empty_attempt: Contador de tentativas quando retorna 0 conversões (interno)
 
     Se retornar 0 conversões novas, reagenda para 1h depois (até MAX_EMPTY_RETRIES vezes).
     Se der exceção, usa o retry padrão do Celery (max 3x, 5 min de espera).
@@ -32,7 +39,7 @@ def sync_shopee_user_task(self, user_id: int, empty_attempt: int = 0):
     db = SessionLocal()
     try:
         svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
-        commissions = asyncio.run(svc.sync_user(user_id, db))
+        commissions = asyncio.run(svc.sync_user(user_id, db, days_back=days_back))
 
         if commissions == 0 and empty_attempt < MAX_EMPTY_RETRIES:
             next_attempt = empty_attempt + 1
@@ -40,23 +47,23 @@ def sync_shopee_user_task(self, user_id: int, empty_attempt: int = 0):
             hours_elapsed = next_attempt
             hours_remaining = MAX_RETRY_HOURS - hours_elapsed
             logger.info(
-                "Shopee sync user_id=%s: 0 conversões (tentativa %dh/%dh). "
+                "Shopee sync user_id=%s: 0 conversões em %d dias (tentativa %dh/%dh). "
                 "Próxima tentativa às %s (%dh restantes).",
-                user_id, hours_elapsed, MAX_RETRY_HOURS,
+                user_id, days_back, hours_elapsed, MAX_RETRY_HOURS,
                 eta.strftime("%H:%M UTC"), hours_remaining,
             )
             sync_shopee_user_task.apply_async(
-                kwargs={"user_id": user_id, "empty_attempt": next_attempt},
+                kwargs={"user_id": user_id, "days_back": days_back, "empty_attempt": next_attempt},
                 eta=eta,
                 priority=9,
             )
         elif commissions == 0:
             logger.warning(
-                "Shopee sync user_id=%s: 0 conversões após %dh de tentativas. Encerrando.",
-                user_id, MAX_RETRY_HOURS,
+                "Shopee sync user_id=%s: 0 conversões em %d dias após %dh de tentativas. Encerrando.",
+                user_id, days_back, MAX_RETRY_HOURS,
             )
 
-        return {"status": "ok", "user_id": user_id, "commissions": commissions, "empty_attempt": empty_attempt}
+        return {"status": "ok", "user_id": user_id, "commissions": commissions, "empty_attempt": empty_attempt, "days_back": days_back}
 
     except Exception as exc:
         logger.error("sync_shopee_user_task falhou user_id=%s: %s", user_id, exc)

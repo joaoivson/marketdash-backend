@@ -187,7 +187,19 @@ class ShopeeIntegrationService:
     #  Sincronização de dados                                              #
     # ------------------------------------------------------------------ #
 
-    async def sync_commissions(self, user_id: int, db: Session) -> int:
+    async def sync_commissions(self, user_id: int, db: Session, days_back: int = 88) -> int:
+        """Sincroniza comissões Shopee para os últimos N dias (padrão: 88 dias = ~3 meses).
+
+        Args:
+            user_id: ID do usuário
+            db: Sessão do banco de dados
+            days_back: Número de dias a sincronizar (7, 14, 30, 60, 88, 90, etc.)
+                      88 = sync incremental de 3 meses (padrão)
+                      90 = reconcile completo (~3 meses + 2 dias de margem)
+
+        Returns:
+            Número de linhas processadas da API
+        """
         integration = self.repo.get_by_user_id(user_id)
         if not integration or not integration.is_active:
             return 0
@@ -202,10 +214,9 @@ class ShopeeIntegrationService:
         # na API são relativos a BRT, então o range deve ser em BRT.
         BRT = timezone(timedelta(hours=-3))
         now = datetime.now(BRT)
-        # Shopee Open API limita conversionReport aos "últimos 3 meses". Em meses
-        # não-bissextos a janela vale 89 dias; usamos 88 para ter 1 dia de margem
-        # contra drift de timezone entre nosso clock e o da API (erro 11001).
-        start = now - timedelta(days=88)
+        # Clampear days_back ao limite de 90 dias (API não retorna além disso)
+        days_back = min(max(days_back, 1), 90)
+        start = now - timedelta(days=days_back)
 
         # A API restringe a janela de purchaseTime por request a poucos dias.
         # Para cobrir os 88 dias, iteramos em chunks e dentro de cada chunk
@@ -482,8 +493,13 @@ class ShopeeIntegrationService:
         )
         return total_processed
 
-    async def sync_user(self, user_id: int, db: Session) -> int:
+    async def sync_user(self, user_id: int, db: Session, days_back: int = 88) -> int:
         """Sincroniza comissões e atualiza last_sync_at. Retorna número de conversões inseridas.
+
+        Args:
+            user_id: ID do usuário
+            db: Sessão do banco de dados
+            days_back: Número de dias a sincronizar (padrão 88)
 
         Serializa por usuário com advisory lock do Postgres numa conexão DEDICADA (autocommit):
         se JÁ há um sync em andamento para este user — outro worker, concurrency>1, ou tarefa
@@ -523,12 +539,12 @@ class ShopeeIntegrationService:
                 lock_conn = None
 
         try:
-            commissions = await self.sync_commissions(user_id, db)
+            commissions = await self.sync_commissions(user_id, db, days_back=days_back)
             self.repo.update_last_sync(user_id)
             db.commit()
             logger.info(
-                "Shopee sync concluído user_id=%s: %d conversões",
-                user_id, commissions,
+                "Shopee sync concluído user_id=%s: %d conversões (%d dias)",
+                user_id, commissions, days_back,
             )
             return commissions
         except Exception as exc:

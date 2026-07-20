@@ -158,16 +158,54 @@ class FacebookIntegrationService:
         return self._to_response(integration)
 
     def get_status(self, user_id: int) -> Optional[FacebookIntegrationResponse]:
+        """Retorna status da integração Facebook.
+
+        Diferencia entre:
+        - None: nunca conectou
+        - response com is_active=False: conectou mas token expirou/inválido
+        - response com is_active=True: conectado e ativo
+        """
         integration = self.repo.get_by_user_id(user_id)
         if not integration:
-            return None
+            return None  # Nunca conectou
+
+        # Se há integração mas is_active=False, significa token expirou
+        # Frontend deve mostrar "Reconectar" em vez de erro
         return self._to_response(integration)
 
+    def is_token_valid(self, user_id: int) -> bool:
+        """Verifica se o token Facebook existe e não expirou.
+
+        Retorna:
+        - False: nunca conectou ou token inválido/expirado
+        - True: token válido e ativo
+        """
+        integration = self.repo.get_by_user_id(user_id)
+        if not integration or not integration.is_active:
+            return False
+
+        # Verificar se o token expirou
+        if integration.token_expires_at:
+            now = datetime.now(timezone.utc)
+            if now > integration.token_expires_at:
+                # Token expirou, mas não foi apagado ainda
+                logger.info("Facebook token expirou user_id=%s. Marcando inativo.", user_id)
+                integration.is_active = False
+                self.db.commit()
+                return False
+
+        return True
+
     def disconnect(self, user_id: int) -> None:
+        """Desconecta Facebook do usuário. Idempotente: não falha se já desconectado ou nunca conectou."""
         deleted = self.repo.delete_by_user_id(user_id)
         self.db.commit()
-        if not deleted:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integração Facebook não encontrada.")
+        # Sucesso tanto se havia integração para deletar quanto se não havia (idempotente)
+        # Requisito: SEMPRE permitir desconectar, não prender o usuário com erro
+        if deleted:
+            logger.info("Facebook desconectado user_id=%s", user_id)
+        else:
+            logger.info("Facebook desconectar ignorado user_id=%s (nenhuma integração para deletar)", user_id)
 
     # ------------------------------------------------------------------ #
     #  Escrita (pausar/ativar, orçamento)                                 #

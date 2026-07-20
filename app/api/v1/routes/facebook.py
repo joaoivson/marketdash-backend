@@ -95,12 +95,41 @@ def get_status(
     return _service(db).get_status(current_user.id)
 
 
+@router.get("/validate-token", response_model=dict)
+def validate_token(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Verifica se o token Facebook é válido e não expirou.
+
+    Retorna:
+    {
+        "valid": bool,
+        "status": "connected" | "expired" | "never_connected"
+    }
+    """
+    svc = _service(db)
+    integration = svc.get_status(current_user.id)
+
+    if not integration:
+        return {"valid": False, "status": "never_connected"}
+    elif not integration.is_active:
+        return {"valid": False, "status": "expired"}  # Token expirou
+    else:
+        return {"valid": True, "status": "connected"}
+
+
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 def disconnect(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Remove a integração Facebook do usuário."""
+    """Remove a integração Facebook do usuário. Idempotente: não falha se já desconectado.
+
+    Caso de uso: Configurações → Integração Facebook → Desconectar
+    - Sempre sucede (204), mesmo que não haja integração
+    - Impossível ficar preso nesta tela por erro
+    """
     _service(db).disconnect(current_user.id)
     return None
 
