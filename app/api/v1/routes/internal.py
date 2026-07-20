@@ -49,8 +49,9 @@ def cron_shopee_sync(
     x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
 ):
     """
-    Disparado pelo pg_cron via pg_net (10h UTC = 7h BRT).
+    Disparado pelo pg_cron via pg_net com tipo: full (90d madrugada) ou incremental (3d horário).
 
+    Query: ?type=full|incremental (padrão: incremental)
     Enfileira sync_all_shopee_users_task no Celery worker e retorna imediatamente.
     """
     caller_ip = request.client.host if request.client else "unknown"
@@ -58,12 +59,15 @@ def cron_shopee_sync(
 
     from app.tasks.shopee_tasks import sync_all_shopee_users_task
 
-    task = sync_all_shopee_users_task.delay()
+    sync_type = request.query_params.get("type", "incremental")
+    days_back = 90 if sync_type == "full" else 3
+
+    task = sync_all_shopee_users_task.delay(days_back=days_back)
     logger.info(
-        "cron.shopee-sync dispatched task_id=%s caller_ip=%s source=%s",
-        task.id, caller_ip, request.headers.get("X-Cron-Source", "unknown"),
+        "cron.shopee-sync dispatched task_id=%s type=%s days_back=%d caller_ip=%s source=%s",
+        task.id, sync_type, days_back, caller_ip, request.headers.get("X-Cron-Source", "unknown"),
     )
-    return {"status": "accepted", "task_id": task.id}
+    return {"status": "accepted", "task_id": task.id, "sync_type": sync_type, "days_back": days_back}
 
 
 @router.post("/cron/facebook-sync", status_code=status.HTTP_202_ACCEPTED)

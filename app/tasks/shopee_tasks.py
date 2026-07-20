@@ -75,8 +75,15 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
 
 
 @celery_app.task
-def sync_all_shopee_users_task():
-    """Disparado pelo beat às 7h. Itera todas as integrações ativas e agenda tarefas por usuário."""
+def sync_all_shopee_users_task(days_back: int = 3):
+    """
+    Disparado pelo pg_cron. Itera todas as integrações ativas e agenda tarefas por usuário.
+
+    Args:
+        days_back: Número de dias a sincronizar
+                   3 = incremental (horário, cron 9-12h)
+                   90 = full reconcile (madrugada, cron 01h)
+    """
     from app.db.session import SessionLocal
     from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
 
@@ -85,11 +92,11 @@ def sync_all_shopee_users_task():
         repo = ShopeeIntegrationRepository(db)
         integrations = repo.get_all_active()
         for integ in integrations:
-            # priority=9 (baixa): full-refresh pesado do cron não bloqueia o sync manual do FB.
             sync_shopee_user_task.apply_async(
-                kwargs={"user_id": integ.user_id, "empty_attempt": 0}, priority=9
+                kwargs={"user_id": integ.user_id, "days_back": days_back, "empty_attempt": 0},
+                priority=9,
             )
-        logger.info("sync_all_shopee_users_task: %d tarefas agendadas", len(integrations))
-        return {"dispatched": len(integrations)}
+        logger.info("sync_all_shopee_users_task: %d tarefas agendadas (days_back=%d)", len(integrations), days_back)
+        return {"dispatched": len(integrations), "days_back": days_back}
     finally:
         db.close()
