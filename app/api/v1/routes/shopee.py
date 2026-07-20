@@ -1,6 +1,7 @@
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user, require_active_subscription
@@ -12,9 +13,27 @@ from app.schemas.shopee_integration import (
     ShopeeGraphQLRequest,
     ShopeeGraphQLResponse,
     ShopeeIntegrationResponse,
+    ShopeeSyncRequest,
 )
 from app.schemas.shopee_short_link import ShortLinkRequest, ShortLinkResponse
 from app.services.shopee_integration_service import ShopeeIntegrationService
+
+DEFAULT_SYNC_DAYS = 88
+MIN_SYNC_DAYS = 1
+MAX_SYNC_DAYS = 90
+
+
+def _resolve_sync_days(
+    days_query: Optional[int],
+    payload: Optional[ShopeeSyncRequest],
+) -> int:
+    """Resolve days: query tem prioridade sobre body; default 88; clampea 1–90."""
+    days = days_query
+    if days is None and payload is not None:
+        days = payload.days
+    if days is None:
+        days = DEFAULT_SYNC_DAYS
+    return min(max(int(days), MIN_SYNC_DAYS), MAX_SYNC_DAYS)
 
 logger = logging.getLogger(__name__)
 
@@ -80,15 +99,28 @@ async def generate_short_link(
 
 @router.post("/sync", status_code=status.HTTP_202_ACCEPTED)
 def manual_sync(
+    days: Optional[int] = Query(
+        None,
+        ge=MIN_SYNC_DAYS,
+        le=MAX_SYNC_DAYS,
+        description="Janela em dias (1–90). Prioridade sobre o body.",
+    ),
+    payload: Optional[ShopeeSyncRequest] = Body(None),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
 ):
     """
     Enfileira sincronização Shopee no Celery worker e retorna 202 imediato.
-    O sync real (88 dias em chunks + GraphQL) leva minutos; resposta síncrona
-    estoura timeout de gateway (Cloudflare ~100s). Frontend deve fazer polling
-    em GET /credentials.last_sync_at para detectar conclusão.
+
+    Aceita `days` via query (`?days=30`) e/ou body JSON (`{"days": 30}`).
+    Query tem prioridade; se omitido, usa 88 dias. Valor é clampeado a 1–90.
+
+    O sync real (chunks + GraphQL) leva minutos; resposta síncrona estoura
+    timeout de gateway (Cloudflare ~100s). Frontend deve fazer polling em
+    GET /credentials.last_sync_at para detectar conclusão.
     """
+    days_back = _resolve_sync_days(days, payload)
+
     svc = _service(db)
     if not svc.get_status(current_user.id):
         raise HTTPException(
@@ -96,8 +128,16 @@ def manual_sync(
             detail="Integração Shopee não configurada.",
         )
     from app.tasks.shopee_tasks import sync_shopee_user_task
-    task = sync_shopee_user_task.delay(current_user.id, empty_attempt=0)
-    return {"status": "accepted", "task_id": task.id, "detail": "Sincronização enfileirada."}
+
+    task = sync_shopee_user_task.delay(
+        current_user.id, days_back=days_back, empty_attempt=0
+    )
+    return {
+        "status": "accepted",
+        "task_id": task.id,
+        "detail": f"Sincronização de {days_back} dias enfileirada.",
+        "days": days_back,
+    }
 
 
 @router.post("/sync/manual", status_code=status.HTTP_202_ACCEPTED)

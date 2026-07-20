@@ -35,3 +35,9 @@ class ShopeeGraphQLRequest(BaseModel):
 class ShopeeGraphQLResponse(BaseModel):
     data: Optional[Any] = None
     errors: Optional[list] = None
+
+
+class ShopeeSyncRequest(BaseModel):
+    """Body opcional para POST /shopee/sync."""
+
+    days: Optional[int] = None
