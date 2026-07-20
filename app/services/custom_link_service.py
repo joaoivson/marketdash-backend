@@ -142,9 +142,14 @@ class CustomLinkService:
         Returns dict with 'url' on success, or 'error' and 'status_code' on failure.
         Clicks are ignored for bots, browser prefetch, and duplicate hits within 60s.
         """
-        link = self.repository.get_by_slug(slug)
+        link = self.repository.get_by_slug(slug.strip())
         if not link:
             return {"error": "Link não encontrado", "status_code": 404}
+
+        # Defesa extra: URL com espaço/quebra de linha nas pontas manda o comprador
+        # para a página de erro da Shopee. O schema já limpa na criação; aqui cobre
+        # registros antigos gravados antes do fix.
+        target_url = (link.original_url or "").strip()
 
         if not link.is_active:
             return {"error": "Este link está desativado", "status_code": 403}
@@ -153,13 +158,13 @@ class CustomLinkService:
             return {"error": "Este link expirou", "status_code": 410}
 
         if "prefetch" in (purpose or "").lower():
-            return {"url": link.original_url}
+            return {"url": target_url}
 
         if is_bot(user_agent):
-            return {"url": link.original_url}
+            return {"url": target_url}
 
         if not should_count("clk", link.id, ip, user_agent, 60):
-            return {"url": link.original_url}
+            return {"url": target_url}
 
         self.repository.increment_click_count(link)
-        return {"url": link.original_url}
+        return {"url": target_url}

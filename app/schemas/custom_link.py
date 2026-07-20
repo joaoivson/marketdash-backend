@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 
@@ -10,6 +10,15 @@ class CustomLinkBase(BaseModel):
     tag: Optional[str] = None
     expires_at: Optional[datetime] = None
     is_active: Optional[bool] = None
+
+    # Espaço/quebra de linha colado junto com a URL quebra o redirect na Shopee
+    # (ex.: "https://s.shopee.com.br/xxx " → shope.ee/error_page para o comprador).
+    @field_validator("name", "original_url", "slug", "tag", mode="before")
+    @classmethod
+    def _strip_whitespace(cls, v):
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
 
 class CustomLinkCreate(CustomLinkBase):
