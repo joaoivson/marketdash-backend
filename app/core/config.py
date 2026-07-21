@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # Permissões necessárias: ads_read (leitura) + ads_management (pausar/ativar/orçamento).
     FACEBOOK_APP_ID: Optional[str] = None
     FACEBOOK_APP_SECRET: Optional[str] = None
-    FACEBOOK_API_VERSION: str = "v21.0"
+    FACEBOOK_API_VERSION: str = "v25.0"
     # Redirect URI registrada no app do Facebook (deve bater exatamente com a do frontend).
     # Ex.: https://app.marketdash.com.br/dashboard/configuracoes
     FACEBOOK_OAUTH_REDIRECT_URI: Optional[str] = None

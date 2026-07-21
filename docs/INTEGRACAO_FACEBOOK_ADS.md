@@ -11,7 +11,7 @@ campanha → Sub ID.
 # App do Facebook (developers.facebook.com)
 FACEBOOK_APP_ID=xxxxxxxxxxxxxxxx
 FACEBOOK_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-FACEBOOK_API_VERSION=v21.0
+FACEBOOK_API_VERSION=v25.0
 # Deve ser EXATAMENTE igual à redirect URI registrada no app e usada pelo frontend:
 FACEBOOK_OAUTH_REDIRECT_URI=https://app.marketdash.com.br/dashboard/configuracoes
 # Login do Facebook para Empresas — ID da configuração (User access token + ads_read/ads_management).

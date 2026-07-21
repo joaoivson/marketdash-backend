@@ -30,7 +30,7 @@ DEFAULT_SCOPES = ["ads_read", "ads_management"]
 
 
 def _api_version() -> str:
-    return settings.FACEBOOK_API_VERSION or "v21.0"
+    return settings.FACEBOOK_API_VERSION or "v25.0"
 
 
 def _graph_url(path: str) -> str:
@@ -111,6 +111,8 @@ def build_oauth_url(redirect_uri: str, state: str, scopes: Optional[list[str]] =
 
     Apps Business usam `config_id` (não `scope`). Sem FACEBOOK_OAUTH_CONFIG_ID o diálogo
     em Live retorna "Recurso indisponível" para contas externas.
+
+    `config_id` vai logo após `client_id` para aparecer mesmo com a barra truncada.
     """
     app_id, _ = _require_app_credentials()
     config_id = (settings.FACEBOOK_OAUTH_CONFIG_ID or "").strip()
@@ -123,20 +125,26 @@ def build_oauth_url(redirect_uri: str, state: str, scopes: Optional[list[str]] =
             ),
         )
     # Login for Business + response_type=code exige override_default_response_type=true
-    # (docs Meta / FB.login). Sem isso o diálogo pode falhar com "Recurso indisponível".
     # Ref: https://developers.facebook.com/docs/facebook-login/facebook-login-for-business/
+    # Ordem: client_id → config_id primeiro (visível em screenshots truncados).
     params = {
         "client_id": app_id,
+        "config_id": config_id,
         "redirect_uri": redirect_uri,
         "state": state,
-        "config_id": config_id,
         "response_type": "code",
         "override_default_response_type": "true",
     }
     # `scopes` mantido na assinatura por compatibilidade; Login for Business ignora scope.
     _ = scopes
-    return f"{OAUTH_DIALOG_BASE}/{_api_version()}/dialog/oauth?{urlencode(params)}"
-
+    url = f"{OAUTH_DIALOG_BASE}/{_api_version()}/dialog/oauth?{urlencode(params)}"
+    logger.info(
+        "Facebook OAuth dialog url version=%s config_id=%s redirect_uri=%s",
+        _api_version(),
+        config_id,
+        redirect_uri,
+    )
+    return url
 
 async def exchange_code_for_token(code: str, redirect_uri: str) -> dict[str, Any]:
     """Troca o `code` do OAuth por um access token de curta duração."""
