@@ -112,18 +112,39 @@ def _ensure_settings(db: Session, user: User) -> None:
 
 def _ensure_fake_facebook(db: Session, user: User) -> None:
     """Integração placeholder — token dummy; sync é pulado via is_demo."""
-    from app.core.encryption import encrypt_value
+    # Evita importar app.core.encryption (puxa FastAPI) — Fernet direto.
+    import os
+    from cryptography.fernet import Fernet
+
+    key = (
+        os.getenv("SHOPEE_ENCRYPTION_KEY")
+        or os.getenv("ENCRYPTION_KEY")
+        or os.getenv("FERNET_KEY")
+    )
+    if not key:
+        try:
+            from app.core.config import settings
+            key = getattr(settings, "SHOPEE_ENCRYPTION_KEY", None)
+        except Exception:
+            key = None
+    if not key:
+        raise RuntimeError(
+            "SHOPEE_ENCRYPTION_KEY não configurada no .env — necessária para token demo."
+        )
+
+    f = Fernet(key.encode() if isinstance(key, str) else key)
+    token_enc = f.encrypt(b"demo-placeholder-token").decode()
 
     integ = db.query(FacebookIntegration).filter(FacebookIntegration.user_id == user.id).first()
     if not integ:
         integ = FacebookIntegration(
             user_id=user.id,
-            encrypted_access_token=encrypt_value("demo-placeholder-token"),
+            encrypted_access_token=token_enc,
         )
         db.add(integ)
     else:
         if not integ.encrypted_access_token:
-            integ.encrypted_access_token = encrypt_value("demo-placeholder-token")
+            integ.encrypted_access_token = token_enc
     integ.is_active = True
     integ.fb_user_name = "MarketDash Demo"
     integ.ad_account_id = "act_demo"
