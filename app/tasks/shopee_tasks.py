@@ -37,9 +37,9 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
         svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
         commissions = asyncio.run(svc.sync_user(user_id, db, days_back=days_back))
 
-        if commissions == 0 and days_back <= 3:
+        if commissions == 0 and days_back <= 7:
             logger.info(
-                "Shopee sync user_id=%s: 0 conversões em %d dias (incremental, sem retry).",
+                "Shopee sync user_id=%s: 0 conversões em %d dias (janela curta/cron, sem retry).",
                 user_id, days_back,
             )
         elif commissions == 0 and empty_attempt < MAX_EMPTY_RETRIES:
@@ -74,9 +74,10 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
 
 
 @celery_app.task
-def sync_all_shopee_users_task(days_back: int = 3):
+def sync_all_shopee_users_task(days_back: int = 7):
     """
-    Disparado pelo pg_cron. Itera integrações ativas e agenda por usuário (pula is_demo).
+    Fan-out Celery por usuário (pula is_demo). O cron horário usa path INLINE
+    (run_shopee_sync_all); esta task permanece para uso manual/legado.
     """
     from app.db.session import SessionLocal
     from app.models.user import User

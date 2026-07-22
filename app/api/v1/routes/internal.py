@@ -43,31 +43,39 @@ def _validate_cron_secret(received: str | None, caller_ip: str | None) -> None:
 
 
 @router.post("/cron/shopee-sync", status_code=status.HTTP_202_ACCEPTED)
-def cron_shopee_sync(
+async def cron_shopee_sync(
     request: Request,
+    background_tasks: BackgroundTasks,
     authorization: str | None = Header(default=None, alias="Authorization"),
     x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
 ):
     """
-    Disparado pelo pg_cron via pg_net com tipo: full (90d madrugada) ou incremental (3d horário).
+    Disparado pelo pg_cron via pg_net com tipo: full (90d madrugada) ou incremental (7d horário).
 
     Query: ?type=full|incremental (padrão: incremental)
-    Enfileira sync_all_shopee_users_task no Celery worker e retorna imediatamente.
+    Roda o sync de TODOS os usuários Shopee INLINE, num BackgroundTask do FastAPI —
+    SEM Celery/worker. Retorna 202 na hora (satisfaz o timeout do pg_net) e o sync
+    continua no próprio processo da API (mesmo padrão do facebook-sync).
     """
     caller_ip = request.client.host if request.client else "unknown"
     _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
 
-    from app.tasks.shopee_tasks import sync_all_shopee_users_task
+    from app.services.shopee_integration_service import run_shopee_sync_all
 
     sync_type = request.query_params.get("type", "incremental")
-    days_back = 90 if sync_type == "full" else 3
+    days_back = 90 if sync_type == "full" else 7
 
-    task = sync_all_shopee_users_task.delay(days_back=days_back)
+    background_tasks.add_task(run_shopee_sync_all, days_back)
     logger.info(
-        "cron.shopee-sync dispatched task_id=%s type=%s days_back=%d caller_ip=%s source=%s",
-        task.id, sync_type, days_back, caller_ip, request.headers.get("X-Cron-Source", "unknown"),
+        "cron.shopee-sync (inline/background, sem worker) type=%s days_back=%d caller_ip=%s source=%s",
+        sync_type, days_back, caller_ip, request.headers.get("X-Cron-Source", "unknown"),
     )
-    return {"status": "accepted", "task_id": task.id, "sync_type": sync_type, "days_back": days_back}
+    return {
+        "status": "accepted",
+        "mode": "background-inline",
+        "sync_type": sync_type,
+        "days_back": days_back,
+    }
 
 
 @router.post("/cron/facebook-sync", status_code=status.HTTP_202_ACCEPTED)

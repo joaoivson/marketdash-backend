@@ -564,3 +564,44 @@ class ShopeeIntegrationService:
                     lock_conn.close()  # fechar a conexão também libera advisory locks remanescentes
                 except Exception:
                     pass
+
+
+async def run_shopee_sync_all(days_back: int = 7) -> dict:
+    """Sincroniza TODOS os usuários Shopee ativos INLINE — sem Celery/worker.
+
+    Disparado pelo cron do Supabase (pg_cron → pg_net → POST /internal/cron/shopee-sync),
+    que agenda esta função num BackgroundTask do FastAPI: roda no próprio processo da API.
+    Contas is_demo são puladas. Falha de um usuário não derruba os demais.
+    """
+    from app.db.session import SessionLocal
+    from app.models.user import User
+
+    db0 = SessionLocal()
+    try:
+        integrations = ShopeeIntegrationRepository(db0).get_all_active()
+        user_ids: list[int] = []
+        for integ in integrations:
+            user = db0.query(User).filter(User.id == integ.user_id).first()
+            if user and getattr(user, "is_demo", False):
+                continue
+            user_ids.append(integ.user_id)
+    finally:
+        db0.close()
+
+    synced = 0
+    for uid in user_ids:
+        db = SessionLocal()
+        try:
+            svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
+            await svc.sync_user(uid, db, days_back=days_back)
+            synced += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Shopee sync inline falhou user_id=%s: %s", uid, exc)
+            db.rollback()
+        finally:
+            db.close()
+    logger.info(
+        "Shopee sync inline (pg_cron, sem worker): %d/%d usuários days_back=%d",
+        synced, len(user_ids), days_back,
+    )
+    return {"synced": synced, "total": len(user_ids), "days_back": days_back}
