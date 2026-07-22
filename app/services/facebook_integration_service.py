@@ -172,6 +172,17 @@ class FacebookIntegrationService:
         return decrypt_value(integration.encrypted_access_token)
 
     async def list_ad_accounts(self, user_id: int) -> list[FacebookAdAccount]:
+        # Conta demo: token placeholder — não chama Graph API.
+        if self._is_demo_user(user_id):
+            return [
+                FacebookAdAccount(
+                    account_id="demo",
+                    name="Conta Demo",
+                    currency="BRL",
+                    account_status=1,
+                    id="act_demo",
+                )
+            ]
         token = self._access_token(user_id)
         raw = await fb.list_ad_accounts(token)
         accounts: list[FacebookAdAccount] = []
