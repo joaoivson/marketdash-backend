@@ -34,10 +34,20 @@ class CustomLinkService:
 
     MAX_LINKS_PER_USER = 30
 
+    def _max_links(self, user_id: int) -> int:
+        from app.core.plans import plan_limit, normalize_plan
+        from app.repositories.subscription_repository import SubscriptionRepository
+
+        sub = SubscriptionRepository(self.repository.db).get_by_user_id(user_id)
+        return plan_limit(normalize_plan(sub.plan if sub else None), "links")
+
     def create_link(self, user_id: int, link_in: CustomLinkCreate) -> CustomLink:
         existing_links = self.repository.get_by_user(user_id)
-        if len(existing_links) >= self.MAX_LINKS_PER_USER:
-            raise ValueError(f"Limite de {self.MAX_LINKS_PER_USER} links atingido")
+        max_links = self._max_links(user_id)
+        if max_links <= 0:
+            raise ValueError("PLANO_INSUFICIENTE: Links rastreáveis disponíveis no plano Pro")
+        if len(existing_links) >= max_links:
+            raise ValueError(f"Limite de {max_links} links atingido")
 
         if link_in.slug:
             existing = self.repository.get_by_slug(link_in.slug)
@@ -156,6 +166,24 @@ class CustomLinkService:
 
         if link.expires_at and link.expires_at < datetime.now(timezone.utc):
             return {"error": "Este link expirou", "status_code": 410}
+
+        # Cancelamento: links continuam 30 dias após assinatura_status=cancelada
+        try:
+            from app.repositories.subscription_repository import SubscriptionRepository
+
+            sub = SubscriptionRepository(self.repository.db).get_by_user_id(link.user_id)
+            if sub and (sub.assinatura_status or "").lower() == "cancelada" and not sub.is_active:
+                cutoff = sub.updated_at or sub.assinatura_vence_em or sub.expires_at
+                if cutoff:
+                    if cutoff.tzinfo is None:
+                        cutoff = cutoff.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) > cutoff + timedelta(days=30):
+                        return {
+                            "error": "Este link não está mais disponível",
+                            "status_code": 410,
+                        }
+        except Exception:
+            pass
 
         if "prefetch" in (purpose or "").lower():
             return {"url": target_url}

@@ -2,14 +2,18 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
-from app.api.v1.dependencies import get_current_user, require_active_subscription
+from app.api.v1.dependencies import get_current_user, require_active_subscription, require_plan
 from app.db.session import get_db
 from app.models.user import User
+from app.core.plans import plan_has_feature, normalize_plan
+from app.repositories.subscription_repository import SubscriptionRepository
 from app.schemas.capture_site import CaptureSiteCreate, CaptureSiteUpdate, CaptureSiteResponse, SlugCheckResponse
 from app.repositories.capture_site_repository import CaptureSiteRepository
 from app.services.capture_site_service import CaptureSiteService
 
 router = APIRouter(tags=["capture_sites"])
+
+require_pro = require_plan("pro")
 
 def get_service(db: Session = Depends(get_db)):
     repo = CaptureSiteRepository(db)
@@ -26,19 +30,26 @@ def check_slug(
 @router.get("/public/{slug}", response_model=CaptureSiteResponse)
 def get_public_site(
     slug: str,
+    db: Session = Depends(get_db),
     service: CaptureSiteService = Depends(get_service)
 ):
-    """Get a capture site by slug (Public endpoint)."""
+    """Get a capture site by slug (Public endpoint). Fora do ar se plano do dono não for Pro+."""
     site = service.get_site_by_slug(slug)
     if not site:
         raise HTTPException(status_code=404, detail="Página não encontrada")
+    sub = SubscriptionRepository(db).get_by_user_id(site.user_id)
+    if not plan_has_feature(normalize_plan(sub.plan if sub else None), "captura"):
+        raise HTTPException(
+            status_code=403,
+            detail="Esta página está temporariamente indisponível",
+        )
     if not site.is_active:
         raise HTTPException(status_code=403, detail="Esta página está temporariamente desativada")
     return site
 
 @router.get("", response_model=List[CaptureSiteResponse])
 def list_user_sites(
-    current_user: User = Depends(require_active_subscription),
+    current_user: User = Depends(require_pro),
     service: CaptureSiteService = Depends(get_service)
 ):
     """List all capture sites for the authenticated user."""
@@ -47,19 +58,25 @@ def list_user_sites(
 @router.post("", response_model=CaptureSiteResponse, status_code=status.HTTP_201_CREATED)
 def create_site(
     site_in: CaptureSiteCreate,
-    current_user: User = Depends(require_active_subscription),
+    current_user: User = Depends(require_pro),
     service: CaptureSiteService = Depends(get_service)
 ):
     """Create a new capture site."""
     try:
         return service.create_site(current_user.id, site_in)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        msg = str(e)
+        if "PLANO_INSUFICIENTE" in msg:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "PLANO_INSUFICIENTE", "message": msg},
+            )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=msg)
 
 @router.get("/{site_id}", response_model=CaptureSiteResponse)
 def get_site(
     site_id: int,
-    current_user: User = Depends(require_active_subscription),
+    current_user: User = Depends(require_pro),
     service: CaptureSiteService = Depends(get_service)
 ):
     """Get a specific capture site by ID."""
@@ -74,7 +91,7 @@ def get_site(
 def update_site(
     site_id: int,
     site_in: CaptureSiteUpdate,
-    current_user: User = Depends(require_active_subscription),
+    current_user: User = Depends(require_pro),
     service: CaptureSiteService = Depends(get_service)
 ):
     """Update a capture site."""
@@ -86,7 +103,7 @@ def update_site(
 @router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_site(
     site_id: int,
-    current_user: User = Depends(require_active_subscription),
+    current_user: User = Depends(require_pro),
     service: CaptureSiteService = Depends(get_service)
 ):
     """Delete a capture site."""

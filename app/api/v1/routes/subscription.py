@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, get_user_plan_context
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
@@ -22,6 +22,14 @@ def get_subscription_status(
     subscription_service = SubscriptionService(SubscriptionRepository(db))
     status_data = subscription_service.get_subscription_status(current_user.id)
     return status_data
+
+
+@router.get("/plan")
+def get_plan_context(
+    plan_ctx: dict = Depends(get_user_plan_context),
+):
+    """Contexto de plano (menus, limites, checkouts) para o frontend."""
+    return plan_ctx
 
 
 @router.get("/check-status")

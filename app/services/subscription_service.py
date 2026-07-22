@@ -37,6 +37,10 @@ class SubscriptionService:
         provider_payment_status: Optional[str] = None,
         provider_payment_method: Optional[str] = None,
         provider_order_id: Optional[str] = None,
+        # Plan tiers
+        plano_periodo: Optional[str] = None,
+        assinatura_status: Optional[str] = None,
+        assinatura_vence_em: Optional[datetime] = None,
     ):
         """Atualiza ou cria subscription com dados do provider (Cakto/Kiwify)."""
         # Guard anti-cancelamento-de-assinatura-antiga: webhooks chegam FORA DE ORDEM
@@ -60,12 +64,17 @@ class SubscriptionService:
             stripped_offer = cakto_offer_name.strip()
             normalized_offer_name = stripped_offer or None
         
+        from app.core.plans import normalize_plan
+
         normalized_plan = None
         if isinstance(plan, str):
             stripped_plan = plan.strip()
             normalized_plan = stripped_plan or None
-        
-        plan_value = normalized_offer_name or normalized_plan or "free"
+
+        # Plano canônico: essencial|pro|max (legado free/marketdash normalizado)
+        plan_value = normalize_plan(normalized_plan or "essencial")
+        # Cakto legado às vezes passava nome da oferta como "plan" — se não for tier conhecido,
+        # normalize_plan já cai em essencial; offer name fica em cakto_offer_name.
 
         normalized_due_date = cakto_due_date  # Due date pode ser None e deve refletir diretamente em expires_at
 
@@ -110,13 +119,18 @@ class SubscriptionService:
         if not is_active and normalized_due_date is not None:
             is_active_value = normalized_due_date >= now_utc
 
+        vence = assinatura_vence_em or normalized_due_date or expires_at
+        status_assinatura = assinatura_status
+        if status_assinatura is None:
+            status_assinatura = "ativa" if is_active_value else "cancelada"
+
         subscription = self.repo.upsert(
             user_id=user_id,
             plan=plan_value,
             is_active=is_active_value,
             cakto_customer_id=cakto_customer_id,
             cakto_transaction_id=cakto_transaction_id,
-            expires_at=normalized_due_date,
+            expires_at=normalized_due_date if normalized_due_date is not None else expires_at,
             cakto_status=cakto_status,
             cakto_offer_name=normalized_offer_name,
             cakto_due_date=normalized_due_date,
@@ -128,12 +142,15 @@ class SubscriptionService:
             provider_customer_id=provider_customer_id,
             provider_transaction_id=provider_transaction_id,
             provider_status=provider_status,
-            provider_offer_name=provider_offer_name,
-            provider_due_date=provider_due_date,
+            provider_offer_name=provider_offer_name or normalized_offer_name,
+            provider_due_date=provider_due_date or normalized_due_date,
             provider_subscription_status=provider_subscription_status,
             provider_payment_status=provider_payment_status,
             provider_payment_method=provider_payment_method,
             provider_order_id=provider_order_id,
+            plano_periodo=plano_periodo,
+            assinatura_status=status_assinatura,
+            assinatura_vence_em=vence,
         )
         return subscription
 
@@ -202,21 +219,37 @@ class SubscriptionService:
         """Retorna status completo da assinatura do usuário."""
         subscription = self.repo.get_by_user_id(user_id)
         
+        from app.core.plans import normalize_plan
+
         if not subscription:
             return {
                 "has_subscription": False,
                 "is_active": False,
-                "plan": "free",
+                "plan": "essencial",
+                "plano": "essencial",
+                "plano_periodo": None,
+                "assinatura_status": "cancelada",
+                "assinatura_vence_em": None,
                 "needs_validation": True,
                 "expires_at": None,
             }
         
         needs_validation = self.needs_validation(user_id)
+        plan = normalize_plan(subscription.plan)
         
         return {
             "has_subscription": True,
             "is_active": subscription.is_active,
-            "plan": subscription.plan,
+            "plan": plan,
+            "plano": plan,
+            "plano_periodo": subscription.plano_periodo,
+            "assinatura_status": subscription.assinatura_status
+            or ("ativa" if subscription.is_active else "cancelada"),
+            "assinatura_vence_em": (
+                (subscription.assinatura_vence_em or subscription.expires_at).isoformat()
+                if (subscription.assinatura_vence_em or subscription.expires_at)
+                else None
+            ),
             "needs_validation": needs_validation,
             "last_validation_at": subscription.last_validation_at.isoformat() if subscription.last_validation_at else None,
             "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
@@ -262,9 +295,10 @@ class SubscriptionService:
             logger.info(f"Assinatura do usuário {user_id} já estava inativa")
             return False
         
-        # Desativar assinatura e mudar para plano free
+        # Desativar assinatura — rebaixa para essencial (links continuam redirecionando)
         subscription.is_active = False
-        subscription.plan = "free"
+        subscription.plan = "essencial"
+        subscription.assinatura_status = "cancelada"
         
         # Fazer commit
         self.repo.db.commit()

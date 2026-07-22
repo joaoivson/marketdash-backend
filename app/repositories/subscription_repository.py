@@ -37,6 +37,10 @@ class SubscriptionRepository:
         provider_payment_status: str = None,
         provider_payment_method: str = None,
         provider_order_id: str = None,
+        # Plan tiers
+        plano_periodo: str = None,
+        assinatura_status: str = None,
+        assinatura_vence_em = None,
     ) -> Subscription:
         try:
             subscription = self.get_by_user_id(user_id)
@@ -45,6 +49,9 @@ class SubscriptionRepository:
                     user_id=user_id,
                     plan=plan,
                     is_active=is_active,
+                    plano_periodo=plano_periodo,
+                    assinatura_status=assinatura_status,
+                    assinatura_vence_em=assinatura_vence_em,
                     cakto_customer_id=cakto_customer_id,
                     cakto_transaction_id=cakto_transaction_id,
                     expires_at=expires_at,
@@ -69,6 +76,12 @@ class SubscriptionRepository:
             else:
                 subscription.plan = plan
                 subscription.is_active = is_active
+                if plano_periodo is not None:
+                    subscription.plano_periodo = plano_periodo
+                if assinatura_status is not None:
+                    subscription.assinatura_status = assinatura_status
+                if assinatura_vence_em is not None:
+                    subscription.assinatura_vence_em = assinatura_vence_em
                 if cakto_customer_id is not None:
                     subscription.cakto_customer_id = cakto_customer_id
                 if cakto_transaction_id is not None:

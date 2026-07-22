@@ -190,3 +190,90 @@ def require_active_subscription(
             )
     
     return current_user
+
+
+def _user_plan(db: Session, user_id: int) -> str:
+    from app.core.plans import normalize_plan
+
+    sub = SubscriptionRepository(db).get_by_user_id(user_id)
+    return normalize_plan(sub.plan if sub else None)
+
+
+def require_plan(min_plan: str):
+    """Dependency factory: exige plano mínimo (ex.: 'pro'). 403 PLANO_INSUFICIENTE."""
+    from app.core.plans import normalize_plan, FEATURES
+
+    rank = {"essencial": 1, "pro": 2, "max": 3}
+
+    def _dep(
+        current_user: User = Depends(require_active_subscription),
+        db: Session = Depends(get_db),
+    ) -> User:
+        plan = _user_plan(db, current_user.id)
+        need = normalize_plan(min_plan)
+        if rank.get(plan, 0) < rank.get(need, 99):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "PLANO_INSUFICIENTE",
+                    "message": (
+                        f"Recurso disponível a partir do plano "
+                        f"{FEATURES.get(need, {}).get('label', need)}."
+                    ),
+                    "required_plan": need,
+                    "current_plan": plan,
+                },
+            )
+        return current_user
+
+    return _dep
+
+
+def get_user_plan_context(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Contexto de plano para o frontend (menus, limites, status)."""
+    from app.core.plans import (
+        FEATURES,
+        CHECKOUT_LINKS,
+        normalize_plan,
+        plan_limit,
+        PRO_ONLY_MENUS,
+    )
+
+    sub = SubscriptionRepository(db).get_by_user_id(current_user.id)
+    plan = normalize_plan(sub.plan if sub else None)
+    periodo = (sub.plano_periodo if sub and sub.plano_periodo else None) or "mensal"
+    status_assinatura = (
+        (sub.assinatura_status if sub and sub.assinatura_status else None)
+        or ("ativa" if sub and sub.is_active else "cancelada")
+    )
+    cfg = FEATURES[plan]
+    vence = None
+    if sub:
+        vence = sub.assinatura_vence_em or sub.expires_at
+    return {
+        "plano": plan,
+        "plano_label": cfg["label"],
+        "periodo": periodo,
+        "assinatura_status": status_assinatura,
+        "assinatura_vence_em": vence.isoformat() if vence else None,
+        "is_active": bool(sub and sub.is_active),
+        "is_demo": bool(getattr(current_user, "is_demo", False)),
+        "menus": sorted(cfg["menus"]),
+        "pro_only_menus": sorted(PRO_ONLY_MENUS),
+        "limites": dict(cfg["limites"]),
+        "limites_paginas_captura": plan_limit(plan, "paginas_captura"),
+        "limites_links": plan_limit(plan, "links"),
+        "checkouts": [
+            {
+                "plano": p,
+                "periodo": per,
+                "price": info["price"],
+                "url": info["url"],
+                "label": FEATURES[p]["label"],
+            }
+            for (p, per), info in CHECKOUT_LINKS.items()
+        ],
+    }

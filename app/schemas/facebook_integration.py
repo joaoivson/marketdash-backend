@@ -43,6 +43,8 @@ class FacebookIntegrationResponse(BaseModel):
     # Contas selecionadas (preenchido pelo service a partir de account_ids_list()).
     ad_account_ids: List[str] = []
     is_active: bool
+    # conectado | nunca | desconectado
+    connection_state: str = "nunca"
     last_sync_at: Optional[datetime] = None
     token_expires_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -50,3 +52,7 @@ class FacebookIntegrationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ClearAdsDataRequest(BaseModel):
+    confirm: bool = False

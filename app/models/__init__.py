@@ -17,11 +17,12 @@ from app.models.user_settings import UserSettings
 from app.models.shopee_integration import ShopeeIntegration
 from app.models.facebook_integration import FacebookIntegration
 from app.models.campaign import Campaign, CampaignDailyInsight
+from app.models.kiwify_plan_product import KiwifyPlanProduct
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
     "Job", "JobChunk", "CaptureSite", "CustomLink", "CustomLinkEvent", "PageEvent", "Commission",
     "UserSettings", "ShopeeIntegration", "FacebookIntegration",
-    "Campaign", "CampaignDailyInsight",
+    "Campaign", "CampaignDailyInsight", "KiwifyPlanProduct",
 ]
 

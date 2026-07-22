@@ -100,23 +100,22 @@ def validate_token(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Verifica se o token Facebook é válido e não expirou.
+    """Verifica estado de conexão Facebook.
 
     Retorna:
     {
         "valid": bool,
-        "status": "connected" | "expired" | "never_connected"
+        "status": "conectado" | "desconectado" | "nunca",
+        "connection_state": igual a status (alias)
     }
     """
     svc = _service(db)
-    integration = svc.get_status(current_user.id)
-
-    if not integration:
-        return {"valid": False, "status": "never_connected"}
-    elif not integration.is_active:
-        return {"valid": False, "status": "expired"}  # Token expirou
-    else:
-        return {"valid": True, "status": "connected"}
+    state = svc.resolve_connection_state(current_user.id)
+    return {
+        "valid": state == "conectado",
+        "status": state,
+        "connection_state": state,
+    }
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
@@ -124,14 +123,28 @@ def disconnect(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Remove a integração Facebook do usuário. Idempotente: não falha se já desconectado.
-
-    Caso de uso: Configurações → Integração Facebook → Desconectar
-    - Sempre sucede (204), mesmo que não haja integração
-    - Impossível ficar preso nesta tela por erro
-    """
+    """Remove a integração Facebook do usuário. Idempotente."""
     _service(db).disconnect(current_user.id)
     return None
+
+
+@router.post("/clear-ads-data", response_model=dict)
+def clear_ads_data(
+    payload: dict,
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    """Apaga campanhas, insights, gastos e cliques. Não toca Shopee.
+
+    Body: { "confirm": true }
+    """
+    if not isinstance(payload, dict) or not payload.get("confirm"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirme a exclusão enviando {\"confirm\": true}",
+        )
+    result = _service(db).clear_ads_data(current_user.id)
+    return {"status": "ok", "deleted": result}
 
 
 @router.post("/sync", status_code=status.HTTP_202_ACCEPTED)
@@ -140,6 +153,11 @@ def manual_sync(
     db: Session = Depends(get_db),
 ):
     """Enfileira a sincronização de campanhas/insights no Celery worker (202 imediato)."""
+    if getattr(current_user, "is_demo", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conta demo não sincroniza com o Facebook.",
+        )
     svc = _service(db)
     status_obj = svc.get_status(current_user.id)
     if not status_obj or not status_obj.ad_account_ids:
@@ -148,6 +166,5 @@ def manual_sync(
             detail="Conecte o Facebook e selecione ao menos uma conta de anúncio antes de sincronizar.",
         )
     from app.tasks.facebook_tasks import sync_facebook_user_task
-    # priority=0 (máxima): o botão "Atualizar dados" fura a fila na frente do batch da Shopee.
     task = sync_facebook_user_task.apply_async(args=[current_user.id], priority=0)
     return {"status": "accepted", "task_id": task.id, "detail": "Sincronização enfileirada."}

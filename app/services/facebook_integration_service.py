@@ -54,11 +54,62 @@ class FacebookIntegrationService:
         self.repo = repo
         self.db: Session = repo.db
 
+    def resolve_connection_state(self, user_id: int) -> str:
+        """conectado | nunca | desconectado."""
+        integration = self.repo.get_by_user_id(user_id)
+        if not integration:
+            return "nunca"
+        if not integration.is_active:
+            return "desconectado"
+        if integration.token_expires_at:
+            now = datetime.now(timezone.utc)
+            exp = integration.token_expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if now > exp:
+                integration.is_active = False
+                self.db.commit()
+                return "desconectado"
+        accounts = integration.account_ids_list()
+        if not accounts:
+            # Token ok mas sem conta → ainda não está "conectado" operacionalmente
+            return "desconectado"
+        return "conectado"
+
+    def require_connected(self, user_id: int) -> None:
+        if self.resolve_connection_state(user_id) != "conectado":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Nenhuma conta de anúncio conectada",
+            )
+
+    def mark_disconnected(self, user_id: int) -> None:
+        integration = self.repo.get_by_user_id(user_id)
+        if integration and integration.is_active:
+            integration.is_active = False
+            self.db.commit()
+            logger.info("Facebook marcado desconectado (token inválido) user_id=%s", user_id)
+
     @staticmethod
     def _to_response(integration) -> FacebookIntegrationResponse:
         """Monta a resposta incluindo a lista de contas (ad_account_ids)."""
         resp = FacebookIntegrationResponse.model_validate(integration)
         resp.ad_account_ids = integration.account_ids_list()
+        # connection_state preenchido pelo caller que tem o service
+        return resp
+
+    def get_status(self, user_id: int) -> Optional[FacebookIntegrationResponse]:
+        integration = self.repo.get_by_user_id(user_id)
+        if not integration:
+            return None
+        # Refresh expiry → is_active
+        state = self.resolve_connection_state(user_id)
+        integration = self.repo.get_by_user_id(user_id)
+        if not integration:
+            return None
+        resp = self._to_response(integration)
+        resp.connection_state = state
+        resp.is_active = state == "conectado"
         return resp
 
     # ------------------------------------------------------------------ #
@@ -155,72 +206,95 @@ class FacebookIntegrationService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integração Facebook não encontrada.")
         self.db.commit()
         self.db.refresh(integration)
-        return self._to_response(integration)
-
-    def get_status(self, user_id: int) -> Optional[FacebookIntegrationResponse]:
-        """Retorna status da integração Facebook.
-
-        Diferencia entre:
-        - None: nunca conectou
-        - response com is_active=False: conectou mas token expirou/inválido
-        - response com is_active=True: conectado e ativo
-        """
-        integration = self.repo.get_by_user_id(user_id)
-        if not integration:
-            return None  # Nunca conectou
-
-        # Se há integração mas is_active=False, significa token expirou
-        # Frontend deve mostrar "Reconectar" em vez de erro
-        return self._to_response(integration)
+        resp = self._to_response(integration)
+        resp.connection_state = self.resolve_connection_state(user_id)
+        return resp
 
     def is_token_valid(self, user_id: int) -> bool:
-        """Verifica se o token Facebook existe e não expirou.
-
-        Retorna:
-        - False: nunca conectou ou token inválido/expirado
-        - True: token válido e ativo
-        """
-        integration = self.repo.get_by_user_id(user_id)
-        if not integration or not integration.is_active:
-            return False
-
-        # Verificar se o token expirou
-        if integration.token_expires_at:
-            now = datetime.now(timezone.utc)
-            if now > integration.token_expires_at:
-                # Token expirou, mas não foi apagado ainda
-                logger.info("Facebook token expirou user_id=%s. Marcando inativo.", user_id)
-                integration.is_active = False
-                self.db.commit()
-                return False
-
-        return True
+        return self.resolve_connection_state(user_id) == "conectado"
 
     def disconnect(self, user_id: int) -> None:
-        """Desconecta Facebook do usuário. Idempotente: não falha se já desconectado ou nunca conectou."""
+        """Desconecta Facebook do usuário. Idempotente."""
         deleted = self.repo.delete_by_user_id(user_id)
         self.db.commit()
-        # Sucesso tanto se havia integração para deletar quanto se não havia (idempotente)
-        # Requisito: SEMPRE permitir desconectar, não prender o usuário com erro
         if deleted:
             logger.info("Facebook desconectado user_id=%s", user_id)
         else:
-            logger.info("Facebook desconectar ignorado user_id=%s (nenhuma integração para deletar)", user_id)
+            logger.info("Facebook desconectar ignorado user_id=%s (nenhuma integração)", user_id)
 
     # ------------------------------------------------------------------ #
     #  Escrita (pausar/ativar, orçamento)                                 #
     # ------------------------------------------------------------------ #
 
+    def _is_demo_user(self, user_id: int) -> bool:
+        from app.models.user import User
+
+        user = self.db.query(User).filter(User.id == user_id).first()
+        return bool(user and getattr(user, "is_demo", False))
+
     async def set_campaign_status(self, user_id: int, fb_campaign_id: str, active: bool) -> str:
-        token = self._access_token(user_id)
         new_status = "ACTIVE" if active else "PAUSED"
-        await fb.update_campaign_status(token, fb_campaign_id, new_status)
+        if self._is_demo_user(user_id):
+            return new_status
+        self.require_connected(user_id)
+        try:
+            token = self._access_token(user_id)
+            await fb.update_campaign_status(token, fb_campaign_id, new_status)
+        except HTTPException as exc:
+            self._maybe_mark_token_invalid(user_id, exc)
+            raise
         return new_status
 
     async def set_campaign_budget(self, user_id: int, fb_campaign_id: str, daily_budget_brl: float) -> float:
-        token = self._access_token(user_id)
-        await fb.update_campaign_daily_budget(token, fb_campaign_id, daily_budget_brl)
+        if self._is_demo_user(user_id):
+            return daily_budget_brl
+        self.require_connected(user_id)
+        try:
+            token = self._access_token(user_id)
+            await fb.update_campaign_daily_budget(token, fb_campaign_id, daily_budget_brl)
+        except HTTPException as exc:
+            self._maybe_mark_token_invalid(user_id, exc)
+            raise
         return daily_budget_brl
+
+    def _maybe_mark_token_invalid(self, user_id: int, exc: HTTPException) -> None:
+        detail = str(exc.detail or "")
+        if "190" in detail or "OAuthException" in detail or "Session has expired" in detail:
+            self.mark_disconnected(user_id)
+
+    def clear_ads_data(self, user_id: int) -> dict:
+        """Apaga campanhas, insights, ad spends e cliques. Não toca Shopee/comissões."""
+        from app.models.campaign import Campaign, CampaignDailyInsight
+        from app.models.ad_spend import AdSpend
+        from app.models.click_row import ClickRow
+
+        insights_deleted = (
+            self.db.query(CampaignDailyInsight)
+            .filter(CampaignDailyInsight.user_id == user_id)
+            .delete(synchronize_session=False)
+        )
+        campaigns_deleted = (
+            self.db.query(Campaign)
+            .filter(Campaign.user_id == user_id)
+            .delete(synchronize_session=False)
+        )
+        spends_deleted = (
+            self.db.query(AdSpend)
+            .filter(AdSpend.user_id == user_id)
+            .delete(synchronize_session=False)
+        )
+        clicks_deleted = (
+            self.db.query(ClickRow)
+            .filter(ClickRow.user_id == user_id)
+            .delete(synchronize_session=False)
+        )
+        self.db.commit()
+        return {
+            "campaigns": campaigns_deleted,
+            "insights": insights_deleted,
+            "ad_spends": spends_deleted,
+            "clicks": clicks_deleted,
+        }
 
     # ------------------------------------------------------------------ #
     #  Sincronização (campanhas + insights diários)                       #

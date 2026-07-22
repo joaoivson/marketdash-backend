@@ -29,10 +29,20 @@ class CaptureSiteService:
 
     MAX_SITES_PER_USER = 30
 
+    def _max_sites(self, user_id: int) -> int:
+        from app.core.plans import plan_limit, normalize_plan
+        from app.repositories.subscription_repository import SubscriptionRepository
+
+        sub = SubscriptionRepository(self.repository.db).get_by_user_id(user_id)
+        return plan_limit(normalize_plan(sub.plan if sub else None), "paginas_captura")
+
     def create_site(self, user_id: int, site_in: CaptureSiteCreate) -> CaptureSite:
         existing_sites = self.repository.get_by_user(user_id)
-        if len(existing_sites) >= self.MAX_SITES_PER_USER:
-            raise ValueError(f"Limite de {self.MAX_SITES_PER_USER} páginas de captura atingido")
+        max_sites = self._max_sites(user_id)
+        if max_sites <= 0:
+            raise ValueError("PLANO_INSUFICIENTE: Páginas de captura disponíveis no plano Pro")
+        if len(existing_sites) >= max_sites:
+            raise ValueError(f"Limite de {max_sites} páginas de captura atingido")
 
         # Check slug uniqueness before creation
         if site_in.slug:

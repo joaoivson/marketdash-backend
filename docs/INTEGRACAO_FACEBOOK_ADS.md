@@ -16,7 +16,7 @@ FACEBOOK_API_VERSION=v25.0
 FACEBOOK_OAUTH_REDIRECT_URI=https://app.marketdash.com.br/dashboard/configuracoes
 # Login do Facebook para Empresas — ID da configuração (User access token + ads_read/ads_management).
 # Substitui o parâmetro `scope` no diálogo OAuth. Sem isso, contas externas em Live falham com "Recurso indisponível".
-FACEBOOK_OAUTH_CONFIG_ID=xxxxxxxxxxxxxxxx
+FACEBOOK_OAUTH_CONFIG_ID=2527001584409306
 
 # O token de acesso é criptografado com a MESMA chave Fernet do Shopee:
 SHOPEE_ENCRYPTION_KEY=<chave Fernet base64 já existente>

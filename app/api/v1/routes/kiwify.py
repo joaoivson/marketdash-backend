@@ -49,10 +49,13 @@ ACTIVATE_EVENTS: Set[str] = {
 
 DEACTIVATE_EVENTS: Set[str] = {
     "subscription_canceled",
-    "subscription_late",
     "order_refunded",
     "order_chargedback",
     "chargeback",
+}
+
+LATE_EVENTS: Set[str] = {
+    "subscription_late",
 }
 
 LOG_ONLY_EVENTS: Set[str] = {
@@ -97,9 +100,11 @@ def _extract_event(order: Dict[str, Any]) -> str:
 
 
 def _map_event_to_action(event: str, order: Dict[str, Any]) -> Optional[str]:
-    """Mapeia evento para ação (activate/deactivate/None)."""
+    """Mapeia evento para ação (activate/deactivate/late/None)."""
     if event in ACTIVATE_EVENTS:
         return "activate"
+    if event in LATE_EVENTS:
+        return "late"
     if event in DEACTIVATE_EVENTS:
         return "deactivate"
     if event in LOG_ONLY_EVENTS:
@@ -120,6 +125,30 @@ def _map_event_to_action(event: str, order: Dict[str, Any]) -> Optional[str]:
     if event in ("compra_reembolsada",):
         return "deactivate"
 
+    return None
+
+
+def _lookup_plan_product(db: Session, product_id: Optional[str]):
+    """Busca mapeamento product_id → (plano, periodo). None se desconhecido."""
+    if not product_id:
+        return None
+    from app.models.kiwify_plan_product import KiwifyPlanProduct
+
+    row = (
+        db.query(KiwifyPlanProduct)
+        .filter(KiwifyPlanProduct.product_id == str(product_id))
+        .first()
+    )
+    if row:
+        return row
+    # Checkout slug pode vir no final da URL
+    slug = str(product_id).rstrip("/").split("/")[-1]
+    if slug != product_id:
+        return (
+            db.query(KiwifyPlanProduct)
+            .filter(KiwifyPlanProduct.product_id == slug)
+            .first()
+        )
     return None
 
 
@@ -310,11 +339,27 @@ async def kiwify_webhook(
                 detail="Erro na extração de dados",
             )
 
-        # Verificar filtro de produto
+        # Verificar filtro legado de produto (env) — se vazio, aceita todos
         product_id = transaction_data.get("product_id")
         if not _product_allowed(product_id):
-            logger.warning(f"Produto Kiwify não autorizado: {product_id}")
+            logger.warning(f"Produto Kiwify não autorizado (env filter): {product_id}")
             return {"status": "ignored", "reason": "product_not_allowed", "product_id": product_id}
+
+        # Mapeamento product_id → (plano, periodo)
+        plan_product = _lookup_plan_product(db, product_id)
+        if action == "activate" and not plan_product:
+            logger.error(
+                "ALERTA: product_id Kiwify não mapeado (%s). "
+                "Mantendo plano atual do usuário %s. Adicione em kiwify_plan_products.",
+                product_id,
+                email,
+            )
+            return {
+                "status": "ignored",
+                "reason": "product_not_mapped",
+                "product_id": product_id,
+                "note": "plano atual preservado",
+            }
 
         # Buscar ou criar usuário
         try:
@@ -338,17 +383,45 @@ async def kiwify_webhook(
                 transaction_data.get("paid_at"),
             )
 
-        # Atualizar assinatura
         subscription_service = SubscriptionService(SubscriptionRepository(db))
 
         try:
-            logger.info(f"Atualizando assinatura Kiwify para usuário {user.id} (ação: {action})")
+            if action == "late":
+                current = subscription_service.repo.get_by_user_id(user.id)
+                if current:
+                    current.assinatura_status = "inadimplente"
+                    db.commit()
+                    db.refresh(current)
+                logger.info(f"Kiwify late payment marcado para {email}")
+                return {
+                    "status": "ok",
+                    "action": "late",
+                    "user_id": user.id,
+                    "assinatura_status": "inadimplente",
+                }
+
+            if action == "activate":
+                plan_id = plan_product.plano
+                periodo = plan_product.periodo
+            else:
+                plan_id = "essencial"
+                periodo = None
+                current = subscription_service.repo.get_by_user_id(user.id)
+                if current and current.plano_periodo:
+                    periodo = current.plano_periodo
+
+            logger.info(
+                "Atualizando assinatura Kiwify user=%s action=%s plan=%s periodo=%s",
+                user.id, action, plan_id, periodo,
+            )
             subscription = subscription_service.set_active(
                 user_id=user.id,
-                plan="marketdash" if action == "activate" else "free",
+                plan=plan_id,
                 is_active=(action == "activate"),
                 expires_at=expires_at,
-                # Provider fields
+                plano_periodo=periodo,
+                assinatura_status="ativa" if action == "activate" else "cancelada",
+                assinatura_vence_em=expires_at,
                 provider="kiwify",
                 provider_customer_id=customer_data.get("customer_id"),
                 provider_transaction_id=transaction_data.get("transaction_id"),
@@ -365,9 +438,8 @@ async def kiwify_webhook(
                 subscription.last_validation_at = datetime.now(timezone.utc)
                 db.commit()
                 db.refresh(subscription)
-                db.refresh(user)  # Garantir que password_set_token está atualizado após commit
+                db.refresh(user)
 
-                # Agendar email em background (não bloqueia a resposta à Kiwify)
                 background_tasks.add_task(
                     _send_email_background,
                     user_id=user.id,
@@ -384,6 +456,8 @@ async def kiwify_webhook(
                 "status": "ok",
                 "action": action,
                 "user_id": user.id,
+                "plan": subscription.plan,
+                "plano_periodo": subscription.plano_periodo,
                 "subscription_active": subscription.is_active,
                 "next_payment_date": (
                     subscription.provider_due_date.isoformat()
