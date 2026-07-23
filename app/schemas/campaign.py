@@ -85,7 +85,7 @@ class CampaignDetailResponse(BaseModel):
 
 
 class SubIdOption(BaseModel):
-    """Um Sub ID com histórico de venda, oferecido no modal de vínculo."""
+    """Um Sub ID (com ou sem venda) oferecido no modal de vínculo."""
     sub_id: str
     orders: int = 0
     commission: float = 0.0

@@ -46,6 +46,76 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
+def merge_sub_id_option_rows(
+    sales: List[dict],
+    click_sub_ids: List[str],
+    linked: dict,
+    campaign_id: int,
+    campaign_name: str,
+) -> List[SubIdOption]:
+    """Une Sub IDs de venda + cliques, deduplica por normalização e monta opções do modal.
+
+    Ordenação: com venda (sugeridos primeiro, depois por pedidos desc) → sem venda.
+    """
+    by_key: dict = {}
+    for row in sales:
+        sub = (row.get("sub_id") or "").strip()
+        if not sub:
+            continue
+        key = _normalize(sub)
+        if not key:
+            continue
+        by_key[key] = {
+            "sub_id": sub,
+            "orders": int(row.get("orders") or 0),
+            "commission": float(row.get("commission") or 0.0),
+        }
+
+    for raw in click_sub_ids:
+        sub = (raw or "").strip()
+        if not sub:
+            continue
+        key = _normalize(sub)
+        if not key or key in by_key:
+            continue
+        by_key[key] = {"sub_id": sub, "orders": 0, "commission": 0.0}
+
+    linked_by_key = {}
+    for sub, (cid, cname) in (linked or {}).items():
+        k = _normalize(sub or "")
+        if k:
+            linked_by_key[k] = (cid, cname)
+
+    norm_name = _normalize(campaign_name)
+    options: List[SubIdOption] = []
+    for key, row in by_key.items():
+        sub = row["sub_id"]
+        match = _SUBID_WORD_RE.match(sub or "")
+        word = match.group(0).lower() if match else ""
+        suggested = len(word) >= 3 and word in norm_name
+
+        link = linked_by_key.get(key)
+        if link and link[0] != campaign_id:
+            linked_campaign_id, linked_campaign_name = link
+        else:
+            linked_campaign_id, linked_campaign_name = None, None
+
+        options.append(
+            SubIdOption(
+                sub_id=sub,
+                orders=row["orders"],
+                commission=round(row["commission"], 2),
+                suggested=suggested,
+                linked_campaign_id=linked_campaign_id,
+                linked_campaign_name=linked_campaign_name,
+            )
+        )
+
+    # Com venda primeiro; dentro do grupo, sugeridos e depois pedidos desc.
+    options.sort(key=lambda o: (o.orders <= 0, not o.suggested, -o.orders, o.sub_id.lower()))
+    return options
+
+
 def _is_active(campaign: Campaign) -> bool:
     eff = (campaign.effective_status or campaign.status or "").upper()
     return eff == "ACTIVE"
@@ -204,48 +274,26 @@ class CampaignService:
         return CampaignListResponse(kpis=kpis, campaigns=responses, has_tax=has_tax)
 
     def sub_id_options(self, user_id: int, campaign_id: int) -> SubIdOptionsResponse:
-        """Sub IDs com histórico de venda para o modal de vínculo.
+        """Sub IDs para o modal de vínculo: com venda (Shopee) ∪ só cliques (upload).
 
-        Ordena: primeiro os sugeridos (nome-base bate com o nome da campanha),
-        por nº de pedidos desc; depois os demais, também por pedidos desc. Sub IDs
+        Ordena: com venda (sugeridos + pedidos desc); depois sem venda. Sub IDs
         já vinculados a OUTRA campanha vêm marcados (o frontend bloqueia).
+        Deduplica por normalização (caixa/acento/espaço).
         """
         campaign = self.repo.get_by_id(campaign_id, user_id)
         if not campaign:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada.")
 
-        summary = self.repo.sub_id_sales_summary(user_id)
+        sales = self.repo.sub_id_sales_summary(user_id)
+        clicks = self.repo.sub_ids_from_clicks(user_id)
         linked = self.repo.linked_sub_ids(user_id)
-        norm_name = _normalize(campaign.name)
-
-        options: List[SubIdOption] = []
-        for row in summary:
-            sub = row["sub_id"]
-            match = _SUBID_WORD_RE.match(sub or "")
-            word = match.group(0).lower() if match else ""
-            # Marca TODOS os sub_ids cujo nome-base aparece no nome da campanha
-            # (comparação sem espaço/acento/maiúscula).
-            suggested = len(word) >= 3 and word in norm_name
-
-            link = linked.get(sub)
-            # O vínculo atual da própria campanha não conta como "vinculado a outra".
-            if link and link[0] != campaign.id:
-                linked_campaign_id, linked_campaign_name = link
-            else:
-                linked_campaign_id, linked_campaign_name = None, None
-
-            options.append(
-                SubIdOption(
-                    sub_id=sub,
-                    orders=row["orders"],
-                    commission=round(row["commission"], 2),
-                    suggested=suggested,
-                    linked_campaign_id=linked_campaign_id,
-                    linked_campaign_name=linked_campaign_name,
-                )
-            )
-
-        options.sort(key=lambda o: (not o.suggested, -o.orders))
+        options = merge_sub_id_option_rows(
+            sales=sales,
+            click_sub_ids=clicks,
+            linked=linked,
+            campaign_id=campaign.id,
+            campaign_name=campaign.name or "",
+        )
         return SubIdOptionsResponse(options=options)
 
     def _compute_kpis(self, responses: List[CampaignResponse]) -> CampaignKPIs:

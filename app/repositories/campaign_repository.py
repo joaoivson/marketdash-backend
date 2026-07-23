@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ad_spend import AdSpend
 from app.models.campaign import Campaign, CampaignDailyInsight
+from app.models.click_row import ClickRow
 from app.models.dataset_row import DatasetRow
 
 logger = logging.getLogger(__name__)
@@ -360,3 +361,27 @@ class CampaignRepository:
             }
             for r in rows
         ]
+
+    def sub_ids_from_clicks(self, user_id: int) -> List[str]:
+        """Sub IDs distintos do upload de cliques (mesmo sem venda).
+
+        Mesma limpeza de hífens finais usada em DatasetRow.sub_id1.
+        """
+        cleaned = func.nullif(func.trim(func.rtrim(ClickRow.sub_id, "-")), "")
+        rows = (
+            self.db.query(cleaned.label("sub_id"))
+            .filter(
+                ClickRow.user_id == user_id,
+                ClickRow.sub_id.isnot(None),
+                cleaned.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+        out: List[str] = []
+        for r in rows:
+            s = (r.sub_id or "").strip()
+            if not s or s.lower() in ("nan", "null", "sem sub id", "n/a"):
+                continue
+            out.append(s)
+        return out
