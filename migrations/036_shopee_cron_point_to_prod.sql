@@ -1,0 +1,26 @@
+-- Migration 036: apontar cron Shopee para a API de PRODUÇÃO
+--
+-- Diagnóstico (2026-07-23): vault.backend_base_url estava em api.hml.
+-- O pg_cron de produção disparava sync no processo da API de homologação
+-- (BackgroundTask frágil a restart). Contas pesadas (ex.: Luiz user_id=9,
+-- 41k rows) ficavam 1–2 dias sem last_sync_at atualizar.
+--
+-- APLICAR MANUALMENTE no Supabase SQL Editor após confirmar a URL de prod:
+--
+--   SELECT vault.update_secret(
+--     (SELECT id FROM vault.secrets WHERE name = 'backend_base_url'),
+--     'https://api.marketdash.com.br',   -- produção (hoje o Vault aponta api.hml)
+--     'backend_base_url'
+--   );
+--
+-- Validar:
+--   SELECT name,
+--     CASE WHEN decrypted_secret ILIKE '%hml%' THEN 'HML' ELSE 'PROD_OR_OTHER' END
+--   FROM vault.decrypted_secrets WHERE name = 'backend_base_url';
+--
+-- Destravar um usuário específico (após deploy do ?user_id= no cron):
+--   -- usar trigger_shopee_sync + path com user_id via net.http_post, ou
+--   -- POST /api/v1/internal/cron/shopee-sync?type=incremental&user_id=9
+--     com header X-Cron-Secret / Authorization Bearer
+
+SELECT 1;

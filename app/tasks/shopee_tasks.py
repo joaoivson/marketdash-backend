@@ -68,6 +68,16 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
 
     except Exception as exc:
         logger.error("sync_shopee_user_task falhou user_id=%s: %s", user_id, exc)
+        try:
+            from app.models.sync_error_log import SyncErrorLog
+
+            db.add(SyncErrorLog(user_id=user_id, source="shopee", error_message=str(exc)[:2000]))
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         raise self.retry(exc=RuntimeError(str(exc)), countdown=300)
     finally:
         db.close()
@@ -76,28 +86,48 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
 @celery_app.task
 def sync_all_shopee_users_task(days_back: int = 7):
     """
-    Fan-out Celery por usuário (pula is_demo). O cron horário usa path INLINE
-    (run_shopee_sync_all); esta task permanece para uso manual/legado.
+    Fan-out Celery por usuário (pula is_demo). Usado pelo cron horário
+    (com fallback inline se o broker falhar). Prioriza last_sync_at antigo e
+    pula quem sincronizou nos últimos SKIP_RECENT_SYNC_MINUTES.
     """
+    from datetime import datetime, timedelta, timezone
+
     from app.db.session import SessionLocal
     from app.models.user import User
     from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
+    from app.services.shopee_integration_service import SKIP_RECENT_SYNC_MINUTES
 
     db = SessionLocal()
     try:
         repo = ShopeeIntegrationRepository(db)
         integrations = repo.get_all_active()
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=SKIP_RECENT_SYNC_MINUTES)
         dispatched = 0
+        skipped_recent = 0
         for integ in integrations:
             user = db.query(User).filter(User.id == integ.user_id).first()
             if user and getattr(user, "is_demo", False):
                 continue
+            last = integ.last_sync_at
+            if last is not None:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if last >= cutoff:
+                    skipped_recent += 1
+                    continue
             sync_shopee_user_task.apply_async(
                 kwargs={"user_id": integ.user_id, "days_back": days_back, "empty_attempt": 0},
                 priority=9,
             )
             dispatched += 1
-        logger.info("sync_all_shopee_users_task: %d tarefas agendadas (days_back=%d)", dispatched, days_back)
-        return {"dispatched": dispatched, "days_back": days_back}
+        logger.info(
+            "sync_all_shopee_users_task: %d tarefas agendadas (days_back=%d skipped_recent=%d)",
+            dispatched, days_back, skipped_recent,
+        )
+        return {
+            "dispatched": dispatched,
+            "days_back": days_back,
+            "skipped_recent": skipped_recent,
+        }
     finally:
         db.close()

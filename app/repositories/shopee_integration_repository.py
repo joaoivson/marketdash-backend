@@ -20,10 +20,16 @@ class ShopeeIntegrationRepository:
         )
 
     def get_all_active(self) -> List[ShopeeIntegration]:
-        """Retorna todas as integrações ativas — usado pelo job diário."""
+        """Retorna integrações ativas, mais atrasadas primeiro (NULLS FIRST).
+
+        Ordenar por last_sync_at evita starvation: contas grandes/no fim da
+        lista indefinida do Postgres ficavam dias sem sync quando o cron
+        horário overlapping ou o processo da API reiniciava no meio do lote.
+        """
         return (
             self.db.query(ShopeeIntegration)
             .filter(ShopeeIntegration.is_active == True)
+            .order_by(ShopeeIntegration.last_sync_at.asc().nullsfirst())
             .all()
         )
 

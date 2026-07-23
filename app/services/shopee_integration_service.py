@@ -566,42 +566,149 @@ class ShopeeIntegrationService:
                     pass
 
 
+# Evita que crons horários overlapping reprocessem quem acabou de sincronizar
+# enquanto contas atrasadas (ex.: Luiz user_id=9) ficam sem vez.
+SKIP_RECENT_SYNC_MINUTES = 45
+# Lock global do lote inline (namespace distinto do lock por usuário = 819100).
+_SYNC_ALL_LOCK_NS = 819101
+_SYNC_ALL_LOCK_KEY = 1
+
+
+async def run_shopee_sync_user(user_id: int, days_back: int = 7) -> dict:
+    """Sincroniza um único usuário INLINE (ops / cron ?user_id=)."""
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
+        commissions = await svc.sync_user(user_id, db, days_back=days_back)
+        return {
+            "synced": 1,
+            "total": 1,
+            "user_id": user_id,
+            "commissions": commissions,
+            "days_back": days_back,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Shopee sync inline falhou user_id=%s: %s", user_id, exc)
+        try:
+            from app.models.sync_error_log import SyncErrorLog
+
+            db.add(SyncErrorLog(user_id=user_id, source="shopee", error_message=str(exc)[:2000]))
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 async def run_shopee_sync_all(days_back: int = 7) -> dict:
-    """Sincroniza TODOS os usuários Shopee ativos INLINE — sem Celery/worker.
+    """Sincroniza usuários Shopee ativos INLINE — sem Celery/worker.
 
     Disparado pelo cron do Supabase (pg_cron → pg_net → POST /internal/cron/shopee-sync),
     que agenda esta função num BackgroundTask do FastAPI: roda no próprio processo da API.
+
     Contas is_demo são puladas. Falha de um usuário não derruba os demais.
+    Lote usa advisory lock global (só um sync_all por vez) e prioriza last_sync_at
+    mais antigo; pula quem sincronizou nos últimos SKIP_RECENT_SYNC_MINUTES.
     """
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import text
+
     from app.db.session import SessionLocal
     from app.models.user import User
 
-    db0 = SessionLocal()
+    lock_conn = None
     try:
-        integrations = ShopeeIntegrationRepository(db0).get_all_active()
-        user_ids: list[int] = []
-        for integ in integrations:
-            user = db0.query(User).filter(User.id == integ.user_id).first()
-            if user and getattr(user, "is_demo", False):
-                continue
-            user_ids.append(integ.user_id)
-    finally:
-        db0.close()
-
-    synced = 0
-    for uid in user_ids:
-        db = SessionLocal()
+        db_lock = SessionLocal()
         try:
-            svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
-            await svc.sync_user(uid, db, days_back=days_back)
-            synced += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Shopee sync inline falhou user_id=%s: %s", uid, exc)
-            db.rollback()
+            lock_conn = db_lock.get_bind().connect().execution_options(isolation_level="AUTOCOMMIT")
         finally:
-            db.close()
-    logger.info(
-        "Shopee sync inline (pg_cron, sem worker): %d/%d usuários days_back=%d",
-        synced, len(user_ids), days_back,
-    )
-    return {"synced": synced, "total": len(user_ids), "days_back": days_back}
+            db_lock.close()
+        acquired = lock_conn.execute(
+            text("SELECT pg_try_advisory_lock(:ns, :key)"),
+            {"ns": _SYNC_ALL_LOCK_NS, "key": _SYNC_ALL_LOCK_KEY},
+        ).scalar()
+        if not acquired:
+            logger.info(
+                "Shopee sync_all: já há um lote em andamento — ignorando (no-op)"
+            )
+            lock_conn.close()
+            return {"synced": 0, "total": 0, "days_back": days_back, "skipped": "lock"}
+    except Exception as exc:
+        logger.warning(
+            "Shopee sync_all: advisory lock global indisponível (%s); seguindo sem lock",
+            exc,
+        )
+        if lock_conn is not None:
+            try:
+                lock_conn.close()
+            except Exception:
+                pass
+            lock_conn = None
+
+    try:
+        db0 = SessionLocal()
+        try:
+            integrations = ShopeeIntegrationRepository(db0).get_all_active()
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=SKIP_RECENT_SYNC_MINUTES)
+            user_ids: list[int] = []
+            skipped_recent = 0
+            for integ in integrations:
+                user = db0.query(User).filter(User.id == integ.user_id).first()
+                if user and getattr(user, "is_demo", False):
+                    continue
+                last = integ.last_sync_at
+                if last is not None:
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=timezone.utc)
+                    if last >= cutoff:
+                        skipped_recent += 1
+                        continue
+                user_ids.append(integ.user_id)
+        finally:
+            db0.close()
+
+        synced = 0
+        for uid in user_ids:
+            db = SessionLocal()
+            try:
+                svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
+                await svc.sync_user(uid, db, days_back=days_back)
+                synced += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Shopee sync inline falhou user_id=%s: %s", uid, exc)
+                try:
+                    from app.models.sync_error_log import SyncErrorLog
+
+                    db.add(SyncErrorLog(user_id=uid, source="shopee", error_message=str(exc)[:2000]))
+                    db.commit()
+                except Exception:
+                    db.rollback()
+            finally:
+                db.close()
+        logger.info(
+            "Shopee sync inline (pg_cron): %d/%d usuários days_back=%d skipped_recent=%d",
+            synced, len(user_ids), days_back, skipped_recent,
+        )
+        return {
+            "synced": synced,
+            "total": len(user_ids),
+            "days_back": days_back,
+            "skipped_recent": skipped_recent,
+        }
+    finally:
+        if lock_conn is not None:
+            try:
+                lock_conn.execute(
+                    text("SELECT pg_advisory_unlock(:ns, :key)"),
+                    {"ns": _SYNC_ALL_LOCK_NS, "key": _SYNC_ALL_LOCK_KEY},
+                )
+            except Exception:
+                pass
+            try:
+                lock_conn.close()
+            except Exception:
+                pass

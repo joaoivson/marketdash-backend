@@ -319,6 +319,20 @@ async def kiwify_webhook(
 
         logger.info(f"Kiwify webhook - Evento: {event}, Email: {email}, Ação: {action}")
 
+        # Histórico append-only — SEMPRE grava (mesmo evento desconhecido / sem e-mail).
+        # Não altera regras de activate/deactivate abaixo.
+        try:
+            from app.services.subscription_event_recorder import record_subscription_event
+
+            record_subscription_event(db, raw_payload if isinstance(raw_payload, dict) else {"order": order}, event or "unknown")
+            db.commit()
+        except Exception as hist_err:  # noqa: BLE001
+            logger.error("Falha ao gravar subscription_event (seguindo webhook): %s", hist_err)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
         if not email:
             logger.warning(f"Email não encontrado no payload Kiwify. Evento: {event}")
             return {"status": "ignored", "reason": "email_not_found"}

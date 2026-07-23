@@ -25,6 +25,16 @@ def sync_facebook_user_task(self, user_id: int):
         return {"status": "ok", "user_id": user_id, "campaigns": processed}
     except Exception as exc:
         logger.error("sync_facebook_user_task falhou user_id=%s: %s", user_id, exc)
+        try:
+            from app.models.sync_error_log import SyncErrorLog
+
+            db.add(SyncErrorLog(user_id=user_id, source="facebook", error_message=str(exc)[:2000]))
+            db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         db.rollback()
         raise self.retry(exc=RuntimeError(str(exc)), countdown=300)
     finally:

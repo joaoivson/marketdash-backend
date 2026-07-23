@@ -18,11 +18,18 @@ from app.models.shopee_integration import ShopeeIntegration
 from app.models.facebook_integration import FacebookIntegration
 from app.models.campaign import Campaign, CampaignDailyInsight
 from app.models.kiwify_plan_product import KiwifyPlanProduct
+from app.models.subscription_event import SubscriptionEvent
+from app.models.user_login import UserLogin
+from app.models.expense import Expense
+from app.models.admin_client_note import AdminClientNote
+from app.models.page_view import PageView
+from app.models.sync_error_log import SyncErrorLog
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
     "Job", "JobChunk", "CaptureSite", "CustomLink", "CustomLinkEvent", "PageEvent", "Commission",
     "UserSettings", "ShopeeIntegration", "FacebookIntegration",
     "Campaign", "CampaignDailyInsight", "KiwifyPlanProduct",
+    "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
 ]
 

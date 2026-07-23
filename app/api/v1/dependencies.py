@@ -134,9 +134,9 @@ def get_current_user_optional(
 
 
 def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    """Dependency que requer flag is_admin no usuário. Retorna 403 caso contrário."""
+    """Dependency admin. Retorna 404 (não 403) para não revelar a existência do painel."""
     if not getattr(current_user, "is_admin", False):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso restrito a administradores")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return current_user
 
 

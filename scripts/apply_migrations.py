@@ -33,6 +33,7 @@ MIGRATIONS = [
     ("027_shopee_sync_full_and_incremental.sql", "Shopee sync dividido (full + incremental)"),
     ("028_trigger_shopee_sync_parametrized.sql", "Parametrizar trigger_shopee_sync"),
     ("034_plan_tiers_and_demo.sql", "Planos Essencial/Pro + is_demo + kiwify_plan_products"),
+    ("035_admin_panel.sql", "Painel admin: events, logins, expenses, DRE support"),
 ]
 
 def apply_migrations():

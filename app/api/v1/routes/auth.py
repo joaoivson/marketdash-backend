@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user
@@ -29,13 +29,31 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
 @router.post("/login", response_model=TokenWithUser)
 def login(
     request: LoginRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
 ):
-    return AuthService(UserRepository(db)).login(
+    result = AuthService(UserRepository(db)).login(
         request.email,
         request.password,
         referrer_user_id=request.referrer_user_id,
     )
+    # Login efetivo — não refresh de token
+    try:
+        from app.models.user_login import UserLogin
+
+        user = result.get("user") if isinstance(result, dict) else getattr(result, "user", None)
+        uid = getattr(user, "id", None)
+        if uid:
+            ip = http_request.client.host if http_request.client else None
+            ua = http_request.headers.get("user-agent")
+            db.add(UserLogin(user_id=uid, ip=ip, user_agent=ua))
+            db.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    return result
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse, status_code=status.HTTP_200_OK)

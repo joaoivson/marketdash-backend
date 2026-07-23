@@ -452,7 +452,13 @@ async def run_facebook_sync_all() -> dict:
             synced += 1
         except Exception as exc:  # noqa: BLE001
             logger.error("FB sync inline falhou user_id=%s: %s", uid, exc)
-            db.rollback()
+            try:
+                from app.models.sync_error_log import SyncErrorLog
+
+                db.add(SyncErrorLog(user_id=uid, source="facebook", error_message=str(exc)[:2000]))
+                db.commit()
+            except Exception:
+                db.rollback()
         finally:
             db.close()
     logger.info("FB sync inline (pg_cron, sem worker): %d/%d usuários", synced, len(user_ids))
