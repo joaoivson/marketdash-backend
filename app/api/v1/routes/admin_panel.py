@@ -391,13 +391,16 @@ def admin_sync_runs(
     source: Optional[str] = None,
     trigger: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
-    user_id: Optional[int] = None,
+    # ATENÇÃO: NÃO nomear de "user_id" — fetchWithAuth (frontend) já anexa
+    # "user_id=user_<id>" (string, formato "compatibilidade") em TODA request
+    # autenticada; um param aqui chamado user_id colide e todo request 422a.
+    filter_user_id: Optional[int] = Query(None, alias="filter_user_id"),
     limit: int = Query(100, ge=1, le=500),
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     return SyncMonitoringService(db).list_runs(
-        source=source, trigger=trigger, status=status_filter, user_id=user_id, limit=limit,
+        source=source, trigger=trigger, status=status_filter, user_id=filter_user_id, limit=limit,
     )
 
 
