@@ -18,7 +18,7 @@ MAX_EMPTY_RETRIES = MAX_RETRY_HOURS    # 1 tentativa por hora
 # concluía (a sincronização ficava "girando" pra sempre). Limite generoso (50 min) pra o
 # backfill completar de uma vez; tasks normais (incrementais) terminam em segundos.
 @celery_app.task(bind=True, max_retries=3, soft_time_limit=3000, time_limit=3300)
-def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt: int = 0):
+def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt: int = 0, trigger: str = "manual"):
     """
     Sincroniza comissões Shopee para um único usuário.
     """
@@ -35,7 +35,9 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
             return {"status": "skipped", "user_id": user_id, "reason": "is_demo"}
 
         svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
-        commissions = asyncio.run(svc.sync_user(user_id, db, days_back=days_back))
+        commissions = asyncio.run(
+            svc.sync_user(user_id, db, days_back=days_back, trigger=trigger, empty_attempt=empty_attempt)
+        )
 
         if commissions == 0 and days_back <= 7:
             logger.info(
@@ -54,7 +56,12 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
                 eta.strftime("%H:%M UTC"), hours_remaining,
             )
             sync_shopee_user_task.apply_async(
-                kwargs={"user_id": user_id, "days_back": days_back, "empty_attempt": next_attempt},
+                kwargs={
+                    "user_id": user_id,
+                    "days_back": days_back,
+                    "empty_attempt": next_attempt,
+                    "trigger": "empty_retry",
+                },
                 eta=eta,
                 priority=9,
             )
@@ -84,7 +91,7 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
 
 
 @celery_app.task
-def sync_all_shopee_users_task(days_back: int = 7):
+def sync_all_shopee_users_task(days_back: int = 7, trigger: str = "cron_incremental"):
     """
     Fan-out Celery por usuário (pula is_demo). Usado pelo cron horário
     (com fallback inline se o broker falhar). Prioriza last_sync_at antigo e
@@ -116,7 +123,12 @@ def sync_all_shopee_users_task(days_back: int = 7):
                     skipped_recent += 1
                     continue
             sync_shopee_user_task.apply_async(
-                kwargs={"user_id": integ.user_id, "days_back": days_back, "empty_attempt": 0},
+                kwargs={
+                    "user_id": integ.user_id,
+                    "days_back": days_back,
+                    "empty_attempt": 0,
+                    "trigger": trigger,
+                },
                 priority=9,
             )
             dispatched += 1

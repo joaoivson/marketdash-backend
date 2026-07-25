@@ -77,6 +77,15 @@ def _row_hash(user_id: int, *parts: str) -> str:
     return hashlib.md5(raw.encode()).hexdigest()
 
 
+# ATENÇÃO — usado como (order_id, item_id, date, seq), onde seq vem de um Counter()
+# reiniciado a cada chamada de sync_commissions (não é um id estável da Shopee). Como a
+# escrita agora é upsert puro (sem delete-da-janela, ver sync_commissions), mudar essa
+# fórmula invalida TODO hash já persistido — o próximo sync viraria 100% INSERT, duplicando
+# o histórico inteiro. Se algum dia trocar por algo mais estável (ex.: conversionId, que a
+# API já retorna e não é usado aqui), isso exige uma reconciliação única e supervisionada
+# por usuário antes do deploy — não é um refactor "de graça". Ver plano/Fase B.
+
+
 def _get_or_create_shopee_dataset(user_id: int, dataset_type: str, db: Session) -> Dataset:
     filename = f"shopee_api_sync_{dataset_type}"
     existing = (
@@ -187,7 +196,9 @@ class ShopeeIntegrationService:
     #  Sincronização de dados                                              #
     # ------------------------------------------------------------------ #
 
-    async def sync_commissions(self, user_id: int, db: Session, days_back: int = 88) -> int:
+    async def sync_commissions(
+        self, user_id: int, db: Session, days_back: int = 88
+    ) -> tuple[int, bool, dict]:
         """Sincroniza comissões Shopee para os últimos N dias (padrão: 88 dias = ~3 meses).
 
         Args:
@@ -198,7 +209,7 @@ class ShopeeIntegrationService:
                       90 = reconcile completo (~3 meses + 2 dias de margem)
 
         Returns:
-            Número de linhas processadas da API
+            (total_processed, is_suspected_partial, guard_details) — ver guarda no fim da função.
         """
         integration = self.repo.get_by_user_id(user_id)
         if not integration or not integration.is_active:
@@ -441,25 +452,43 @@ class ShopeeIntegrationService:
             # — mantém o seq counter consistente com chunks subsequentes).
             chunk_start = chunk_end + timedelta(seconds=1)
 
-        # ── Re-sync ATÔMICO ──────────────────────────────────────────────────────
-        # Toda a API já foi buscada (parte lenta, SEM transação aberta). Agora a troca dos dados
-        # acontece numa ÚNICA transação curta: DELETE da janela de 88 dias + dedup + reinsert em
-        # lotes, com COMMIT único (no sync_user). Leitores (dashboard) enxergam os dados ANTIGOS
-        # até o commit; depois, os novos — NUNCA o estado vazio (antes piscava ~5 min por sync).
-        # Se algo falhar antes do commit → rollback e os dados ANTIGOS ficam intactos.
-        deleted = (
-            db.query(DatasetRow)
-            .filter(
-                DatasetRow.user_id == user_id,
-                DatasetRow.platform == "shopee",
-                DatasetRow.date >= start.date(),
+        # ── Guarda: comparar contagem por dia com o que já existe (observação, NUNCA bloqueio) ──
+        # Só datas com 3+ dias de idade — Shopee ainda "assenta" atribuição nos últimos dias
+        # (mesma lógica por trás da janela 9-12h BRT da migration 026); comparar dias recentes
+        # geraria falso positivo o tempo todo. Não impede a escrita — só sinaliza (sync_runs).
+        settle_cutoff = (now - timedelta(days=3)).date()
+        new_counts: Counter = Counter(r.date for r in all_rows)
+        stable_dates = [d for d in new_counts if d <= settle_cutoff]
+        is_suspected_partial = False
+        guard_details: dict = {}
+        if stable_dates:
+            previous_counts = row_repo.count_by_date(
+                user_id, "shopee", min(stable_dates), max(stable_dates)
             )
-            .delete(synchronize_session="fetch")
-        )
-        if deleted:
-            logger.info(
-                "Shopee full refresh: removidos %d rows antigos user_id=%s", deleted, user_id,
-            )
+            suspicious = {}
+            for d in stable_dates:
+                prev = previous_counts.get(d, 0)
+                new = new_counts.get(d, 0)
+                if prev > 0 and new < prev * 0.9:
+                    suspicious[str(d)] = {"previous": prev, "fetched_now": new}
+            if suspicious:
+                is_suspected_partial = True
+                guard_details = {"suspected_partial_dates": suspicious}
+                logger.warning(
+                    "Shopee sync user_id=%s: possível fetch parcial — %s", user_id, suspicious,
+                )
+
+        # ── Escrita ADITIVA (upsert por row_hash), NUNCA delete-and-replace ─────────
+        # Toda a API já foi buscada (parte lenta, SEM transação aberta). A escrita acontece numa
+        # ÚNICA transação curta: dedup + upsert em lotes, com COMMIT único (no sync_user).
+        # Upsert por row_hash só faz INSERT (hash novo) ou UPDATE (hash já existe) — NUNCA DELETE.
+        # Uma linha de um sync anterior que não veio nesta busca simplesmente não é tocada: um
+        # fetch incompleto pode deixar de ATUALIZAR alguns registros, mas jamais REDUZ um dia que
+        # já estava completo. Isso substitui o antigo "DELETE da janela inteira + reinsert", que
+        # causava perda de dado quando um fetch vinha truncado (rate limit/timeout no meio da
+        # paginação, sem erro HTTP explícito — ver guarda acima). Atomicidade (dashboard nunca vê
+        # estado vazio) continua garantida: não existe mais delete nenhum do lado "janela inteira",
+        # então não há estado intermediário vazio a proteger.
 
         # ── Dedup: remover rows de outros datasets (ex: CSV importado) ──
         # que possuam os mesmos order_ids já trazidos pela API Shopee.
@@ -481,8 +510,8 @@ class ShopeeIntegrationService:
                     stale, user_id,
                 )
 
-        # Reinsert em LOTES (respeita o limite de ~65k binds por statement do Postgres), SEM
-        # commit — o sync_user commita DELETE + dedup + todos os inserts numa transação só.
+        # Upsert em LOTES (respeita o limite de ~65k binds por statement do Postgres), SEM
+        # commit — o sync_user commita dedup + todos os upserts numa transação só.
         INSERT_BATCH = 500
         for i in range(0, len(all_rows), INSERT_BATCH):
             row_repo.bulk_create(all_rows[i:i + INSERT_BATCH], commit=False)
@@ -491,15 +520,25 @@ class ShopeeIntegrationService:
             "Shopee sync user_id=%s: %d rows processados",
             user_id, total_processed,
         )
-        return total_processed
+        return total_processed, is_suspected_partial, guard_details
 
-    async def sync_user(self, user_id: int, db: Session, days_back: int = 88) -> int:
+    async def sync_user(
+        self,
+        user_id: int,
+        db: Session,
+        days_back: int = 88,
+        trigger: str = "manual",
+        empty_attempt: int = 0,
+    ) -> int:
         """Sincroniza comissões e atualiza last_sync_at. Retorna número de conversões inseridas.
 
         Args:
             user_id: ID do usuário
             db: Sessão do banco de dados
             days_back: Número de dias a sincronizar (padrão 88)
+            trigger: origem da chamada (manual/cron_incremental/cron_full/ops_unstick/empty_retry)
+                     — só alimenta o log de execução (sync_runs), não muda o comportamento do sync
+            empty_attempt: posição na cadeia de retry de "0 conversões" (idem, só observabilidade)
 
         Serializa por usuário com advisory lock do Postgres numa conexão DEDICADA (autocommit):
         se JÁ há um sync em andamento para este user — outro worker, concurrency>1, ou tarefa
@@ -511,6 +550,24 @@ class ShopeeIntegrationService:
         se o lock não puder ser adquirido por erro de infra, segue sem serialização (comportamento
         antigo) em vez de travar o sync.
         """
+        from app.repositories.sync_run_repository import SyncRunRepository
+
+        run_repo = SyncRunRepository(db)
+        try:
+            run_id: Optional[int] = run_repo.create(
+                source="shopee",
+                trigger=trigger,
+                user_id=user_id,
+                days_back=days_back,
+                empty_attempt=empty_attempt,
+            )
+        except Exception as exc:
+            logger.warning(
+                "sync_runs: falha ao criar linha de tracking user_id=%s (%s) — seguindo sem tracking",
+                user_id, exc,
+            )
+            run_id = None
+
         LOCK_NS = 819100  # namespace fixo p/ não colidir com outros advisory locks da base
         lock_conn = None
         try:
@@ -525,6 +582,11 @@ class ShopeeIntegrationService:
                     "Shopee sync user_id=%s: já há um sync em andamento — ignorando (no-op)",
                     user_id,
                 )
+                if run_id is not None:
+                    try:
+                        run_repo.mark_skipped_lock(run_id)
+                    except Exception:
+                        pass
                 return 0
         except Exception as exc:
             logger.warning(
@@ -539,17 +601,35 @@ class ShopeeIntegrationService:
                 lock_conn = None
 
         try:
-            commissions = await self.sync_commissions(user_id, db, days_back=days_back)
+            commissions, is_suspected_partial, guard_details = await self.sync_commissions(
+                user_id, db, days_back=days_back
+            )
             self.repo.update_last_sync(user_id)
             db.commit()
             logger.info(
                 "Shopee sync concluído user_id=%s: %d conversões (%d dias)",
                 user_id, commissions, days_back,
             )
+            if run_id is not None:
+                try:
+                    run_repo.mark_success(
+                        run_id,
+                        records_fetched=commissions,
+                        records_upserted=commissions,
+                        is_suspected_partial=is_suspected_partial,
+                        details=guard_details or None,
+                    )
+                except Exception:
+                    pass
             return commissions
         except Exception as exc:
             db.rollback()
             logger.error("Shopee sync falhou user_id=%s: %s", user_id, exc)
+            if run_id is not None:
+                try:
+                    run_repo.mark_failed(run_id, str(exc))
+                except Exception:
+                    pass
             raise
         finally:
             if lock_conn is not None:
@@ -574,36 +654,7 @@ _SYNC_ALL_LOCK_NS = 819101
 _SYNC_ALL_LOCK_KEY = 1
 
 
-async def run_shopee_sync_user(user_id: int, days_back: int = 7) -> dict:
-    """Sincroniza um único usuário INLINE (ops / cron ?user_id=)."""
-    from app.db.session import SessionLocal
-
-    db = SessionLocal()
-    try:
-        svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
-        commissions = await svc.sync_user(user_id, db, days_back=days_back)
-        return {
-            "synced": 1,
-            "total": 1,
-            "user_id": user_id,
-            "commissions": commissions,
-            "days_back": days_back,
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Shopee sync inline falhou user_id=%s: %s", user_id, exc)
-        try:
-            from app.models.sync_error_log import SyncErrorLog
-
-            db.add(SyncErrorLog(user_id=user_id, source="shopee", error_message=str(exc)[:2000]))
-            db.commit()
-        except Exception:
-            db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-async def run_shopee_sync_all(days_back: int = 7) -> dict:
+async def run_shopee_sync_all(days_back: int = 7, trigger: str = "cron_incremental") -> dict:
     """Sincroniza usuários Shopee ativos INLINE — sem Celery/worker.
 
     Disparado pelo cron do Supabase (pg_cron → pg_net → POST /internal/cron/shopee-sync),
@@ -676,7 +727,7 @@ async def run_shopee_sync_all(days_back: int = 7) -> dict:
             db = SessionLocal()
             try:
                 svc = ShopeeIntegrationService(ShopeeIntegrationRepository(db))
-                await svc.sync_user(uid, db, days_back=days_back)
+                await svc.sync_user(uid, db, days_back=days_back, trigger=trigger)
                 synced += 1
             except Exception as exc:  # noqa: BLE001
                 logger.error("Shopee sync inline falhou user_id=%s: %s", uid, exc)

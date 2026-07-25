@@ -62,10 +62,7 @@ async def cron_shopee_sync(
     caller_ip = request.client.host if request.client else "unknown"
     _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
 
-    from app.services.shopee_integration_service import (
-        run_shopee_sync_all,
-        run_shopee_sync_user,
-    )
+    from app.services.shopee_integration_service import run_shopee_sync_all
 
     sync_type = request.query_params.get("type", "incremental")
     days_back = 90 if sync_type == "full" else 7
@@ -80,21 +77,25 @@ async def cron_shopee_sync(
                 detail="user_id deve ser inteiro.",
             ) from exc
 
+    trigger = "ops_unstick" if user_id is not None else ("cron_full" if sync_type == "full" else "cron_incremental")
+
     mode = "celery-fanout"
     if user_id is not None:
-        background_tasks.add_task(run_shopee_sync_user, user_id, days_back)
-        mode = "background-inline-user"
+        from app.tasks.shopee_tasks import sync_shopee_user_task
+
+        sync_shopee_user_task.delay(user_id, days_back=days_back, empty_attempt=0, trigger=trigger)
+        mode = "celery-user"
     else:
         try:
             from app.tasks.shopee_tasks import sync_all_shopee_users_task
 
-            sync_all_shopee_users_task.delay(days_back)
+            sync_all_shopee_users_task.delay(days_back, trigger=trigger)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "cron.shopee-sync: Celery indisponível (%s) — fallback inline",
                 exc,
             )
-            background_tasks.add_task(run_shopee_sync_all, days_back)
+            background_tasks.add_task(run_shopee_sync_all, days_back, trigger)
             mode = "background-inline-fallback"
 
     logger.info(
@@ -135,7 +136,7 @@ async def cron_facebook_sync(
 
     from app.services.facebook_integration_service import run_facebook_sync_all
 
-    background_tasks.add_task(run_facebook_sync_all)
+    background_tasks.add_task(run_facebook_sync_all, trigger="cron")
     logger.info(
         "cron.facebook-sync (inline/background, sem worker) caller_ip=%s source=%s",
         caller_ip, request.headers.get("X-Cron-Source", "unknown"),

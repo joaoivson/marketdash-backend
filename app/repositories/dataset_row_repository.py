@@ -1,6 +1,7 @@
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 from datetime import date
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.dataset_row import DatasetRow
@@ -122,6 +123,27 @@ class DatasetRowRepository:
             query = query.limit(limit).offset(offset)
         
         return query.all()
+
+    def count_by_date(
+        self, user_id: int, platform: str, start_date: date, end_date: date
+    ) -> Dict[date, int]:
+        """Contagem de rows por dia — usada pela guarda de fetch suspeito de parcial (sync Shopee).
+
+        Compara o que já está persistido ANTES de um upsert com o que a busca atual trouxe,
+        pra sinalizar (sem bloquear) uma execução que trouxe visivelmente menos que o esperado.
+        """
+        rows = (
+            self.db.query(DatasetRow.date, func.count(DatasetRow.id))
+            .filter(
+                DatasetRow.user_id == user_id,
+                DatasetRow.platform == platform,
+                DatasetRow.date >= start_date,
+                DatasetRow.date <= end_date,
+            )
+            .group_by(DatasetRow.date)
+            .all()
+        )
+        return {d: c for d, c in rows}
 
     def get_existing_order_item_keys(
         self, user_id: int, platform: Optional[str] = None

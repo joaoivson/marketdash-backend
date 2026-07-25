@@ -23,6 +23,7 @@ from app.models.user import User
 from app.models.user_login import UserLogin
 from app.services.admin_dre_service import AdminDreService
 from app.services.admin_metrics_service import AdminMetricsService
+from app.services.sync_monitoring_service import SyncMonitoringService
 
 router = APIRouter(prefix="/admin", tags=["admin-panel"])
 
@@ -383,6 +384,31 @@ def admin_usage(_: User = Depends(require_admin), db: Session = Depends(get_db))
         ],
         "note": "Chamadas API/dia: proxy por erros/atividade de sync (não é APM completo).",
     }
+
+
+@router.get("/sync-runs")
+def admin_sync_runs(
+    source: Optional[str] = None,
+    trigger: Optional[str] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    user_id: Optional[int] = None,
+    limit: int = Query(100, ge=1, le=500),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return SyncMonitoringService(db).list_runs(
+        source=source, trigger=trigger, status=status_filter, user_id=user_id, limit=limit,
+    )
+
+
+@router.get("/sync-runs/health")
+def admin_sync_health(
+    source: str = "shopee",
+    trigger: str = "cron_full",
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return SyncMonitoringService(db).full_sync_health(source, trigger)
 
 
 @router.post("/page-views", status_code=status.HTTP_204_NO_CONTENT)

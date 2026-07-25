@@ -311,15 +311,35 @@ class FacebookIntegrationService:
     #  Sincronização (campanhas + insights diários)                       #
     # ------------------------------------------------------------------ #
 
-    async def sync_user(self, user_id: int, db: Session) -> int:
+    async def sync_user(self, user_id: int, db: Session, trigger: str = "manual") -> int:
         """Sincroniza campanhas e insights diários da conta selecionada.
 
         Retorna o número de campanhas processadas. Atualiza last_sync_at.
+
+        trigger: origem da chamada (manual/cron/account_select) — só alimenta o log de
+        execução (sync_runs), não muda o comportamento do sync.
         """
+        from app.repositories.sync_run_repository import SyncRunRepository
+
+        run_repo = SyncRunRepository(db)
+        try:
+            run_id: Optional[int] = run_repo.create(source="facebook", trigger=trigger, user_id=user_id)
+        except Exception as exc:
+            logger.warning(
+                "sync_runs: falha ao criar linha de tracking (facebook) user_id=%s (%s) — seguindo sem tracking",
+                user_id, exc,
+            )
+            run_id = None
+
         integration = self.repo.get_by_user_id(user_id)
         account_ids = integration.account_ids_list() if integration else []
         if not integration or not integration.is_active or not account_ids:
             logger.info("Facebook sync ignorado user_id=%s (sem integração/conta ativa)", user_id)
+            if run_id is not None:
+                try:
+                    run_repo.mark_success(run_id, records_fetched=0, records_upserted=0)
+                except Exception:
+                    pass
             return 0
 
         token = decrypt_value(integration.encrypted_access_token)
@@ -327,105 +347,122 @@ class FacebookIntegrationService:
 
         # Serializa syncs concorrentes do MESMO usuário (cron inline + botão manual/worker) —
         # evita corrida no rebuild do AdSpend (delete+insert). Lock por-transação, liberado no commit.
+        # NOTA: pg_advisory_xact_lock BLOQUEIA até liberar (não é try-lock como o do Shopee) — não
+        # existe aqui um caso de "no-op por colisão de lock", por isso sem status skipped_lock.
         db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": int(user_id)})
 
-        now = datetime.now(BRT)
-        # Backfill de 90 dias quando NÃO há histórico suficiente no banco: 1ª carga
-        # (last_sync_at None) OU usuário que migrou pro modelo novo e só tem os últimos dias
-        # (nunca fez o backfill). Sem isso, o usuário existente fica preso em 3d e o Dashboard
-        # não mostra gasto/cliques histórico. Depois do backfill, passa a incremental (3d).
-        earliest = camp_repo.earliest_insight_date(user_id)
-        needs_backfill = (
-            integration.last_sync_at is None
-            or earliest is None
-            or earliest > (now.date() - timedelta(days=7))
-        )
-        window_days = SYNC_WINDOW_DAYS if needs_backfill else INCREMENTAL_WINDOW_DAYS
-        since = (now - timedelta(days=window_days)).date()
-        until = now.date()
+        try:
+            now = datetime.now(BRT)
+            # Backfill de 90 dias quando NÃO há histórico suficiente no banco: 1ª carga
+            # (last_sync_at None) OU usuário que migrou pro modelo novo e só tem os últimos dias
+            # (nunca fez o backfill). Sem isso, o usuário existente fica preso em 3d e o Dashboard
+            # não mostra gasto/cliques histórico. Depois do backfill, passa a incremental (3d).
+            earliest = camp_repo.earliest_insight_date(user_id)
+            needs_backfill = (
+                integration.last_sync_at is None
+                or earliest is None
+                or earliest > (now.date() - timedelta(days=7))
+            )
+            window_days = SYNC_WINDOW_DAYS if needs_backfill else INCREMENTAL_WINDOW_DAYS
+            since = (now - timedelta(days=window_days)).date()
+            until = now.date()
 
-        processed = 0
-        for ad_account_id in account_ids:
-            try:
-                campaigns = await fb.list_campaigns(token, ad_account_id)
-            except HTTPException as exc:
-                # Não aborta o sync inteiro se uma conta falhar — segue para a próxima.
-                logger.warning(
-                    "Facebook list_campaigns falhou user_id=%s conta=%s: %s",
-                    user_id, ad_account_id, exc.detail,
-                )
-                continue
-
-            for c in campaigns:
-                fb_campaign_id = str(c.get("id") or "")
-                if not fb_campaign_id:
+            processed = 0
+            for ad_account_id in account_ids:
+                try:
+                    campaigns = await fb.list_campaigns(token, ad_account_id)
+                except HTTPException as exc:
+                    # Não aborta o sync inteiro se uma conta falhar — segue para a próxima.
+                    logger.warning(
+                        "Facebook list_campaigns falhou user_id=%s conta=%s: %s",
+                        user_id, ad_account_id, exc.detail,
+                    )
                     continue
 
-                campaign = camp_repo.upsert_campaign(
-                    user_id=user_id,
-                    fb_campaign_id=fb_campaign_id,
-                    fields={
-                        "ad_account_id": ad_account_id,
-                        "name": c.get("name") or "(sem nome)",
-                        "objective": c.get("objective"),
-                        "status": c.get("status"),
-                        "effective_status": c.get("effective_status"),
-                        "daily_budget": _budget_to_brl(c.get("daily_budget")),
-                        "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
-                    },
-                )
-
-                # Insights diários: UPSERT da janela (preserva histórico, atualiza valores).
-                try:
-                    insights = await fb.get_campaign_insights(
-                        token, fb_campaign_id, since.isoformat(), until.isoformat()
-                    )
-                except HTTPException as exc:
-                    logger.warning(
-                        "Facebook insights falhou user_id=%s campaign=%s: %s",
-                        user_id, fb_campaign_id, exc.detail,
-                    )
-                    insights = []
-
-                rows: list[CampaignDailyInsight] = []
-                for ins in insights:
-                    day_str = ins.get("date_start")
-                    try:
-                        day = date.fromisoformat(day_str)
-                    except (TypeError, ValueError):
+                for c in campaigns:
+                    fb_campaign_id = str(c.get("id") or "")
+                    if not fb_campaign_id:
                         continue
-                    rows.append(
-                        CampaignDailyInsight(
-                            user_id=user_id,
-                            campaign_id=campaign.id,
-                            fb_campaign_id=fb_campaign_id,
-                            date=day,
-                            spend=_to_float(ins.get("spend")),
-                            # Cliques no link (alinha com o Gerenciador do Meta), fallback p/ clicks.
-                            clicks=_to_int(ins.get("inline_link_clicks") or ins.get("clicks")),
-                            impressions=_to_int(ins.get("impressions")),
-                            cpc=_to_float(ins.get("cost_per_inline_link_click") or ins.get("cpc")) or None,
-                            ctr=_to_float(ins.get("inline_link_click_ctr") or ins.get("ctr")) or None,
-                            reach=_to_int(ins.get("reach")) or None,
-                        )
+
+                    campaign = camp_repo.upsert_campaign(
+                        user_id=user_id,
+                        fb_campaign_id=fb_campaign_id,
+                        fields={
+                            "ad_account_id": ad_account_id,
+                            "name": c.get("name") or "(sem nome)",
+                            "objective": c.get("objective"),
+                            "status": c.get("status"),
+                            "effective_status": c.get("effective_status"),
+                            "daily_budget": _budget_to_brl(c.get("daily_budget")),
+                            "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
+                        },
                     )
-                camp_repo.upsert_insights(rows)
-                processed += 1
 
-        # Espelha o gasto do Meta na tabela AdSpend (fonte do gasto do Dashboard).
-        # AdSpend = projeção pura dos insights; o lançamento manual foi descontinuado.
-        mirrored = camp_repo.rebuild_ad_spend_from_meta(user_id)
-        self.repo.update_last_sync(user_id)
-        db.commit()
-        logger.info("AdSpend espelhado do Meta user_id=%s: %d linhas", user_id, mirrored)
-        logger.info(
-            "Facebook sync concluído user_id=%s: %d campanhas (%d contas)",
-            user_id, processed, len(account_ids),
-        )
-        return processed
+                    # Insights diários: UPSERT da janela (preserva histórico, atualiza valores).
+                    try:
+                        insights = await fb.get_campaign_insights(
+                            token, fb_campaign_id, since.isoformat(), until.isoformat()
+                        )
+                    except HTTPException as exc:
+                        logger.warning(
+                            "Facebook insights falhou user_id=%s campaign=%s: %s",
+                            user_id, fb_campaign_id, exc.detail,
+                        )
+                        insights = []
+
+                    rows: list[CampaignDailyInsight] = []
+                    for ins in insights:
+                        day_str = ins.get("date_start")
+                        try:
+                            day = date.fromisoformat(day_str)
+                        except (TypeError, ValueError):
+                            continue
+                        rows.append(
+                            CampaignDailyInsight(
+                                user_id=user_id,
+                                campaign_id=campaign.id,
+                                fb_campaign_id=fb_campaign_id,
+                                date=day,
+                                spend=_to_float(ins.get("spend")),
+                                # Cliques no link (alinha com o Gerenciador do Meta), fallback p/ clicks.
+                                clicks=_to_int(ins.get("inline_link_clicks") or ins.get("clicks")),
+                                impressions=_to_int(ins.get("impressions")),
+                                cpc=_to_float(ins.get("cost_per_inline_link_click") or ins.get("cpc")) or None,
+                                ctr=_to_float(ins.get("inline_link_click_ctr") or ins.get("ctr")) or None,
+                                reach=_to_int(ins.get("reach")) or None,
+                            )
+                        )
+                    camp_repo.upsert_insights(rows)
+                    processed += 1
+
+            # Espelha o gasto do Meta na tabela AdSpend (fonte do gasto do Dashboard).
+            # AdSpend = projeção pura dos insights; o lançamento manual foi descontinuado.
+            mirrored = camp_repo.rebuild_ad_spend_from_meta(user_id)
+            self.repo.update_last_sync(user_id)
+            db.commit()
+            logger.info("AdSpend espelhado do Meta user_id=%s: %d linhas", user_id, mirrored)
+            logger.info(
+                "Facebook sync concluído user_id=%s: %d campanhas (%d contas)",
+                user_id, processed, len(account_ids),
+            )
+            if run_id is not None:
+                try:
+                    run_repo.mark_success(run_id, records_fetched=processed, records_upserted=processed)
+                except Exception:
+                    pass
+            return processed
+        except Exception as exc:
+            db.rollback()
+            logger.error("Facebook sync falhou user_id=%s: %s", user_id, exc)
+            if run_id is not None:
+                try:
+                    run_repo.mark_failed(run_id, str(exc))
+                except Exception:
+                    pass
+            raise
 
 
-async def run_facebook_sync_all() -> dict:
+async def run_facebook_sync_all(trigger: str = "cron") -> dict:
     """Sincroniza TODOS os usuários Facebook ativos INLINE — sem Celery/worker.
 
     Disparado pelo cron do Supabase (pg_cron → pg_net → POST /internal/cron/facebook-sync),
@@ -448,7 +485,7 @@ async def run_facebook_sync_all() -> dict:
         db = SessionLocal()
         try:
             svc = FacebookIntegrationService(FacebookIntegrationRepository(db))
-            await svc.sync_user(uid, db)
+            await svc.sync_user(uid, db, trigger=trigger)
             synced += 1
         except Exception as exc:  # noqa: BLE001
             logger.error("FB sync inline falhou user_id=%s: %s", uid, exc)
