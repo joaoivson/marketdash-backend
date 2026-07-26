@@ -83,6 +83,15 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
     access = subscription.get("customer_access") or {}
     if not isinstance(access, dict):
         access = {}
+    charges = subscription.get("charges") or {}
+    if not isinstance(charges, dict):
+        charges = {}
+    # Array cumulativo de cobranças já pagas dessa assinatura — cada entrada tem seu
+    # próprio order_id (diferente do order_id do webhook em si). Fonte de verdade
+    # pra "cobrança distinta" — ver migration 038.
+    charges_completed = charges.get("completed")
+    if not isinstance(charges_completed, list):
+        charges_completed = None
 
     approved = _parse_dt(order.get("approved_date") or order.get("created_at"))
     refunded = _parse_dt(order.get("refunded_at"))
@@ -125,6 +134,7 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
         "refunded_at": refunded,
         "funds_status": commissions.get("funds_status"),
         "deposit_date": deposit,
+        "charges_completed": charges_completed,
         "dedupe_key": build_dedupe_key(order.get("order_id"), (event_type or "").strip().lower(), approved),
     }
 
@@ -227,6 +237,7 @@ def record_subscription_event(
             refunded_at=fields.get("refunded_at"),
             funds_status=fields.get("funds_status"),
             deposit_date=fields.get("deposit_date"),
+            charges_completed=fields.get("charges_completed"),
             user_id=user_id,
             is_plan_change=is_plan_change,
             raw_payload=payload,

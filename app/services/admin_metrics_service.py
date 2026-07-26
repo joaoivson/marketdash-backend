@@ -72,9 +72,49 @@ def _subscriber_key(ev: SubscriptionEvent) -> str:
     return f"id:{ev.id}"
 
 
+def _dedupe_by_charge(events: List[SubscriptionEvent]) -> List[SubscriptionEvent]:
+    """A Kiwify manda mais de um webhook (order_approved + subscription_renewed) pra
+    MESMA cobrança — mesmo order_id, mesmo charge_amount. Somar por evento dobra o
+    faturamento. Aqui cada cobrança real (order_id) conta uma vez só. Eventos sem
+    order_id (raro pra PAID_EVENTS) contam individualmente — não há como colidir."""
+    seen: set = set()
+    result: List[SubscriptionEvent] = []
+    for ev in events:
+        if ev.order_id:
+            if ev.order_id in seen:
+                continue
+            seen.add(ev.order_id)
+        result.append(ev)
+    return result
+
+
+# Pra campos de ESTADO da assinatura (next_payment, access_until, status) — não pra
+# valor pago. A Kiwify manda order_approved e subscription_renewed quase juntos pra
+# mesma renovação, mas order_approved às vezes carrega o next_payment ANTIGO (de
+# antes da renovação processar) enquanto subscription_renewed já traz o novo — e
+# pode chegar alguns milissegundos DEPOIS. "Mais recente por received_at" sozinho
+# pega o evento errado nesse caso. subscription_renewed/canceled são especificamente
+# sobre o estado da assinatura mudar; order_approved é sobre o pagamento em si.
+_SUBSCRIBER_STATE_PRIORITY = {
+    "subscription_renewed": 2,
+    "subscription_canceled": 2,
+    "order_refunded": 2,
+    "order_chargedback": 2,
+    "chargeback": 2,
+    "order_approved": 1,
+    "compra_aprovada": 1,
+}
+
+
+def _subscriber_state_sort_key(ev: SubscriptionEvent) -> tuple:
+    priority = _SUBSCRIBER_STATE_PRIORITY.get((ev.event_type or "").lower(), 0)
+    received = ev.received_at or datetime.min.replace(tzinfo=timezone.utc)
+    return (priority, received)
+
+
 def _latest_by_subscriber(events: List[SubscriptionEvent]) -> Dict[str, SubscriptionEvent]:
     latest: Dict[str, SubscriptionEvent] = {}
-    for ev in sorted(events, key=lambda e: e.received_at or datetime.min.replace(tzinfo=timezone.utc)):
+    for ev in sorted(events, key=_subscriber_state_sort_key):
         latest[_subscriber_key(ev)] = ev
     return latest
 
@@ -151,6 +191,8 @@ class AdminMetricsService:
             )
             .all()
         )
+        paid = _dedupe_by_charge(paid)
+        refunds = _dedupe_by_charge(refunds)
         gross = sum((e.amount_gross_cents or 0) for e in paid)
         net = sum((e.amount_net_cents or 0) for e in paid)
         refund_gross = sum((e.amount_gross_cents or 0) for e in refunds)
@@ -447,9 +489,15 @@ class AdminMetricsService:
             )
         if recent_data:
             signals += 1
+        has_integration = bool(shopee or fb)
         if signals >= 3:
             return "green"
         if signals == 2:
+            return "yellow"
+        # 0-1 sinal: integração conectada nunca é vermelho sozinha — histórico de login
+        # começou do zero no deploy, "sem login" hoje é normal e não pode derrubar quem
+        # já deu o passo de conectar Shopee/Meta.
+        if has_integration:
             return "yellow"
         return "red"
 
@@ -494,8 +542,8 @@ class AdminMetricsService:
                 .first()
             )
 
-            paid_total_net = (
-                self.db.query(func.coalesce(func.sum(SubscriptionEvent.amount_net_cents), 0))
+            paid_events_for_subscriber = (
+                self.db.query(SubscriptionEvent)
                 .filter(
                     SubscriptionEvent.event_type.in_(PAID_EVENTS),
                     (
@@ -504,7 +552,12 @@ class AdminMetricsService:
                         else (SubscriptionEvent.customer_email == ev.customer_email)
                     ),
                 )
-                .scalar()
+                .all()
+            )
+            # Dedupe por cobrança (order_id) — a Kiwify manda >1 webhook pra mesma
+            # cobrança (order_approved + subscription_renewed), somar por evento dobra.
+            paid_total_net = sum(
+                (e.amount_net_cents or 0) for e in _dedupe_by_charge(paid_events_for_subscriber)
             )
 
             name = ev.customer_name or (user.name if user else None) or ""

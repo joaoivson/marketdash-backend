@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.expense import Expense
 from app.models.subscription_event import SubscriptionEvent
-from app.services.admin_metrics_service import PAID_EVENTS, REFUND_EVENTS, _month_bounds
+from app.services.admin_metrics_service import PAID_EVENTS, REFUND_EVENTS, _month_bounds, _dedupe_by_charge
 
 
 class AdminDreService:
@@ -43,6 +43,10 @@ class AdminDreService:
             .all()
         )
 
+        # Dedupe por cobrança (order_id) — a Kiwify manda >1 webhook pra mesma
+        # cobrança (order_approved + subscription_renewed), somar por evento dobra.
+        paid = _dedupe_by_charge(paid)
+        refunds = _dedupe_by_charge(refunds)
         gross = sum((e.amount_gross_cents or 0) for e in paid)
         net = sum((e.amount_net_cents or 0) for e in paid)
         fees = sum((e.fee_cents or 0) for e in paid)

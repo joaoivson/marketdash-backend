@@ -9,6 +9,7 @@ from app.services.admin_dre_service import AdminDreService
 def _ev(**kwargs):
     defaults = dict(
         event_type="order_approved",
+        order_id=None,  # None = não sofre dedupe por cobrança (ver _dedupe_by_charge)
         amount_gross_cents=10000,
         amount_net_cents=9000,
         fee_cents=1000,
@@ -79,3 +80,36 @@ def test_dre_net_matches_paid_minus_refund_and_expenses():
     assert stmt["expenses_total_cents"] == 2000
     assert stmt["result_cents"] == 7000
     assert stmt["has_expenses"] is True
+
+
+def test_dre_does_not_double_count_same_charge_across_webhook_types():
+    """Regressão: Kiwify manda order_approved E subscription_renewed pra MESMA
+    cobrança (mesmo order_id, mesmo valor) — sem dedupe por order_id, o faturamento
+    dobrava (caso real: renovação da Letícia, R$60,50 líq contado como R$121)."""
+    paid = [
+        _ev(event_type="order_approved", order_id="c4456ec2", amount_gross_cents=6700, amount_net_cents=6050),
+        _ev(event_type="subscription_renewed", order_id="c4456ec2", amount_gross_cents=6700, amount_net_cents=6050),
+    ]
+    refund = []
+    expenses = []
+
+    db = MagicMock()
+    call = {"n": 0}
+
+    def query(model):
+        q = MagicMock()
+        q.filter.return_value = q
+        call["n"] += 1
+        if call["n"] == 1:
+            q.all.return_value = paid
+        elif call["n"] == 2:
+            q.all.return_value = refund
+        else:
+            q.all.return_value = expenses
+        return q
+
+    db.query.side_effect = query
+
+    stmt = AdminDreService(db).month_statement(2026, 7)
+    assert stmt["gross_cents"] == 6700  # não 13400
+    assert stmt["revenue_net_cents"] == 6050  # não 12100

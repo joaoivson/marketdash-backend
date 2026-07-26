@@ -35,6 +35,7 @@ MIGRATIONS = [
     ("034_plan_tiers_and_demo.sql", "Planos Essencial/Pro + is_demo + kiwify_plan_products"),
     ("035_admin_panel.sql", "Painel admin: events, logins, expenses, DRE support"),
     ("037_sync_runs.sql", "Tabela de execução de syncs (observabilidade Shopee/Facebook)"),
+    ("038_subscription_events_charges_completed.sql", "Coluna charges_completed em subscription_events"),
 ]
 
 def apply_migrations():
