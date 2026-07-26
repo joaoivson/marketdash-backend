@@ -414,6 +414,23 @@ def admin_sync_health(
     return SyncMonitoringService(db).full_sync_health(source, trigger)
 
 
+@router.get("/sync-runs/usage-summary")
+def admin_sync_usage_summary(
+    days: int = Query(30, ge=1, le=90),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    svc = SyncMonitoringService(db)
+    return {
+        "shopee": svc.source_summary("shopee"),
+        "facebook": svc.source_summary("facebook"),
+        "daily": {
+            "shopee": svc.daily_call_counts("shopee", days),
+            "facebook": svc.daily_call_counts("facebook", days),
+        },
+    }
+
+
 @router.post("/page-views", status_code=status.HTTP_204_NO_CONTENT)
 def record_page_view(
     payload: PageViewIn,

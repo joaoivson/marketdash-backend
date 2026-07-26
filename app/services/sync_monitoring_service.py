@@ -109,6 +109,35 @@ class SyncMonitoringService:
             "sem_execucao": sorted(missing_user_ids),
         }
 
+    def source_summary(self, source: str) -> Dict[str, Any]:
+        """Card resumo por fonte pra tela Uso: última sync + status, chamadas/erros 24h."""
+        since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+        runs_24h = self.run_repo.list_by_filters(source=source, since=since_24h, limit=None)
+        latest = self.run_repo.list_by_filters(source=source, limit=1)
+        last_run = latest[0] if latest else None
+        return {
+            "source": source,
+            "last_sync_at": last_run.started_at.isoformat() if last_run and last_run.started_at else None,
+            "last_status": last_run.status if last_run else None,
+            "calls_24h": len(runs_24h),
+            "errors_24h": sum(1 for r in runs_24h if r.status == "failed"),
+        }
+
+    def daily_call_counts(self, source: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Chamadas (execuções) e erros por dia, últimos N dias — pra gráfico de barras."""
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        runs = self.run_repo.list_by_filters(source=source, since=since, limit=None)
+        buckets: Dict[str, Dict[str, int]] = {}
+        for r in runs:
+            if not r.started_at:
+                continue
+            day = r.started_at.date().isoformat()
+            b = buckets.setdefault(day, {"calls": 0, "errors": 0})
+            b["calls"] += 1
+            if r.status == "failed":
+                b["errors"] += 1
+        return [{"date": d, **v} for d, v in sorted(buckets.items())]
+
     def latest_successful(self, source: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         if user_id is not None:
             run = self.run_repo.latest_for_user(user_id, source)
