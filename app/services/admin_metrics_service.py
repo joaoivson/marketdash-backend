@@ -199,11 +199,13 @@ def _legacy_paid_in_month(events, year: int, month: int, skip_keys: set) -> List
 # mesma renovação, mas order_approved às vezes carrega o next_payment ANTIGO (de
 # antes da renovação processar) enquanto subscription_renewed já traz o novo — e
 # pode chegar alguns milissegundos DEPOIS. "Mais recente por received_at" sozinho
-# pega o evento errado nesse caso. subscription_renewed/canceled são especificamente
-# sobre o estado da assinatura mudar; order_approved é sobre o pagamento em si.
+# pega o evento errado nesse caso. Eventos que mudam o estado da assinatura
+# (renewed/late/canceled/refund/chargeback) ficam no mesmo tier — received_at
+# decide; order_approved fica abaixo pra não sobrescrever um renew quase
+# simultâneo com next_payment velho.
 _SUBSCRIBER_STATE_PRIORITY = {
-    "subscription_canceled": 3,
-    "subscription_late": 3,
+    "subscription_canceled": 2,
+    "subscription_late": 2,
     "subscription_renewed": 2,
     "order_refunded": 2,
     "order_chargedback": 2,

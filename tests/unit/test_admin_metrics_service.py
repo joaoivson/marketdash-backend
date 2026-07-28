@@ -124,6 +124,32 @@ def test_latest_by_subscriber_late_beats_later_order_approved():
     assert next(iter(latest.values())) is late
 
 
+def test_latest_by_subscriber_later_renew_clears_late():
+    """Late e renew no mesmo tier: received_at decide — renew posterior limpa atrasado."""
+    now = datetime(2026, 7, 25, tzinfo=timezone.utc)
+    late = _ev(
+        event_type="subscription_late",
+        subscription_status="waiting_payment",
+        has_access=True,
+        access_until=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        received_at=now,
+    )
+    renew = _ev(
+        event_type="subscription_renewed",
+        subscription_status="active",
+        has_access=True,
+        access_until=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        received_at=now + timedelta(hours=2),
+    )
+    latest = _latest_by_subscriber([late, renew])
+    chosen = next(iter(latest.values()))
+    assert chosen is renew
+    assert chosen.event_type == "subscription_renewed"
+    is_active = _is_active_now(chosen, date(2026, 7, 28))
+    assert _client_display_status(chosen, is_active=is_active) == "ativo"
+    assert _client_display_status(chosen, is_active=is_active) != "atrasado"
+
+
 def test_late_with_expired_access_is_atrasado_not_active():
     today = date(2026, 7, 28)
     ev = _ev(
