@@ -504,23 +504,47 @@ class AdminMetricsService:
 
     def series_12m(self) -> Dict[str, List[Dict[str, Any]]]:
         today = datetime.now(timezone.utc).date()
-        mrr_series = []
-        rev_series = []
-        for i in range(11, -1, -1):
-            y = today.year
-            m = today.month - i
-            while m <= 0:
-                m += 12
-                y -= 1
-            # MRR snapshot: approx using current logic as-of end of month (simplified: use revenue-based for past)
-            rev = self.revenue_for_month(y, m)
-            # For historical MRR we approximate with month-end actives if we had events; else 0
+        first = self.db.query(func.min(SubscriptionEvent.received_at)).scalar()
+        if not first:
+            return {"mrr": [], "revenue": []}
+
+        start_y, start_m = first.year, first.month
+        # Último mês completo = mês anterior a today (exclui parcial do corrente).
+        mrr_end_y, mrr_end_m = today.year, today.month - 1
+        if mrr_end_m <= 0:
+            mrr_end_m, mrr_end_y = 12, mrr_end_y - 1
+
+        mrr_series: List[Dict[str, Any]] = []
+        y, m = start_y, start_m
+        while (y, m) <= (mrr_end_y, mrr_end_m):
             end_day = monthrange(y, m)[1]
             actives = self.active_subscribers(as_of=date(y, m, end_day))
             mrr = self.mrr_cents(actives)
-            label = f"{y:04d}-{m:02d}"
-            mrr_series.append({"month": label, "net": mrr["net"], "gross": mrr["gross"]})
-            rev_series.append({"month": label, "net": rev["net"], "gross": rev["gross"]})
+            mrr_series.append({
+                "month": f"{y:04d}-{m:02d}",
+                "net": mrr["net"],
+                "gross": mrr["gross"],
+            })
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
+
+        # Revenue: desde o primeiro evento até o mês corrente (inclui parcial).
+        rev_series: List[Dict[str, Any]] = []
+        y, m = start_y, start_m
+        while (y, m) <= (today.year, today.month):
+            rev = self.revenue_for_month(y, m)
+            rev_series.append({
+                "month": f"{y:04d}-{m:02d}",
+                "net": rev["net"],
+                "gross": rev["gross"],
+            })
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
+
         return {"mrr": mrr_series, "revenue": rev_series}
 
     def plan_frequency_distribution(self) -> List[Dict[str, Any]]:

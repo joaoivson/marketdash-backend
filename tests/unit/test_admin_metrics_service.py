@@ -1,12 +1,15 @@
 """Regressão: dedupe de cobrança duplicada (item 1) e prioridade de evento pro
 estado atual da assinatura (item 3 — next_payment não pode vir de webhook velho).
-Task 2: status atrasado, late ≠ churn, late ≠ revenue."""
+Task 2: status atrasado, late ≠ churn, late ≠ revenue.
+Task 3: série MRR só com meses de histórico real."""
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from app.services.admin_metrics_service import (
     CANCEL_EVENTS,
     PAID_EVENTS,
+    AdminMetricsService,
     _client_display_status,
     _dedupe_by_charge,
     _is_active_now,
@@ -215,3 +218,75 @@ def test_subscription_late_not_in_revenue():
     assert "subscription_late" not in PAID_EVENTS
     assert _paid_total_for_events([late]) == 0
     assert revenue_from_charges_for_month([late], 2026, 7)["net"] == 0
+
+
+def test_mrr_series_starts_at_first_event_month(monkeypatch):
+    """MRR começa no mês do primeiro received_at e omite o mês corrente parcial."""
+    fixed_now = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    monkeypatch.setattr("app.services.admin_metrics_service.datetime", _FixedDateTime)
+
+    db = MagicMock()
+    min_q = MagicMock()
+    min_q.scalar.return_value = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    db.query.return_value = min_q
+
+    svc = AdminMetricsService(db)
+    monkeypatch.setattr(
+        svc, "revenue_for_month", lambda y, m: {"net": 100, "gross": 110, "refund_net": 0}
+    )
+    monkeypatch.setattr(svc, "active_subscribers", lambda as_of=None: [])
+    monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
+
+    series = svc.series_12m()
+    mrr_months = [p["month"] for p in series["mrr"]]
+    rev_months = [p["month"] for p in series["revenue"]]
+
+    assert mrr_months == ["2026-07", "2026-08"]
+    assert all(m >= "2026-07" for m in mrr_months)
+    assert "2026-06" not in mrr_months
+    assert "2026-09" not in mrr_months  # mês corrente incompleto
+    assert rev_months == ["2026-07", "2026-08", "2026-09"]
+
+
+def test_mrr_series_empty_when_no_events(monkeypatch):
+    db = MagicMock()
+    min_q = MagicMock()
+    min_q.scalar.return_value = None
+    db.query.return_value = min_q
+
+    series = AdminMetricsService(db).series_12m()
+    assert series == {"mrr": [], "revenue": []}
+
+
+def test_mrr_series_empty_when_only_incomplete_current_month(monkeypatch):
+    """Primeiro evento no mês corrente → sem mês completo → MRR vazio."""
+    fixed_now = datetime(2026, 7, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    monkeypatch.setattr("app.services.admin_metrics_service.datetime", _FixedDateTime)
+
+    db = MagicMock()
+    min_q = MagicMock()
+    min_q.scalar.return_value = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    db.query.return_value = min_q
+
+    svc = AdminMetricsService(db)
+    monkeypatch.setattr(
+        svc, "revenue_for_month", lambda y, m: {"net": 100, "gross": 110, "refund_net": 0}
+    )
+    monkeypatch.setattr(svc, "active_subscribers", lambda as_of=None: [])
+    monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
+
+    series = svc.series_12m()
+    assert series["mrr"] == []
+    assert [p["month"] for p in series["revenue"]] == ["2026-07"]
