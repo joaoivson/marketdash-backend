@@ -25,8 +25,16 @@ celery_app.conf.update(
     # usa priority=0 (máxima) e fura a fila na frente dos full-refresh pesados da Shopee
     # (cron, priority=9). Sem isso o botão fica minutos atrás do batch da Shopee.
     # priority menor = mais prioritário. Steps padrão do Redis: [0,3,6,9].
+    #
+    # ATENÇÃO — o Redis não tem prioridade nativa: o Celery emula criando uma fila por
+    # step ("celery", "celery\x06\x163", ...). Só as pontas (0 e 9) estão sendo
+    # consumidas neste ambiente; o default anterior (5) caía num step intermediário e
+    # as tasks ficavam enfileiradas PARA SEMPRE, sem erro nenhum — era o que derrubava
+    # o sync manual da Shopee (aceito com 202 e nunca executado). Default 0 garante que
+    # qualquer `.delay()` sem prioridade explícita (upload de CSV, jobs) caia na fila
+    # base, que é consumida. Batches pesados continuam pedindo priority=9 explícito.
     broker_transport_options={"queue_order_strategy": "priority"},
-    task_default_priority=5,
+    task_default_priority=0,
 )
 
 # Explicitly include task modules so the worker always registers them (avoids "unregistered task" in production).

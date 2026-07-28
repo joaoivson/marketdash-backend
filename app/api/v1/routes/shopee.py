@@ -129,8 +129,20 @@ def manual_sync(
         )
     from app.tasks.shopee_tasks import sync_shopee_user_task
 
-    task = sync_shopee_user_task.delay(
-        current_user.id, days_back=days_back, empty_attempt=0, trigger="manual"
+    # priority=0 (máxima), igual ao botão manual do Facebook. NÃO usar .delay():
+    # o default (5) cai num "priority step" intermediário do Redis que o worker não
+    # consome — a task era aceita (202), ficava na fila e NUNCA executava, que é a
+    # causa real do "sync manual não completa" (o cron, priority=9, sempre funcionou).
+    # Além disso é o comportamento certo: quem está esperando na tela fura a fila
+    # na frente dos batches pesados do cron.
+    task = sync_shopee_user_task.apply_async(
+        kwargs={
+            "user_id": current_user.id,
+            "days_back": days_back,
+            "empty_attempt": 0,
+            "trigger": "manual",
+        },
+        priority=0,
     )
     return {
         "status": "accepted",
