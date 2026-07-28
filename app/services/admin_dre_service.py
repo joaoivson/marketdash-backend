@@ -25,13 +25,17 @@ class AdminDreService:
     def __init__(self, db: Session):
         self.db = db
 
-    def month_statement(self, year: int, month: int) -> Dict[str, Any]:
-        start, end = _month_bounds(year, month)
-        all_events = (
+    def _load_all_events(self):
+        return (
             self.db.query(SubscriptionEvent)
             .order_by(SubscriptionEvent.received_at.asc())
             .all()
         )
+
+    def month_statement(self, year: int, month: int, all_events=None) -> Dict[str, Any]:
+        start, end = _month_bounds(year, month)
+        if all_events is None:
+            all_events = self._load_all_events()
         charges_rev = revenue_from_charges_for_month(all_events, year, month)
         skip = _subscribers_with_charges_completed(all_events)
         legacy = _legacy_paid_in_month(all_events, year, month, skip)
@@ -90,6 +94,7 @@ class AdminDreService:
 
     def series_12m(self) -> List[Dict[str, Any]]:
         today = datetime.now(timezone.utc).date()
+        all_events = self._load_all_events()
         out = []
         results = []
         for i in range(11, -1, -1):
@@ -98,7 +103,7 @@ class AdminDreService:
             while m <= 0:
                 m += 12
                 y -= 1
-            stmt = self.month_statement(y, m)
+            stmt = self.month_statement(y, m, all_events=all_events)
             out.append({
                 "month": f"{y:04d}-{m:02d}",
                 "revenue_net_cents": stmt["revenue_net_cents"],

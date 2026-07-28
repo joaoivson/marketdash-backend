@@ -1,13 +1,24 @@
-from datetime import datetime, timezone
 from types import SimpleNamespace
+
 from app.services.admin_metrics_service import (
+    _paid_total_for_events,
     extract_paid_charges_union,
-    total_paid_net_from_charges,
     revenue_from_charges_for_month,
+    total_paid_net_from_charges,
 )
 
-def _ev(charges):
-    return SimpleNamespace(charges_completed=charges, subscription_id="sub1")
+
+def _ev(charges, **kwargs):
+    defaults = dict(
+        charges_completed=charges,
+        subscription_id="sub1",
+        event_type="order_approved",
+        order_id=None,
+        amount_net_cents=0,
+    )
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
 
 def test_union_dedupes_same_order_across_webhooks():
     c1 = {"order_id": "o1", "status": "paid", "approved_date": "2026-05-26",
@@ -22,10 +33,12 @@ def test_union_dedupes_same_order_across_webhooks():
     assert len(union) == 3
     assert total_paid_net_from_charges(events) == 18150
 
+
 def test_skips_non_paid():
     events = [_ev([{"order_id": "x", "status": "waiting_payment",
                     "Commissions": {"my_commission": 999}}])]
     assert total_paid_net_from_charges(events) == 0
+
 
 def test_revenue_month_uses_charge_date_not_webhook_received():
     # cobrança de abril vista só num webhook de julho → entra em 2026-04
@@ -35,3 +48,39 @@ def test_revenue_month_uses_charge_date_not_webhook_received():
     rev = revenue_from_charges_for_month(events, 2026, 4)
     assert rev["net"] == 13570
     assert revenue_from_charges_for_month(events, 2026, 7)["net"] == 0
+
+
+def test_paid_total_prefers_union_when_paid_charges_exist():
+    paid_ch = {
+        "order_id": "o1",
+        "status": "paid",
+        "approved_date": "2026-05-26",
+        "Commissions": {"my_commission": 6050, "charge_amount": 6700},
+    }
+    # Legacy amount would be wrong / different — union must win
+    events = [
+        _ev([paid_ch], event_type="order_approved", order_id="o1", amount_net_cents=9999),
+    ]
+    assert _paid_total_for_events(events) == 6050
+
+
+def test_paid_total_falls_back_when_charges_completed_missing():
+    events = [
+        _ev(None, event_type="order_approved", order_id="legacy-1", amount_net_cents=4500),
+        _ev(None, event_type="subscription_renewed", order_id="legacy-1", amount_net_cents=4500),
+    ]
+    assert _paid_total_for_events(events) == 4500
+
+
+def test_paid_total_falls_back_when_only_non_paid_charges():
+    waiting = {
+        "order_id": "w1",
+        "status": "waiting_payment",
+        "Commissions": {"my_commission": 999},
+    }
+    events = [
+        _ev([waiting], event_type="order_approved", order_id="legacy-2", amount_net_cents=7200),
+    ]
+    # Truthy array must NOT zero totals — fallback to PAID_EVENTS dedupe
+    assert extract_paid_charges_union(events) == []
+    assert _paid_total_for_events(events) == 7200

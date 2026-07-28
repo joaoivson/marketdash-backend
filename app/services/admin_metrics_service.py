@@ -150,11 +150,22 @@ def revenue_from_charges_for_month(events, year: int, month: int) -> dict:
 
 
 def _subscribers_with_charges_completed(events) -> set:
+    """Assinantes com ≥1 cobrança paid na união — array só com waiting_payment NÃO conta."""
     return {
         _subscriber_key(ev)
         for ev in events
-        if getattr(ev, "charges_completed", None)
+        if extract_paid_charges_union([ev])
     }
+
+
+def _paid_total_for_events(events, paid_events=None) -> int:
+    """Total pago líquido: união de charges paid se houver; senão PAID_EVENTS dedupe."""
+    if paid_events is None:
+        paid_events = PAID_EVENTS
+    if extract_paid_charges_union(events):
+        return total_paid_net_from_charges(events)
+    paid = [e for e in events if (e.event_type or "").lower() in paid_events]
+    return sum((e.amount_net_cents or 0) for e in _dedupe_by_charge(paid))
 
 
 def _fees_from_charges_for_month(events, year: int, month: int) -> int:
@@ -170,7 +181,7 @@ def _fees_from_charges_for_month(events, year: int, month: int) -> int:
 
 
 def _legacy_paid_in_month(events, year: int, month: int, skip_keys: set) -> List[SubscriptionEvent]:
-    """PAID_EVENTS por received_at — só assinantes sem charges_completed (legado)."""
+    """PAID_EVENTS por received_at — só assinantes sem cobrança paid na união (legado)."""
     start, end = _month_bounds(year, month)
     paid = [
         e
@@ -638,17 +649,9 @@ class AdminMetricsService:
                 else (SubscriptionEvent.customer_email == ev.customer_email)
             )
             sub_events = self.db.query(SubscriptionEvent).filter(sub_filter).all()
-            # Preferir união de charges_completed (histórico completo da Kiwify).
-            # Fallback legado: soma PAID_EVENTS dedupe por order_id se nunca houve array.
-            if any(getattr(e, "charges_completed", None) for e in sub_events):
-                paid_total_net = total_paid_net_from_charges(sub_events)
-            else:
-                paid_events_for_subscriber = [
-                    e for e in sub_events if (e.event_type or "").lower() in PAID_EVENTS
-                ]
-                paid_total_net = sum(
-                    (e.amount_net_cents or 0) for e in _dedupe_by_charge(paid_events_for_subscriber)
-                )
+            # Preferir união de charges paid; fallback legado se união vazia
+            # (sem array OU só waiting_payment / não-paid).
+            paid_total_net = _paid_total_for_events(sub_events)
 
             name = ev.customer_name or (user.name if user else None) or ""
             email = ev.customer_email or (user.email if user else "") or ""
