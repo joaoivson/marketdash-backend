@@ -213,7 +213,10 @@ class ShopeeIntegrationService:
         """
         integration = self.repo.get_by_user_id(user_id)
         if not integration or not integration.is_active:
-            return 0
+            # Tupla, não int puro: esta função retorna (total, is_suspected_partial, details)
+            # e sync_user desempacota em 3 — um `return 0` aqui estoura
+            # "cannot unpack non-iterable int object" e derruba o sync inteiro.
+            return 0, False, {}
 
         # Captura credenciais ANTES do commit do dataset (expire_on_commit=True expira o objeto
         # `integration`; usar `integration.app_id` no loop recarregaria do banco, reabrindo

@@ -74,7 +74,16 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
         return {"status": "ok", "user_id": user_id, "commissions": commissions, "empty_attempt": empty_attempt, "days_back": days_back}
 
     except Exception as exc:
-        logger.error("sync_shopee_user_task falhou user_id=%s: %s", user_id, exc)
+        from app.services.shopee_graphql_client import ShopeePermanentError
+
+        is_permanent = isinstance(exc, ShopeePermanentError)
+        if is_permanent:
+            logger.warning(
+                "sync_shopee_user_task user_id=%s: credencial inválida — sem retry (%s)",
+                user_id, exc,
+            )
+        else:
+            logger.error("sync_shopee_user_task falhou user_id=%s: %s", user_id, exc)
         try:
             from app.models.sync_error_log import SyncErrorLog
 
@@ -85,6 +94,10 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
                 db.rollback()
             except Exception:
                 pass
+        if is_permanent:
+            # Não reagenda: só reconectando a conta resolve. Retentar geraria 4x a carga
+            # e enche o painel de erro repetido sem nenhuma chance de sucesso.
+            return {"status": "failed_permanent", "user_id": user_id, "reason": str(exc)}
         raise self.retry(exc=RuntimeError(str(exc)), countdown=300)
     finally:
         db.close()

@@ -63,6 +63,60 @@ def _fake_repo_with_integration():
 
 
 @pytest.mark.asyncio
+async def test_sync_commissions_returns_tuple_when_integration_inactive():
+    """Regressão do bug real em produção (25-28/07/2026): sync_commissions retorna uma
+    TUPLA (total, is_suspected_partial, details) e sync_user desempacota em 3. O caminho
+    de saída antecipada (sem integração / integração inativa) devolvia `0` puro, o que
+    estourava 'cannot unpack non-iterable int object' e derrubava o sync do usuário —
+    inclusive o sync manual, que nunca completava."""
+    from app.services import shopee_integration_service as svc_mod
+
+    repo_mock = MagicMock()
+    repo_mock.get_by_user_id.return_value = None  # sem integração
+
+    service = svc_mod.ShopeeIntegrationService(repo_mock)
+    result = await service.sync_commissions(user_id=1, db=MagicMock(), days_back=7)
+
+    assert result == (0, False, {})
+    total, is_partial, details = result  # não pode estourar
+    assert total == 0
+
+    # idem quando existe integração mas está inativa
+    repo_mock.get_by_user_id.return_value = MagicMock(is_active=False)
+    total, is_partial, details = await service.sync_commissions(
+        user_id=1, db=MagicMock(), days_back=7
+    )
+    assert (total, is_partial, details) == (0, False, {})
+
+
+@pytest.mark.asyncio
+async def test_sync_user_survives_inactive_integration_end_to_end():
+    """Fecha o ciclo do bug acima: sync_user (quem desempacota) não pode estourar."""
+    from app.services import shopee_integration_service as svc_mod
+
+    lock_conn = MagicMock()
+    lock_conn.execute.return_value.scalar.return_value = True
+    bind = MagicMock()
+    bind.connect.return_value.execution_options.return_value = lock_conn
+    db = MagicMock()
+    db.get_bind.return_value = bind
+
+    repo_mock = MagicMock()
+    repo_mock.get_by_user_id.return_value = None
+
+    fake_run_repo = MagicMock()
+    fake_run_repo.create.return_value = 7
+
+    with patch("app.repositories.sync_run_repository.SyncRunRepository", return_value=fake_run_repo):
+        service = svc_mod.ShopeeIntegrationService(repo_mock)
+        result = await service.sync_user(user_id=1, db=db, days_back=7, trigger="manual")
+
+    assert result == 0
+    fake_run_repo.mark_success.assert_called_once()
+    fake_run_repo.mark_failed.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_sync_commissions_never_deletes_the_window():
     """O único delete que pode sobrar é o de dedup contra OUTROS datasets (seletivo por
     order_id) — se o antigo delete-da-janela-inteira (por data) ainda existisse, o
