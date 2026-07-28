@@ -1,9 +1,19 @@
 """Regressão: dedupe de cobrança duplicada (item 1) e prioridade de evento pro
-estado atual da assinatura (item 3 — next_payment não pode vir de webhook velho)."""
-from datetime import datetime, timedelta, timezone
+estado atual da assinatura (item 3 — next_payment não pode vir de webhook velho).
+Task 2: status atrasado, late ≠ churn, late ≠ revenue."""
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from app.services.admin_metrics_service import _dedupe_by_charge, _latest_by_subscriber
+from app.services.admin_metrics_service import (
+    CANCEL_EVENTS,
+    PAID_EVENTS,
+    _client_display_status,
+    _dedupe_by_charge,
+    _is_active_now,
+    _latest_by_subscriber,
+    _paid_total_for_events,
+    revenue_from_charges_for_month,
+)
 
 
 def _ev(**kwargs):
@@ -15,6 +25,12 @@ def _ev(**kwargs):
         customer_cpf=None,
         received_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
         next_payment=None,
+        subscription_status=None,
+        has_access=None,
+        access_until=None,
+        amount_net_cents=None,
+        charges_completed=None,
+        card_rejection_reason=None,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -95,3 +111,81 @@ def test_latest_by_subscriber_cancellation_after_renewal_wins():
     latest = _latest_by_subscriber([renewal, cancel])
     chosen = next(iter(latest.values()))
     assert chosen is cancel
+
+
+def test_latest_by_subscriber_late_beats_later_order_approved():
+    now = datetime(2026, 7, 25, tzinfo=timezone.utc)
+    late = _ev(event_type="subscription_late", received_at=now)
+    approved = _ev(
+        event_type="order_approved",
+        received_at=now + timedelta(milliseconds=50),
+    )
+    latest = _latest_by_subscriber([late, approved])
+    assert next(iter(latest.values())) is late
+
+
+def test_late_with_expired_access_is_atrasado_not_active():
+    today = date(2026, 7, 28)
+    ev = _ev(
+        event_type="subscription_late",
+        subscription_status="waiting_payment",
+        has_access=True,
+        access_until=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        card_rejection_reason="refused_bank",
+    )
+    assert _is_active_now(ev, today) is False
+    assert _client_display_status(ev, is_active=False) == "atrasado"
+
+
+def test_late_with_valid_access_is_atrasado_still_active_eligible():
+    today = date(2026, 7, 28)
+    ev = _ev(
+        event_type="subscription_late",
+        subscription_status="waiting_payment",
+        has_access=True,
+        access_until=datetime(2026, 8, 20, tzinfo=timezone.utc),
+    )
+    assert _is_active_now(ev, today) is True
+    assert _client_display_status(ev, is_active=True) == "atrasado"
+
+
+def test_waiting_payment_status_alone_is_atrasado():
+    ev = _ev(event_type="order_approved", subscription_status="waiting_payment")
+    assert _client_display_status(ev, is_active=False) == "atrasado"
+
+
+def test_late_does_not_count_as_churn():
+    assert CANCEL_EVENTS == {"subscription_canceled"}
+    assert "subscription_late" not in CANCEL_EVENTS
+    late = _ev(event_type="subscription_late", subscription_status="waiting_payment")
+    assert _client_display_status(late, is_active=False) == "atrasado"
+    assert _client_display_status(late, is_active=False) != "inativo"
+
+
+def test_canceled_without_access_is_inativo_churn():
+    ev = _ev(event_type="subscription_canceled", subscription_status="canceled")
+    assert _client_display_status(ev, is_active=False) == "inativo"
+
+
+def test_canceled_with_access_is_cancelado_com_acesso():
+    ev = _ev(event_type="subscription_canceled", subscription_status="canceled")
+    assert _client_display_status(ev, is_active=True) == "cancelado_com_acesso"
+
+
+def test_subscription_late_not_in_revenue():
+    """Late sem cobrança paid não altera faturamento."""
+    late = _ev(
+        event_type="subscription_late",
+        order_id="late-1",
+        amount_net_cents=9999,
+        charges_completed=[
+            {
+                "order_id": "w1",
+                "status": "waiting_payment",
+                "Commissions": {"my_commission": 9999, "charge_amount": 10000},
+            }
+        ],
+    )
+    assert "subscription_late" not in PAID_EVENTS
+    assert _paid_total_for_events([late]) == 0
+    assert revenue_from_charges_for_month([late], 2026, 7)["net"] == 0

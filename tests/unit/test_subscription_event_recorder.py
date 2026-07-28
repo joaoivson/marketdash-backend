@@ -55,3 +55,18 @@ def test_canceled_with_access_still_parsed():
     assert fields["has_access"] is True
     assert fields["subscription_status"] == "canceled"
     assert fields["access_until"] is not None
+
+
+def test_extract_card_rejection_reason():
+    payload = {
+        "order": {
+            "order_id": "late1",
+            "card_rejection_reason": "refused_bank",
+            "Customer": {"email": "late@ex.com"},
+            "Subscription": {"status": "waiting_payment", "plan": {"name": "Essencial"}},
+            "Commissions": {},
+        }
+    }
+    fields = extract_event_fields(payload, "subscription_late")
+    assert fields["card_rejection_reason"] == "refused_bank"
+    assert fields["subscription_status"] == "waiting_payment"

@@ -47,6 +47,7 @@ class SubscriptionEvent(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     is_plan_change = Column(Boolean, nullable=False, default=False)
     charges_completed = Column(JSONB, nullable=True)
+    card_rejection_reason = Column(Text, nullable=True)
     raw_payload = Column(JSONB, nullable=False, server_default="{}")
     received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     dedupe_key = Column(String, nullable=False, unique=True)

@@ -202,8 +202,9 @@ def _legacy_paid_in_month(events, year: int, month: int, skip_keys: set) -> List
 # pega o evento errado nesse caso. subscription_renewed/canceled são especificamente
 # sobre o estado da assinatura mudar; order_approved é sobre o pagamento em si.
 _SUBSCRIBER_STATE_PRIORITY = {
+    "subscription_canceled": 3,
+    "subscription_late": 3,
     "subscription_renewed": 2,
-    "subscription_canceled": 2,
     "order_refunded": 2,
     "order_chargedback": 2,
     "chargeback": 2,
@@ -239,6 +240,24 @@ def _is_active_now(ev: SubscriptionEvent, today: date) -> bool:
             return False
         return True
     return False
+
+
+def _client_display_status(ev: SubscriptionEvent, is_active: bool) -> str:
+    """Status de exibição na lista/ficha — late ≠ churn; late com acesso pode ser ativo no count."""
+    etype = (ev.event_type or "").lower()
+    sub_st = (ev.subscription_status or "").lower()
+    is_late = etype == "subscription_late" or sub_st == "waiting_payment"
+    is_canceled = etype == "subscription_canceled" or sub_st in ("canceled", "cancelled")
+
+    if is_canceled and is_active:
+        return "cancelado_com_acesso"
+    if is_canceled:
+        return "inativo"
+    if is_late:
+        return "atrasado"
+    if is_active:
+        return "ativo"
+    return "inativo"
 
 
 class AdminMetricsService:
@@ -616,9 +635,7 @@ class AdminMetricsService:
                 uid = user.id if user else None
 
             is_active = key in actives_map
-            status = "ativo" if is_active else "inativo"
-            if (ev.subscription_status or "").lower() in ("canceled", "cancelled") and is_active:
-                status = "cancelado_com_acesso"
+            status = _client_display_status(ev, is_active)
 
             last_login = None
             if uid:
@@ -673,6 +690,7 @@ class AdminMetricsService:
                 "next_payment": ev.next_payment.isoformat() if ev.next_payment else None,
                 "access_until": ev.access_until.isoformat() if ev.access_until else None,
                 "total_paid_net_cents": int(paid_total_net or 0),
+                "card_rejection_reason": getattr(ev, "card_rejection_reason", None),
                 "last_login_at": last_login,
                 "integrations": {"shopee": has_shopee, "facebook": has_fb},
                 "semaphore": self._semaphore(uid),
@@ -772,6 +790,7 @@ class AdminMetricsService:
                     "amount_gross_cents": e.amount_gross_cents,
                     "plan_name": e.plan_name,
                     "is_plan_change": e.is_plan_change,
+                    "card_rejection_reason": e.card_rejection_reason,
                 }
                 for e in events
             ],
@@ -783,6 +802,7 @@ class AdminMetricsService:
                 "next_payment": latest.next_payment.isoformat() if latest and latest.next_payment else None,
                 "payment_method": latest.payment_method if latest else None,
                 "has_access": latest.has_access if latest else None,
+                "card_rejection_reason": latest.card_rejection_reason if latest else None,
             },
             "usage": {
                 "logins_30d": [

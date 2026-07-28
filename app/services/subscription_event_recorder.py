@@ -135,6 +135,7 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
         "funds_status": commissions.get("funds_status"),
         "deposit_date": deposit,
         "charges_completed": charges_completed,
+        "card_rejection_reason": order.get("card_rejection_reason"),
         "dedupe_key": build_dedupe_key(order.get("order_id"), (event_type or "").strip().lower(), approved),
     }
 
@@ -238,6 +239,7 @@ def record_subscription_event(
             funds_status=fields.get("funds_status"),
             deposit_date=fields.get("deposit_date"),
             charges_completed=fields.get("charges_completed"),
+            card_rejection_reason=fields.get("card_rejection_reason"),
             user_id=user_id,
             is_plan_change=is_plan_change,
             raw_payload=payload,
