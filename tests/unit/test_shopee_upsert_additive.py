@@ -198,6 +198,42 @@ async def test_sync_commissions_flags_suspected_partial_without_blocking_write()
 
 
 @pytest.mark.asyncio
+async def test_guard_ignores_first_day_of_window():
+    """O primeiro dia da janela é parcial por construção (a busca começa em
+    now - days_back, no meio do dia), então não pode acusar fetch parcial —
+    senão TODO sync manual marcaria alerta (visto em produção 28/07: sync de 7
+    dias acusou 21/07 com 683 -> 318, sendo que 21/07 é a borda da janela)."""
+    from app.repositories.dataset_row_repository import DatasetRowRepository
+    from app.services import shopee_integration_service as svc_mod
+
+    now_brt = datetime.now(BRT)
+    boundary_day = (now_brt - timedelta(days=7)).date()
+    node = _fake_node(now_brt - timedelta(days=7) + timedelta(hours=1))
+    fake_dataset = MagicMock(id=555)
+
+    with patch.object(
+        svc_mod, "_get_or_create_shopee_dataset", return_value=fake_dataset
+    ), patch(
+        "app.services.shopee_graphql_client.execute_graphql",
+        new_callable=AsyncMock,
+        return_value=_fake_response([node]),
+    ), patch.object(
+        svc_mod, "decrypt_value", return_value="fake-password"
+    ), patch.object(
+        DatasetRowRepository, "count_by_date", return_value={boundary_day: 683}
+    ), patch.object(
+        DatasetRowRepository, "bulk_create"
+    ):
+        service = svc_mod.ShopeeIntegrationService(_fake_repo_with_integration())
+        _, is_suspected_partial, details = await service.sync_commissions(
+            user_id=1, db=MagicMock(), days_back=7,
+        )
+
+    assert is_suspected_partial is False
+    assert details == {}
+
+
+@pytest.mark.asyncio
 async def test_sync_user_marks_lock_collision_instead_of_running():
     """Advisory lock já ocupado (outro sync rodando pro mesmo usuário) -> sync_runs
     recebe status skipped_lock (não uma execução 'zero comissões' de verdade), e

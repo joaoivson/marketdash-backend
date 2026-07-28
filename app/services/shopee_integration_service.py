@@ -460,8 +460,15 @@ class ShopeeIntegrationService:
         # (mesma lógica por trás da janela 9-12h BRT da migration 026); comparar dias recentes
         # geraria falso positivo o tempo todo. Não impede a escrita — só sinaliza (sync_runs).
         settle_cutoff = (now - timedelta(days=3)).date()
+        # O PRIMEIRO dia da janela é parcial por construção: a busca começa em
+        # `now - days_back`, ou seja, no meio daquele dia. Comparar ele com o que já
+        # está no banco (dia inteiro) acusaria fetch parcial em TODO sync — falso
+        # positivo que esvazia o valor do sinal.
+        window_start_date = start.date()
         new_counts: Counter = Counter(r.date for r in all_rows)
-        stable_dates = [d for d in new_counts if d <= settle_cutoff]
+        stable_dates = [
+            d for d in new_counts if d <= settle_cutoff and d > window_start_date
+        ]
         is_suspected_partial = False
         guard_details: dict = {}
         if stable_dates:
