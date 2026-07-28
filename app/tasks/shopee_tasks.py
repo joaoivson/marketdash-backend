@@ -77,9 +77,37 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
         from app.services.shopee_graphql_client import ShopeePermanentError
 
         is_permanent = isinstance(exc, ShopeePermanentError)
+
+        # Conta que NUNCA sincronizou com sucesso (last_sync_at nulo) e falha = credencial
+        # mal configurada desde o começo, não instabilidade. A Shopee às vezes devolve
+        # "System Error" (10000) genérico nesse caso em vez de "Invalid Credential", então
+        # não dá pra decidir só pelo código do erro. Retentar 3x de 5 em 5 min não tem
+        # chance de sucesso e é o que sobrou enchendo o painel. Contas saudáveis (com
+        # last_sync_at preenchido) mantêm o retry normal — falha ali é transitória de verdade.
+        never_synced = False
+        if not is_permanent:
+            try:
+                from app.models.shopee_integration import ShopeeIntegration
+
+                integ = (
+                    db.query(ShopeeIntegration)
+                    .filter(ShopeeIntegration.user_id == user_id)
+                    .first()
+                )
+                never_synced = bool(integ and integ.last_sync_at is None)
+            except Exception:
+                never_synced = False
+
+        skip_retry = is_permanent or never_synced
         if is_permanent:
             logger.warning(
                 "sync_shopee_user_task user_id=%s: credencial inválida — sem retry (%s)",
+                user_id, exc,
+            )
+        elif never_synced:
+            logger.warning(
+                "sync_shopee_user_task user_id=%s: conta nunca sincronizou (credencial "
+                "provavelmente incorreta) — sem retry (%s)",
                 user_id, exc,
             )
         else:
@@ -94,10 +122,15 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
                 db.rollback()
             except Exception:
                 pass
-        if is_permanent:
+        if skip_retry:
             # Não reagenda: só reconectando a conta resolve. Retentar geraria 4x a carga
             # e enche o painel de erro repetido sem nenhuma chance de sucesso.
-            return {"status": "failed_permanent", "user_id": user_id, "reason": str(exc)}
+            return {
+                "status": "failed_permanent",
+                "user_id": user_id,
+                "reason": str(exc),
+                "never_synced": never_synced,
+            }
         raise self.retry(exc=RuntimeError(str(exc)), countdown=300)
     finally:
         db.close()

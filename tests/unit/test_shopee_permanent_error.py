@@ -107,12 +107,14 @@ def test_task_does_not_retry_permanent_error():
 
 
 def test_task_still_retries_transient_error():
-    """Contraprova: erro transitório continua reagendando (não quebrei o retry normal)."""
+    """Contraprova: erro transitório em conta SAUDÁVEL (já sincronizou antes)
+    continua reagendando — não quebrei o retry normal."""
     from app.tasks.shopee_tasks import sync_shopee_user_task
+    from datetime import datetime, timezone
 
     fake_db = MagicMock()
-    fake_user = MagicMock(is_demo=False)
-    fake_db.query.return_value.filter.return_value.first.return_value = fake_user
+    healthy = MagicMock(is_demo=False, last_sync_at=datetime.now(timezone.utc))
+    fake_db.query.return_value.filter.return_value.first.return_value = healthy
 
     retry_mock = MagicMock(return_value=RuntimeError("retry agendado"))
 
@@ -128,3 +130,31 @@ def test_task_still_retries_transient_error():
             )
 
     retry_mock.assert_called_once()
+
+
+def test_task_does_not_retry_account_that_never_synced():
+    """Conta que nunca sincronizou (last_sync_at nulo) e falha = credencial errada
+    desde o começo. A Shopee devolve "System Error" (10000) genérico nesses casos,
+    então não dá pra decidir pelo código do erro. Caso real: user 20 em produção,
+    83 falhas e 0 sucessos em 24h, retentando 4x por hora sem chance de sucesso."""
+    from app.tasks.shopee_tasks import sync_shopee_user_task
+
+    fake_db = MagicMock()
+    never_synced = MagicMock(is_demo=False, last_sync_at=None)
+    fake_db.query.return_value.filter.return_value.first.return_value = never_synced
+
+    retry_mock = MagicMock(side_effect=AssertionError("não pode retentar conta nunca sincronizada"))
+
+    with patch("app.db.session.SessionLocal", return_value=fake_db), patch.object(
+        sync_shopee_user_task, "retry", retry_mock
+    ), patch(
+        "app.services.shopee_integration_service.ShopeeIntegrationService.sync_user",
+        side_effect=HTTPException(status_code=400, detail="System Error"),
+    ):
+        result = sync_shopee_user_task.run(
+            user_id=20, days_back=7, empty_attempt=0, trigger="cron_incremental"
+        )
+
+    assert result["status"] == "failed_permanent"
+    assert result["never_synced"] is True
+    retry_mock.assert_not_called()
