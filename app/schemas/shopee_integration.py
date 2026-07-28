@@ -13,6 +13,26 @@ class ShopeeCredentialsUpsert(BaseModel):
     def strip_app_id(cls, v: str) -> str:
         return v.strip()
 
+    @field_validator("app_id")
+    @classmethod
+    def app_id_must_be_numeric(cls, v: str) -> str:
+        """O AppID da Shopee é numérico (ex.: 18191340007).
+
+        Sem essa checagem dava pra salvar qualquer coisa e a integração ficava
+        "conectada" na tela, mas TODA sync falhava com erro genérico da Shopee —
+        e o usuário não tinha como saber por quê. Em produção (28/07/2026) 2 das 3
+        contas que nunca sincronizaram tinham o e-mail do cliente salvo no lugar
+        do AppID.
+        """
+        if not v:
+            raise ValueError("Informe o AppID da Shopee.")
+        if not v.isdigit():
+            raise ValueError(
+                "AppID inválido: use o número do AppID da Shopee (ex.: 18191340007), "
+                "não o seu e-mail ou nome de usuário."
+            )
+        return v
+
 
 class ShopeeIntegrationResponse(BaseModel):
     id: int
