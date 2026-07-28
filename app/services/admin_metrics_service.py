@@ -121,8 +121,16 @@ def extract_paid_charges_union(events) -> list[dict]:
             if not oid:
                 continue
             commissions = ch.get("Commissions") or ch.get("commissions") or {}
-            net = _charge_as_cents(commissions.get("my_commission"))
-            gross = _charge_as_cents(commissions.get("charge_amount"))
+            net = _charge_as_cents(
+                commissions.get("my_commission")
+                or ch.get("my_commission")
+                or ch.get("amount")
+            )
+            gross = _charge_as_cents(
+                commissions.get("charge_amount")
+                or ch.get("charge_amount")
+                or ch.get("amount")  # if only amount present, gross≈net
+            )
             by_id[str(oid)] = {
                 "order_id": str(oid),
                 "net_cents": net,

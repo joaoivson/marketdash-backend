@@ -34,6 +34,20 @@ def test_union_dedupes_same_order_across_webhooks():
     assert total_paid_net_from_charges(events) == 18150
 
 
+def test_union_reads_flat_amount_field():
+    ch = {
+        "order_id": "bruna1",
+        "status": "paid",
+        "created_at": "2026-04-28T09:10:48.195Z",
+        "amount": 13570,
+    }
+    events = [SimpleNamespace(charges_completed=[ch], subscription_id="s")]
+    assert total_paid_net_from_charges(events) == 13570
+    rev = revenue_from_charges_for_month(events, 2026, 4)
+    assert rev["net"] == 13570
+    assert rev["gross"] == 13570
+
+
 def test_skips_non_paid():
     events = [_ev([{"order_id": "x", "status": "waiting_payment",
                     "Commissions": {"my_commission": 999}}])]

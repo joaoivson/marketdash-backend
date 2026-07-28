@@ -70,3 +70,18 @@ def test_extract_card_rejection_reason():
     fields = extract_event_fields(payload, "subscription_late")
     assert fields["card_rejection_reason"] == "refused_bank"
     assert fields["subscription_status"] == "waiting_payment"
+
+
+def test_extract_card_rejection_reason_top_level():
+    """Kiwify may put card_rejection_reason on the webhook root, not inside order."""
+    payload = {
+        "card_rejection_reason": "insufficient_funds",
+        "order": {
+            "order_id": "late2",
+            "Customer": {"email": "late2@ex.com"},
+            "Subscription": {"status": "waiting_payment", "plan": {"name": "Essencial"}},
+            "Commissions": {},
+        },
+    }
+    fields = extract_event_fields(payload, "subscription_late")
+    assert fields["card_rejection_reason"] == "insufficient_funds"

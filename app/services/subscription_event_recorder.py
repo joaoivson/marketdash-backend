@@ -135,7 +135,9 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
         "funds_status": commissions.get("funds_status"),
         "deposit_date": deposit,
         "charges_completed": charges_completed,
-        "card_rejection_reason": order.get("card_rejection_reason"),
+        "card_rejection_reason": (
+            order.get("card_rejection_reason") or payload.get("card_rejection_reason")
+        ),
         "dedupe_key": build_dedupe_key(order.get("order_id"), (event_type or "").strip().lower(), approved),
     }
 
