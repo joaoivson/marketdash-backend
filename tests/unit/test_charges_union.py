@@ -86,6 +86,22 @@ def test_paid_total_falls_back_when_charges_completed_missing():
     assert _paid_total_for_events(events) == 4500
 
 
+def test_union_fallback_raw_payload_when_charges_completed_none():
+    charges = [
+        {"order_id": "o1", "status": "paid", "approved_date": "2026-05-26", "amount": 6050},
+        {"order_id": "o2", "status": "paid", "approved_date": "2026-06-25", "amount": 6050},
+        {"order_id": "o3", "status": "paid", "approved_date": "2026-07-25", "amount": 6050},
+    ]
+    events = [
+        SimpleNamespace(
+            charges_completed=None,
+            raw_payload={"Subscription": {"charges": {"completed": charges}}},
+            subscription_id="sub1",
+        )
+    ]
+    assert total_paid_net_from_charges(events) == 18150
+
+
 def test_paid_total_falls_back_when_only_non_paid_charges():
     waiting = {
         "order_id": "w1",

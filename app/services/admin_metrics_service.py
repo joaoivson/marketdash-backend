@@ -108,11 +108,31 @@ def _parse_charge_dt(ch: dict):
     return _parse_dt(raw)
 
 
+def _charges_completed_for_event(ev) -> list:
+    completed = getattr(ev, "charges_completed", None)
+    if isinstance(completed, list) and completed:
+        return completed
+    raw = getattr(ev, "raw_payload", None)
+    if not isinstance(raw, dict):
+        return []
+    for key in ("Subscription", "subscription"):
+        sub = raw.get(key)
+        if not isinstance(sub, dict):
+            continue
+        charges = sub.get("charges")
+        if not isinstance(charges, dict):
+            continue
+        completed = charges.get("completed")
+        if isinstance(completed, list):
+            return completed
+    return []
+
+
 def extract_paid_charges_union(events) -> list[dict]:
     """Une charges.completed de vários webhooks; dedupe por order_id; só status paid."""
     by_id: dict[str, dict] = {}
     for ev in events:
-        for ch in (getattr(ev, "charges_completed", None) or []):
+        for ch in _charges_completed_for_event(ev):
             if not isinstance(ch, dict):
                 continue
             if (ch.get("status") or "").lower() != "paid":
