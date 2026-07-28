@@ -10,7 +10,15 @@ from sqlalchemy.orm import Session
 
 from app.models.expense import Expense
 from app.models.subscription_event import SubscriptionEvent
-from app.services.admin_metrics_service import PAID_EVENTS, REFUND_EVENTS, _month_bounds, _dedupe_by_charge
+from app.services.admin_metrics_service import (
+    REFUND_EVENTS,
+    _dedupe_by_charge,
+    _fees_from_charges_for_month,
+    _legacy_paid_in_month,
+    _month_bounds,
+    _subscribers_with_charges_completed,
+    revenue_from_charges_for_month,
+)
 
 
 class AdminDreService:
@@ -19,15 +27,20 @@ class AdminDreService:
 
     def month_statement(self, year: int, month: int) -> Dict[str, Any]:
         start, end = _month_bounds(year, month)
-        paid = (
+        all_events = (
             self.db.query(SubscriptionEvent)
-            .filter(
-                SubscriptionEvent.event_type.in_(PAID_EVENTS),
-                SubscriptionEvent.received_at >= start,
-                SubscriptionEvent.received_at <= end,
-            )
+            .order_by(SubscriptionEvent.received_at.asc())
             .all()
         )
+        charges_rev = revenue_from_charges_for_month(all_events, year, month)
+        skip = _subscribers_with_charges_completed(all_events)
+        legacy = _legacy_paid_in_month(all_events, year, month, skip)
+        gross = charges_rev["gross"] + sum((e.amount_gross_cents or 0) for e in legacy)
+        net = charges_rev["net"] + sum((e.amount_net_cents or 0) for e in legacy)
+        fees = _fees_from_charges_for_month(all_events, year, month) + sum(
+            (e.fee_cents or 0) for e in legacy
+        )
+
         refunds = (
             self.db.query(SubscriptionEvent)
             .filter(
@@ -43,13 +56,7 @@ class AdminDreService:
             .all()
         )
 
-        # Dedupe por cobrança (order_id) — a Kiwify manda >1 webhook pra mesma
-        # cobrança (order_approved + subscription_renewed), somar por evento dobra.
-        paid = _dedupe_by_charge(paid)
         refunds = _dedupe_by_charge(refunds)
-        gross = sum((e.amount_gross_cents or 0) for e in paid)
-        net = sum((e.amount_net_cents or 0) for e in paid)
-        fees = sum((e.fee_cents or 0) for e in paid)
         refund_gross = sum((e.amount_gross_cents or 0) for e in refunds)
         refund_net = sum((e.amount_net_cents or 0) for e in refunds)
         refund_fees = sum((e.fee_cents or 0) for e in refunds)

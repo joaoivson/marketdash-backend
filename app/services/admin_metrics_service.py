@@ -88,6 +88,101 @@ def _dedupe_by_charge(events: List[SubscriptionEvent]) -> List[SubscriptionEvent
     return result
 
 
+def _charge_as_cents(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    # float reais → cents; ints já em cents (ou strings numéricas grandes) passam direto
+    try:
+        f = float(value)
+        return int(round(f * 100)) if abs(f) < 10000 else int(round(f))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_charge_dt(ch: dict):
+    from app.services.subscription_event_recorder import _parse_dt
+
+    raw = ch.get("approved_date") or ch.get("created_at") or ch.get("date")
+    return _parse_dt(raw)
+
+
+def extract_paid_charges_union(events) -> list[dict]:
+    """Une charges.completed de vários webhooks; dedupe por order_id; só status paid."""
+    by_id: dict[str, dict] = {}
+    for ev in events:
+        for ch in (getattr(ev, "charges_completed", None) or []):
+            if not isinstance(ch, dict):
+                continue
+            if (ch.get("status") or "").lower() != "paid":
+                continue
+            oid = ch.get("order_id")
+            if not oid:
+                continue
+            commissions = ch.get("Commissions") or ch.get("commissions") or {}
+            net = _charge_as_cents(commissions.get("my_commission"))
+            gross = _charge_as_cents(commissions.get("charge_amount"))
+            by_id[str(oid)] = {
+                "order_id": str(oid),
+                "net_cents": net,
+                "gross_cents": gross,
+                "paid_at": _parse_charge_dt(ch),
+            }
+    return list(by_id.values())
+
+
+def total_paid_net_from_charges(events) -> int:
+    return sum(c["net_cents"] for c in extract_paid_charges_union(events))
+
+
+def revenue_from_charges_for_month(events, year: int, month: int) -> dict:
+    net = gross = 0
+    for c in extract_paid_charges_union(events):
+        dt = c.get("paid_at")
+        if not dt:
+            continue
+        d = dt.date() if hasattr(dt, "date") else dt
+        if d.year == year and d.month == month:
+            net += c["net_cents"]
+            gross += c["gross_cents"]
+    return {"net": net, "gross": gross}
+
+
+def _subscribers_with_charges_completed(events) -> set:
+    return {
+        _subscriber_key(ev)
+        for ev in events
+        if getattr(ev, "charges_completed", None)
+    }
+
+
+def _fees_from_charges_for_month(events, year: int, month: int) -> int:
+    fees = 0
+    for c in extract_paid_charges_union(events):
+        dt = c.get("paid_at")
+        if not dt:
+            continue
+        d = dt.date() if hasattr(dt, "date") else dt
+        if d.year == year and d.month == month:
+            fees += max((c["gross_cents"] or 0) - (c["net_cents"] or 0), 0)
+    return fees
+
+
+def _legacy_paid_in_month(events, year: int, month: int, skip_keys: set) -> List[SubscriptionEvent]:
+    """PAID_EVENTS por received_at — só assinantes sem charges_completed (legado)."""
+    start, end = _month_bounds(year, month)
+    paid = [
+        e
+        for e in events
+        if (e.event_type or "").lower() in PAID_EVENTS
+        and e.received_at is not None
+        and start <= e.received_at <= end
+        and _subscriber_key(e) not in skip_keys
+    ]
+    return _dedupe_by_charge(paid)
+
+
 # Pra campos de ESTADO da assinatura (next_payment, access_until, status) — não pra
 # valor pago. A Kiwify manda order_approved e subscription_renewed quase juntos pra
 # mesma renovação, mas order_approved às vezes carrega o next_payment ANTIGO (de
@@ -173,15 +268,13 @@ class AdminMetricsService:
 
     def revenue_for_month(self, year: int, month: int) -> Dict[str, int]:
         start, end = _month_bounds(year, month)
-        paid = (
-            self.db.query(SubscriptionEvent)
-            .filter(
-                SubscriptionEvent.event_type.in_(PAID_EVENTS),
-                SubscriptionEvent.received_at >= start,
-                SubscriptionEvent.received_at <= end,
-            )
-            .all()
-        )
+        all_events = self._all_events()
+        charges_rev = revenue_from_charges_for_month(all_events, year, month)
+        skip = _subscribers_with_charges_completed(all_events)
+        legacy = _legacy_paid_in_month(all_events, year, month, skip)
+        gross = charges_rev["gross"] + sum((e.amount_gross_cents or 0) for e in legacy)
+        net = charges_rev["net"] + sum((e.amount_net_cents or 0) for e in legacy)
+
         refunds = (
             self.db.query(SubscriptionEvent)
             .filter(
@@ -191,10 +284,7 @@ class AdminMetricsService:
             )
             .all()
         )
-        paid = _dedupe_by_charge(paid)
         refunds = _dedupe_by_charge(refunds)
-        gross = sum((e.amount_gross_cents or 0) for e in paid)
-        net = sum((e.amount_net_cents or 0) for e in paid)
         refund_gross = sum((e.amount_gross_cents or 0) for e in refunds)
         refund_net = sum((e.amount_net_cents or 0) for e in refunds)
         return {
@@ -542,23 +632,23 @@ class AdminMetricsService:
                 .first()
             )
 
-            paid_events_for_subscriber = (
-                self.db.query(SubscriptionEvent)
-                .filter(
-                    SubscriptionEvent.event_type.in_(PAID_EVENTS),
-                    (
-                        (SubscriptionEvent.subscription_id == ev.subscription_id)
-                        if ev.subscription_id
-                        else (SubscriptionEvent.customer_email == ev.customer_email)
-                    ),
+            sub_filter = (
+                (SubscriptionEvent.subscription_id == ev.subscription_id)
+                if ev.subscription_id
+                else (SubscriptionEvent.customer_email == ev.customer_email)
+            )
+            sub_events = self.db.query(SubscriptionEvent).filter(sub_filter).all()
+            # Preferir união de charges_completed (histórico completo da Kiwify).
+            # Fallback legado: soma PAID_EVENTS dedupe por order_id se nunca houve array.
+            if any(getattr(e, "charges_completed", None) for e in sub_events):
+                paid_total_net = total_paid_net_from_charges(sub_events)
+            else:
+                paid_events_for_subscriber = [
+                    e for e in sub_events if (e.event_type or "").lower() in PAID_EVENTS
+                ]
+                paid_total_net = sum(
+                    (e.amount_net_cents or 0) for e in _dedupe_by_charge(paid_events_for_subscriber)
                 )
-                .all()
-            )
-            # Dedupe por cobrança (order_id) — a Kiwify manda >1 webhook pra mesma
-            # cobrança (order_approved + subscription_renewed), somar por evento dobra.
-            paid_total_net = sum(
-                (e.amount_net_cents or 0) for e in _dedupe_by_charge(paid_events_for_subscriber)
-            )
 
             name = ev.customer_name or (user.name if user else None) or ""
             email = ev.customer_email or (user.email if user else "") or ""
