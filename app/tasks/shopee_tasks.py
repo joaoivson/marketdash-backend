@@ -85,18 +85,28 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
         # chance de sucesso e é o que sobrou enchendo o painel. Contas saudáveis (com
         # last_sync_at preenchido) mantêm o retry normal — falha ali é transitória de verdade.
         never_synced = False
-        if not is_permanent:
+        pause_reason = None
+        try:
+            # Após sync_user fazer rollback, garante sessão limpa antes de ler a integração.
             try:
-                from app.models.shopee_integration import ShopeeIntegration
-
-                integ = (
-                    db.query(ShopeeIntegration)
-                    .filter(ShopeeIntegration.user_id == user_id)
-                    .first()
-                )
-                never_synced = bool(integ and integ.last_sync_at is None)
+                db.rollback()
             except Exception:
-                never_synced = False
+                pass
+            from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
+
+            repo = ShopeeIntegrationRepository(db)
+            integ = repo.get_by_user_id(user_id)
+            never_synced = bool(integ and integ.last_sync_at is None)
+            if is_permanent:
+                pause_reason = f"permanent_error:{getattr(exc, 'code', None) or 'unknown'}"
+            elif never_synced:
+                pause_reason = "never_synced_chronic_failure"
+        except Exception as probe_exc:
+            logger.warning(
+                "sync_shopee_user_task user_id=%s: falha ao inspecionar integração (%s)",
+                user_id,
+                probe_exc,
+            )
 
         skip_retry = is_permanent or never_synced
         if is_permanent:
@@ -114,8 +124,12 @@ def sync_shopee_user_task(self, user_id: int, days_back: int = 88, empty_attempt
             logger.error("sync_shopee_user_task falhou user_id=%s: %s", user_id, exc)
         try:
             from app.models.sync_error_log import SyncErrorLog
+            from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
 
             db.add(SyncErrorLog(user_id=user_id, source="shopee", error_message=str(exc)[:2000]))
+            if pause_reason:
+                # Para o cron horário de reenfileirar esta conta até o usuário reconectar.
+                ShopeeIntegrationRepository(db).pause_sync(user_id, pause_reason)
             db.commit()
         except Exception:
             try:

@@ -13,6 +13,9 @@ class ShopeeIntegration(Base):
     encrypted_password = Column(Text, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     last_sync_at = Column(DateTime(timezone=True), nullable=True)
+    # Cron/fan-out pula quando preenchido. Limpa no upsert (usuário reconectou).
+    sync_paused_at = Column(DateTime(timezone=True), nullable=True)
+    sync_pause_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

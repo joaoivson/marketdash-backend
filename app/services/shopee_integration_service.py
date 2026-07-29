@@ -218,6 +218,15 @@ class ShopeeIntegrationService:
             # "cannot unpack non-iterable int object" e derruba o sync inteiro.
             return 0, False, {}
 
+        # AppID antigo salvo como e-mail/texto: a API só aceita numérico. Sem isso o cron
+        # batia na Shopee toda hora e gerava 10020 / System Error sem chance de sucesso.
+        if not (integration.app_id or "").isdigit():
+            raise shopee_graphql_client.ShopeePermanentError(
+                "AppID Shopee inválido (não numérico). "
+                "É preciso reconectar a conta Shopee com o AppID correto — retentar não resolve.",
+                code=10020,
+            )
+
         # Captura credenciais ANTES do commit do dataset (expire_on_commit=True expira o objeto
         # `integration`; usar `integration.app_id` no loop recarregaria do banco, reabrindo
         # transação durante as chamadas lentas da API).
@@ -743,8 +752,23 @@ async def run_shopee_sync_all(days_back: int = 7, trigger: str = "cron_increment
                 logger.error("Shopee sync inline falhou user_id=%s: %s", uid, exc)
                 try:
                     from app.models.sync_error_log import SyncErrorLog
+                    from app.services.shopee_graphql_client import ShopeePermanentError
 
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    repo = ShopeeIntegrationRepository(db)
+                    integ = repo.get_by_user_id(uid)
+                    never_synced = bool(integ and integ.last_sync_at is None)
+                    is_permanent = isinstance(exc, ShopeePermanentError)
                     db.add(SyncErrorLog(user_id=uid, source="shopee", error_message=str(exc)[:2000]))
+                    if is_permanent:
+                        repo.pause_sync(
+                            uid, f"permanent_error:{getattr(exc, 'code', None) or 'unknown'}"
+                        )
+                    elif never_synced:
+                        repo.pause_sync(uid, "never_synced_chronic_failure")
                     db.commit()
                 except Exception:
                     db.rollback()

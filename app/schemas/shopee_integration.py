@@ -40,6 +40,8 @@ class ShopeeIntegrationResponse(BaseModel):
     app_id: str
     is_active: bool
     last_sync_at: Optional[datetime]
+    sync_paused_at: Optional[datetime] = None
+    sync_pause_reason: Optional[str] = None
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
 
