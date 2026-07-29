@@ -14,6 +14,7 @@ from app.services.admin_metrics_service import (
     _dedupe_by_charge,
     _is_active_now,
     _latest_by_subscriber,
+    _normalize_plan_label,
     _paid_total_for_events,
     revenue_from_charges_for_month,
 )
@@ -37,6 +38,12 @@ def _ev(**kwargs):
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
+
+
+def test_normalize_plan_keeps_max_distinct():
+    assert _normalize_plan_label("Max", None) == "max"
+    assert _normalize_plan_label("Pro", None) == "pro"
+    assert _normalize_plan_label("MarketDash Max", "max") == "max"
 
 
 def test_dedupe_by_charge_collapses_same_order_id():

@@ -56,7 +56,9 @@ def _freq_divisor(frequency: Optional[str]) -> int:
 
 def _normalize_plan_label(name: Optional[str], plan_id: Optional[str] = None) -> str:
     blob = f"{name or ''} {plan_id or ''}".lower()
-    if "pro" in blob or "max" in blob:
+    if "max" in blob:
+        return "max"
+    if "pro" in blob:
         return "pro"
     if "essencial" in blob or "essential" in blob:
         return "essencial"
