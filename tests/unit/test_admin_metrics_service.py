@@ -335,7 +335,10 @@ def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
     monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
 
     series = svc.series_12m()
-    months = [p["month"] for p in series["revenue"]]
-    assert "2026-04" in months
-    assert "2026-07" in months
-    assert months == ["2026-04", "2026-05", "2026-06", "2026-07"]
+    rev_months = [p["month"] for p in series["revenue"]]
+    mrr_months = [p["month"] for p in series["mrr"]]
+    assert "2026-04" in rev_months
+    assert "2026-07" in rev_months
+    assert rev_months == ["2026-04", "2026-05", "2026-06", "2026-07"]
+    assert "2026-04" not in mrr_months
+    assert mrr_months == ["2026-07"]

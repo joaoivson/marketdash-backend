@@ -557,7 +557,8 @@ class AdminMetricsService:
         if not first:
             return {"mrr": [], "revenue": []}
 
-        start_y, start_m = first.year, first.month
+        mrr_y, mrr_m = first.year, first.month
+        rev_y, rev_m = first.year, first.month
 
         all_events = self.db.query(SubscriptionEvent).all()
         for c in extract_paid_charges_union(all_events):
@@ -565,11 +566,11 @@ class AdminMetricsService:
             if not dt:
                 continue
             d = dt.date() if hasattr(dt, "date") else dt
-            if (d.year, d.month) < (start_y, start_m):
-                start_y, start_m = d.year, d.month
+            if (d.year, d.month) < (rev_y, rev_m):
+                rev_y, rev_m = d.year, d.month
 
         mrr_series: List[Dict[str, Any]] = []
-        y, m = start_y, start_m
+        y, m = mrr_y, mrr_m
         while (y, m) <= (today.year, today.month):
             end_day = monthrange(y, m)[1]
             as_of = date(y, m, end_day)
@@ -587,7 +588,7 @@ class AdminMetricsService:
                 m, y = 1, y + 1
 
         rev_series: List[Dict[str, Any]] = []
-        y, m = start_y, start_m
+        y, m = rev_y, rev_m
         while (y, m) <= (today.year, today.month):
             rev = self.revenue_for_month(y, m)
             rev_series.append({
