@@ -7,8 +7,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
+
+# Painel admin é BR — dias do gráfico devem bater com o que o usuário vê em pt-BR.
+_APP_TZ = ZoneInfo("America/Sao_Paulo")
 
 from app.models.sync_run import SyncRun
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
@@ -124,14 +128,16 @@ class SyncMonitoringService:
         }
 
     def daily_call_counts(self, source: str, days: int = 30) -> List[Dict[str, Any]]:
-        """Chamadas (execuções) e erros por dia, últimos N dias — pra gráfico de barras."""
+        """Chamadas (execuções) e erros por dia civil em America/Sao_Paulo, últimos N dias."""
         since = datetime.now(timezone.utc) - timedelta(days=days)
         runs = self.run_repo.list_by_filters(source=source, since=since, limit=None)
         buckets: Dict[str, Dict[str, int]] = {}
         for r in runs:
-            if not r.started_at:
+            started = _as_utc(r.started_at)
+            if not started:
                 continue
-            day = r.started_at.date().isoformat()
+            # Antes: .date() em UTC — sync às 22h BRT caía no "dia seguinte" no gráfico.
+            day = started.astimezone(_APP_TZ).date().isoformat()
             b = buckets.setdefault(day, {"calls": 0, "errors": 0})
             b["calls"] += 1
             if r.status == "failed":
