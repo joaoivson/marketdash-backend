@@ -17,6 +17,7 @@ from app.models.user import User
 from app.models.user_login import UserLogin
 from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
+from app.core.plans import list_price_cents
 
 PAID_EVENTS = {
     "order_approved",
@@ -146,16 +147,34 @@ def extract_paid_charges_union(events) -> list[dict]:
                 or ch.get("my_commission")
                 or ch.get("amount")
             )
-            gross = _charge_as_cents(
-                commissions.get("charge_amount")
-                or ch.get("charge_amount")
-                or ch.get("amount")  # if only amount present, gross≈net
+            plan = _normalize_plan_label(getattr(ev, "plan_name", None), getattr(ev, "plan_id", None))
+            freq = getattr(ev, "plan_frequency", None) or "monthly"
+            table = list_price_cents(plan, freq)
+
+            raw_gross = _charge_as_cents(
+                commissions.get("charge_amount") or ch.get("charge_amount")
             )
+            raw_fee = _charge_as_cents(
+                commissions.get("kiwify_fee") or ch.get("kiwify_fee") or ch.get("fee")
+            )
+
+            if table is not None:
+                gross = table
+            elif raw_gross and raw_fee:
+                gross = raw_gross
+            else:
+                gross = net or raw_gross
+
+            fee = raw_fee if raw_fee else max(gross - net, 0)
+
             by_id[str(oid)] = {
                 "order_id": str(oid),
                 "net_cents": net,
                 "gross_cents": gross,
+                "fee_cents": fee,
                 "paid_at": _parse_charge_dt(ch),
+                "plan": plan,
+                "frequency": freq,
             }
     return list(by_id.values())
 
@@ -204,7 +223,9 @@ def _fees_from_charges_for_month(events, year: int, month: int) -> int:
             continue
         d = dt.date() if hasattr(dt, "date") else dt
         if d.year == year and d.month == month:
-            fees += max((c["gross_cents"] or 0) - (c["net_cents"] or 0), 0)
+            fees += c.get("fee_cents") if c.get("fee_cents") is not None else max(
+                (c["gross_cents"] or 0) - (c["net_cents"] or 0), 0
+            )
     return fees
 
 

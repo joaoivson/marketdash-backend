@@ -41,11 +41,19 @@ def test_union_reads_flat_amount_field():
         "created_at": "2026-04-28T09:10:48.195Z",
         "amount": 13570,
     }
-    events = [SimpleNamespace(charges_completed=[ch], subscription_id="s")]
+    events = [
+        SimpleNamespace(
+            charges_completed=[ch],
+            subscription_id="s",
+            plan_name="Pro",
+            plan_id="pro",
+            plan_frequency="trimestral",
+        )
+    ]
     assert total_paid_net_from_charges(events) == 13570
     rev = revenue_from_charges_for_month(events, 2026, 4)
     assert rev["net"] == 13570
-    assert rev["gross"] == 13570
+    assert rev["gross"] == 14700
 
 
 def test_skips_non_paid():
@@ -100,6 +108,49 @@ def test_union_fallback_raw_payload_when_charges_completed_none():
         )
     ]
     assert total_paid_net_from_charges(events) == 18150
+
+
+def test_historical_charge_uses_table_gross_not_net_as_gross():
+    """charges_completed só com amount líquido → bruto = tabela Pro Trimestral."""
+    ev = SimpleNamespace(
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="trimestral",
+        charges_completed=[{
+            "order_id": "apr1",
+            "status": "paid",
+            "approved_date": "2026-04-28T12:00:00Z",
+            "amount": 135.70,  # só líquido
+        }],
+        raw_payload=None,
+    )
+    charges = extract_paid_charges_union([ev])
+    assert len(charges) == 1
+    assert charges[0]["net_cents"] == 13570
+    assert charges[0]["gross_cents"] == 14700
+    assert charges[0]["fee_cents"] == 1130
+
+
+def test_installment_surcharge_does_not_inflate_gross():
+    ev = SimpleNamespace(
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="trimestral",
+        charges_completed=[{
+            "order_id": "x",
+            "status": "paid",
+            "approved_date": "2026-07-01T00:00:00Z",
+            "Commissions": {
+                "my_commission": 13570,
+                "charge_amount": 15738,  # parcelamento
+                "kiwify_fee": 1130,
+            },
+        }],
+        raw_payload=None,
+    )
+    c = extract_paid_charges_union([ev])[0]
+    assert c["gross_cents"] == 14700
+    assert c["fee_cents"] == 1130
 
 
 def test_paid_total_falls_back_when_only_non_paid_charges():

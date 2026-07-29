@@ -107,6 +107,9 @@ def test_dre_revenue_uses_charges_completed_by_charge_date():
         _ev(
             event_type="order_approved",
             order_id="bruna1",
+            plan_name="Pro",
+            plan_id="pro",
+            plan_frequency="trimestral",
             amount_gross_cents=14700,
             amount_net_cents=13570,
             fee_cents=1130,
@@ -126,3 +129,34 @@ def test_dre_revenue_uses_charges_completed_by_charge_date():
     jul = AdminDreService(db).month_statement(2026, 7)
     assert jul["revenue_net_cents"] == 0
     assert jul["gross_cents"] == 0
+
+
+def test_dre_april_bruna_table_gross():
+    """DRE abril: Pro trimestral com só amount líquido → bruta 14700, taxa 1130, líquida 13570."""
+    charge = {
+        "order_id": "apr1",
+        "status": "paid",
+        "approved_date": "2026-04-28T12:00:00Z",
+        "amount": 135.70,
+    }
+    events = [
+        _ev(
+            event_type="order_approved",
+            order_id="apr1",
+            plan_name="Pro",
+            plan_id="pro",
+            plan_frequency="trimestral",
+            amount_gross_cents=14700,
+            amount_net_cents=13570,
+            fee_cents=1130,
+            received_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            charges_completed=[charge],
+            id=1,
+        )
+    ]
+    db = _mock_db(events, [], [])
+
+    apr = AdminDreService(db).month_statement(2026, 4)
+    assert apr["gross_cents"] == 14700
+    assert apr["fees_cents"] == 1130
+    assert apr["revenue_net_cents"] == 13570

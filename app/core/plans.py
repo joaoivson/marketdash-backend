@@ -57,6 +57,35 @@ FEATURES: Dict[str, Dict[str, Any]] = {
 PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links"})
 
 # Checkout Kiwify por (plano, periodo) — product_id preenchido via tabela/env.
+PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {
+    ("essencial", "mensal"): 4700,
+    ("essencial", "trimestral"): 11700,
+    ("essencial", "anual"): 32700,
+    ("pro", "mensal"): 6700,
+    ("pro", "trimestral"): 14700,
+    ("pro", "anual"): 44700,
+}
+
+
+def _norm_freq(frequency: Optional[str]) -> str:
+    f = (frequency or "monthly").lower()
+    if f in ("quarterly", "trimestral"):
+        return "trimestral"
+    if f in ("yearly", "annual", "anual", "year"):
+        return "anual"
+    return "mensal"
+
+
+def list_price_cents(plan: str, frequency: str) -> Optional[int]:
+    p = (plan or "").strip().lower()
+    if p not in ("essencial", "pro"):
+        if p == "max":
+            p = "pro"
+        else:
+            p = "essencial" if "essenc" in p else ("pro" if "pro" in p else p)
+    return PLAN_LIST_PRICE_CENTS.get((p, _norm_freq(frequency)))
+
+
 CHECKOUT_LINKS: Dict[tuple[str, str], Dict[str, str]] = {
     ("essencial", "mensal"): {
         "price": "47",
