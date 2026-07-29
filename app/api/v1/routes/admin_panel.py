@@ -23,6 +23,7 @@ from app.models.user import User
 from app.models.user_login import UserLogin
 from app.services.admin_dre_service import AdminDreService
 from app.services.admin_metrics_service import AdminMetricsService
+from app.services.daily_access_service import record_daily_access
 from app.services.sync_monitoring_service import SyncMonitoringService
 
 router = APIRouter(prefix="/admin", tags=["admin-panel"])
@@ -440,4 +441,14 @@ def record_page_view(
     """Beacon de page view — qualquer usuário autenticado (ranking de telas)."""
     db.add(PageView(user_id=user.id, path=payload.path[:500]))
     db.commit()
+    return None
+
+
+@router.post("/access", status_code=status.HTTP_204_NO_CONTENT)
+def record_daily_access_route(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Beacon de último acesso — no máximo 1 registro por usuário por dia (BRT)."""
+    record_daily_access(db, user.id)
     return None
