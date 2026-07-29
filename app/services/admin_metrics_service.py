@@ -558,16 +558,24 @@ class AdminMetricsService:
             return {"mrr": [], "revenue": []}
 
         start_y, start_m = first.year, first.month
-        # Último mês completo = mês anterior a today (exclui parcial do corrente).
-        mrr_end_y, mrr_end_m = today.year, today.month - 1
-        if mrr_end_m <= 0:
-            mrr_end_m, mrr_end_y = 12, mrr_end_y - 1
+
+        all_events = self.db.query(SubscriptionEvent).all()
+        for c in extract_paid_charges_union(all_events):
+            dt = c.get("paid_at")
+            if not dt:
+                continue
+            d = dt.date() if hasattr(dt, "date") else dt
+            if (d.year, d.month) < (start_y, start_m):
+                start_y, start_m = d.year, d.month
 
         mrr_series: List[Dict[str, Any]] = []
         y, m = start_y, start_m
-        while (y, m) <= (mrr_end_y, mrr_end_m):
+        while (y, m) <= (today.year, today.month):
             end_day = monthrange(y, m)[1]
-            actives = self.active_subscribers(as_of=date(y, m, end_day))
+            as_of = date(y, m, end_day)
+            if (y, m) == (today.year, today.month):
+                as_of = today
+            actives = self.active_subscribers(as_of=as_of)
             mrr = self.mrr_cents(actives)
             mrr_series.append({
                 "month": f"{y:04d}-{m:02d}",
@@ -576,10 +584,8 @@ class AdminMetricsService:
             })
             m += 1
             if m > 12:
-                m = 1
-                y += 1
+                m, y = 1, y + 1
 
-        # Revenue: desde o primeiro evento até o mês corrente (inclui parcial).
         rev_series: List[Dict[str, Any]] = []
         y, m = start_y, start_m
         while (y, m) <= (today.year, today.month):
@@ -591,8 +597,7 @@ class AdminMetricsService:
             })
             m += 1
             if m > 12:
-                m = 1
-                y += 1
+                m, y = 1, y + 1
 
         return {"mrr": mrr_series, "revenue": rev_series}
 

@@ -221,7 +221,7 @@ def test_subscription_late_not_in_revenue():
 
 
 def test_mrr_series_starts_at_first_event_month(monkeypatch):
-    """MRR começa no mês do primeiro received_at e omite o mês corrente parcial."""
+    """MRR começa no mês do primeiro received_at e inclui o mês corrente."""
     fixed_now = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
 
     class _FixedDateTime(datetime):
@@ -234,7 +234,9 @@ def test_mrr_series_starts_at_first_event_month(monkeypatch):
     db = MagicMock()
     min_q = MagicMock()
     min_q.scalar.return_value = datetime(2026, 7, 20, tzinfo=timezone.utc)
-    db.query.return_value = min_q
+    all_q = MagicMock()
+    all_q.all.return_value = []
+    db.query.side_effect = [min_q, all_q]
 
     svc = AdminMetricsService(db)
     monkeypatch.setattr(
@@ -247,10 +249,9 @@ def test_mrr_series_starts_at_first_event_month(monkeypatch):
     mrr_months = [p["month"] for p in series["mrr"]]
     rev_months = [p["month"] for p in series["revenue"]]
 
-    assert mrr_months == ["2026-07", "2026-08"]
+    assert mrr_months == ["2026-07", "2026-08", "2026-09"]
     assert all(m >= "2026-07" for m in mrr_months)
     assert "2026-06" not in mrr_months
-    assert "2026-09" not in mrr_months  # mês corrente incompleto
     assert rev_months == ["2026-07", "2026-08", "2026-09"]
 
 
@@ -264,8 +265,8 @@ def test_mrr_series_empty_when_no_events(monkeypatch):
     assert series == {"mrr": [], "revenue": []}
 
 
-def test_mrr_series_empty_when_only_incomplete_current_month(monkeypatch):
-    """Primeiro evento no mês corrente → sem mês completo → MRR vazio."""
+def test_mrr_series_includes_current_month_when_first_event_is_now(monkeypatch):
+    """Primeiro evento no mês corrente → MRR inclui ponto parcial de julho."""
     fixed_now = datetime(2026, 7, 28, 12, 0, 0, tzinfo=timezone.utc)
 
     class _FixedDateTime(datetime):
@@ -278,7 +279,9 @@ def test_mrr_series_empty_when_only_incomplete_current_month(monkeypatch):
     db = MagicMock()
     min_q = MagicMock()
     min_q.scalar.return_value = datetime(2026, 7, 20, tzinfo=timezone.utc)
-    db.query.return_value = min_q
+    all_q = MagicMock()
+    all_q.all.return_value = []
+    db.query.side_effect = [min_q, all_q]
 
     svc = AdminMetricsService(db)
     monkeypatch.setattr(
@@ -288,5 +291,51 @@ def test_mrr_series_empty_when_only_incomplete_current_month(monkeypatch):
     monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
 
     series = svc.series_12m()
-    assert series["mrr"] == []
+    assert series["mrr"][0]["month"] == "2026-07"
+    assert series["mrr"][0]["net"] > 0
+    assert len(series["mrr"]) == 1
     assert [p["month"] for p in series["revenue"]] == ["2026-07"]
+
+
+def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
+    """Backfill com paid_at anterior ao primeiro received_at estende a série."""
+    fixed_now = datetime(2026, 7, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    monkeypatch.setattr("app.services.admin_metrics_service.datetime", _FixedDateTime)
+
+    ev = _ev(
+        received_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        charges_completed=[
+            {
+                "order_id": "backfill-1",
+                "status": "paid",
+                "approved_date": "2026-04-28T12:00:00Z",
+                "Commissions": {"my_commission": 10000, "charge_amount": 11000},
+            }
+        ],
+    )
+
+    db = MagicMock()
+    min_q = MagicMock()
+    min_q.scalar.return_value = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    all_q = MagicMock()
+    all_q.all.return_value = [ev]
+    db.query.side_effect = [min_q, all_q]
+
+    svc = AdminMetricsService(db)
+    monkeypatch.setattr(
+        svc, "revenue_for_month", lambda y, m: {"net": 100, "gross": 110, "refund_net": 0}
+    )
+    monkeypatch.setattr(svc, "active_subscribers", lambda as_of=None: [])
+    monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
+
+    series = svc.series_12m()
+    months = [p["month"] for p in series["revenue"]]
+    assert "2026-04" in months
+    assert "2026-07" in months
+    assert months == ["2026-04", "2026-05", "2026-06", "2026-07"]
