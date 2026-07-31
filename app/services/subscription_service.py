@@ -7,6 +7,56 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Sentinela: distingue "caller não informou janela de acesso" de "informou None"
+UNSET = object()
+
+# Status que representam assinatura cancelada (nossos + dos providers)
+CANCELED_STATUSES = {"cancelada", "cancelado", "canceled", "cancelled"}
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def subscription_is_canceled(subscription) -> bool:
+    """True se o provider já marcou a assinatura como cancelada/reembolsada."""
+    if subscription is None:
+        return False
+    statuses = {
+        (subscription.assinatura_status or "").strip().lower(),
+        (subscription.provider_subscription_status or "").strip().lower(),
+        (subscription.provider_status or "").strip().lower(),
+    }
+    return bool(statuses & CANCELED_STATUSES)
+
+
+def subscription_has_access(subscription) -> bool:
+    """
+    Acesso efetivo do usuário.
+
+    Assinatura cancelada continua com acesso até o fim do período já pago
+    (Kiwify manda `customer_access.access_until`). Depois dessa data o acesso
+    cai sozinho, sem depender de webhook novo — o cancelamento é o último
+    evento que a Kiwify envia.
+    """
+    if subscription is None or not subscription.is_active:
+        return False
+
+    if not subscription_is_canceled(subscription):
+        return True
+
+    access_until = _as_utc(
+        subscription.assinatura_vence_em
+        or subscription.expires_at
+        or subscription.provider_due_date
+        or subscription.cakto_due_date
+    )
+    if access_until is None:
+        return True  # cancelada sem data conhecida — respeita o is_active do webhook
+    return access_until >= datetime.now(timezone.utc)
+
 
 class SubscriptionService:
     def __init__(self, repo: SubscriptionRepository):
@@ -41,6 +91,10 @@ class SubscriptionService:
         plano_periodo: Optional[str] = None,
         assinatura_status: Optional[str] = None,
         assinatura_vence_em: Optional[datetime] = None,
+        # Janela de acesso pós-cancelamento decidida pelo caller (webhook).
+        # datetime → mantém acesso até lá; None → corta acesso agora;
+        # não informado → regra legada (cakto_due_date).
+        keep_access_until: Any = UNSET,
     ):
         """Atualiza ou cria subscription com dados do provider (Cakto/Kiwify)."""
         # Guard anti-cancelamento-de-assinatura-antiga: webhooks chegam FORA DE ORDEM
@@ -113,11 +167,17 @@ class SubscriptionService:
 
         now_utc = datetime.now(timezone.utc)
         is_active_value = is_active  # Webhook é a fonte de verdade
-        
-        # Se NÃO foi pedida ativação explícita, a due_date decide o status
-        # Quando is_active=True (ex: webhook de renovação), respeitar a decisão do caller
-        if not is_active and normalized_due_date is not None:
-            is_active_value = normalized_due_date >= now_utc
+
+        # Se NÃO foi pedida ativação explícita, a janela de acesso decide o status.
+        # Quando is_active=True (ex: webhook de renovação), respeitar a decisão do caller.
+        if not is_active:
+            if keep_access_until is not UNSET:
+                # Caller informou explicitamente a janela (cancelamento com acesso
+                # até o fim do período pago vs. reembolso/chargeback, que corta na hora)
+                grace_until = _as_utc(keep_access_until)
+                is_active_value = bool(grace_until and grace_until >= now_utc)
+            elif normalized_due_date is not None:
+                is_active_value = normalized_due_date >= now_utc
 
         vence = assinatura_vence_em or normalized_due_date or expires_at
         status_assinatura = assinatura_status
@@ -187,10 +247,13 @@ class SubscriptionService:
             if due_date and due_date.tzinfo is None:
                 due_date = due_date.replace(tzinfo=timezone.utc)
 
-            if due_date and due_date >= now_utc:
-                subscription.is_active = True
+            within_paid_period = bool(due_date and due_date >= now_utc)
+            if subscription_is_canceled(subscription):
+                # Cancelada: só mantém acesso até o fim do período já pago, e nunca
+                # ressuscita quem já teve o acesso cortado (reembolso/chargeback).
+                subscription.is_active = bool(subscription.is_active and within_paid_period)
             else:
-                subscription.is_active = False
+                subscription.is_active = within_paid_period
             subscription.last_validation_at = now_utc
 
             offer_name = subscription.provider_offer_name or subscription.cakto_offer_name
@@ -208,8 +271,14 @@ class SubscriptionService:
             self.repo.db.commit()
             self.repo.db.refresh(subscription)
 
-            logger.info(f"Subscription validated for user {user_id}: active={has_access}")
-            return has_access
+            # Retorna o acesso efetivo (o mesmo que os demais gates leem do banco),
+            # não o veredito cru do provider — senão cancelado-com-acesso tomaria 403.
+            effective_access = subscription_has_access(subscription)
+            logger.info(
+                "Subscription validated for user %s: provider=%s effective=%s",
+                user_id, has_access, effective_access,
+            )
+            return effective_access
 
         except PaymentProviderError as e:
             logger.error(f"Error validating subscription for user {user_id}: {str(e)}")
@@ -236,10 +305,11 @@ class SubscriptionService:
         
         needs_validation = self.needs_validation(user_id)
         plan = normalize_plan(subscription.plan)
-        
+        has_access = subscription_has_access(subscription)
+
         return {
             "has_subscription": True,
-            "is_active": subscription.is_active,
+            "is_active": has_access,
             "plan": plan,
             "plano": plan,
             "plano_periodo": subscription.plano_periodo,
@@ -294,12 +364,14 @@ class SubscriptionService:
         if not subscription.is_active:
             logger.info(f"Assinatura do usuário {user_id} já estava inativa")
             return False
-        
-        # Desativar assinatura — rebaixa para essencial (links continuam redirecionando)
-        subscription.is_active = False
+
+        # Cancelar NÃO corta o acesso na hora: vale até o fim do período já pago
+        # (mesma regra do webhook de cancelamento). subscription_has_access corta
+        # sozinho quando a data passar.
         subscription.plan = "essencial"
         subscription.assinatura_status = "cancelada"
-        
+        subscription.is_active = subscription_has_access(subscription)
+
         # Fazer commit
         self.repo.db.commit()
         self.repo.db.refresh(subscription)

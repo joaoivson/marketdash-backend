@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.repositories.subscription_repository import SubscriptionRepository
-from app.services.subscription_service import SubscriptionService
+from app.services.subscription_service import SubscriptionService, UNSET
 from app.services.webhook_helpers import (
     find_or_create_user,
     calculate_expires_at,
@@ -56,6 +56,14 @@ DEACTIVATE_EVENTS: Set[str] = {
 
 LATE_EVENTS: Set[str] = {
     "subscription_late",
+}
+
+# Cortam o acesso na hora — não existe "período já pago" a honrar
+REVOKE_NOW_EVENTS: Set[str] = {
+    "order_refunded",
+    "order_chargedback",
+    "chargeback",
+    "compra_reembolsada",
 }
 
 LOG_ONLY_EVENTS: Set[str] = {
@@ -182,6 +190,56 @@ def _extract_customer_data(order: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _extract_customer_access(order: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extrai `Subscription.customer_access` — a fonte de verdade da Kiwify sobre acesso.
+
+    No cancelamento a Kiwify manda `has_access: true` + `access_until` no fim do
+    período já pago. Sem isso, o cancelamento cortava o acesso na hora.
+    """
+    subscription = order.get("Subscription") or order.get("subscription") or {}
+    if not isinstance(subscription, dict):
+        subscription = {}
+    access = subscription.get("customer_access") or {}
+    if not isinstance(access, dict):
+        access = {}
+
+    has_access = access.get("has_access")
+    if has_access is not None:
+        has_access = bool(has_access)
+
+    raw_until = access.get("access_until") or subscription.get("access_until")
+    access_until = None
+    if raw_until:
+        try:
+            access_until = datetime.fromisoformat(str(raw_until).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            logger.warning("Kiwify access_until não parseável: %r", raw_until)
+
+    if access_until is not None and access_until.tzinfo is None:
+        access_until = access_until.replace(tzinfo=timezone.utc)
+
+    return {"has_access": has_access, "access_until": access_until}
+
+
+def _resolve_keep_access_until(
+    event: str,
+    access: Dict[str, Any],
+    fallback_due_date: Optional[datetime],
+) -> Optional[datetime]:
+    """
+    Até quando o acesso continua valendo num evento de desativação.
+
+    None = corta agora. Reembolso/chargeback sempre corta; cancelamento honra
+    o período já pago (`access_until`, ou o `next_payment` como fallback).
+    """
+    if event in REVOKE_NOW_EVENTS:
+        return None
+    if access.get("has_access") is False:
+        return None
+    return access.get("access_until") or fallback_due_date
+
+
 def _extract_transaction_data(order: Dict[str, Any]) -> Dict[str, Any]:
     """Extrai dados da transação do order Kiwify."""
     subscription = order.get("Subscription") or order.get("subscription") or {}
@@ -255,6 +313,31 @@ def _product_allowed(product_id: Optional[str]) -> bool:
     return product_id in allowed
 
 
+def _link_event_to_user(db: Session, event_id: Optional[int], user_id: int) -> None:
+    """
+    Amarra o evento recém-gravado ao usuário.
+
+    O histórico é gravado ANTES de criar/achar o usuário (pra não perder webhook se
+    a criação falhar), então na primeira compra o evento nasce com user_id NULL —
+    e tudo que agrupa por user_id perdia esse cliente. Aqui fechamos a ponta.
+    """
+    if not event_id:
+        return
+    try:
+        from app.models.subscription_event import SubscriptionEvent
+
+        row = db.query(SubscriptionEvent).filter(SubscriptionEvent.id == event_id).first()
+        if row is not None and row.user_id is None:
+            row.user_id = user_id
+            db.commit()
+    except Exception as link_err:  # noqa: BLE001
+        logger.error("Falha ao vincular subscription_event %s ao user %s: %s", event_id, user_id, link_err)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 def _send_email_background(
     user_id: int,
     user_email: str,
@@ -321,11 +404,18 @@ async def kiwify_webhook(
 
         # Histórico append-only — SEMPRE grava (mesmo evento desconhecido / sem e-mail).
         # Não altera regras de activate/deactivate abaixo.
+        recorded_event_id: Optional[int] = None
         try:
             from app.services.subscription_event_recorder import record_subscription_event
 
-            record_subscription_event(db, raw_payload if isinstance(raw_payload, dict) else {"order": order}, event or "unknown")
+            recorded = record_subscription_event(
+                db,
+                raw_payload if isinstance(raw_payload, dict) else {"order": order},
+                event or "unknown",
+            )
             db.commit()
+            if recorded is not None:
+                recorded_event_id = recorded.id
         except Exception as hist_err:  # noqa: BLE001
             logger.error("Falha ao gravar subscription_event (seguindo webhook): %s", hist_err)
             try:
@@ -380,6 +470,7 @@ async def kiwify_webhook(
             user, user_created, user_has_password = find_or_create_user(email, customer_data, db)
             if user_created:
                 logger.info(f"Usuário {email} criado via webhook Kiwify com ID {user.id}")
+            _link_event_to_user(db, recorded_event_id, user.id)
         except Exception as reg_err:
             logger.error(f"Erro ao registrar usuário via webhook Kiwify: {str(reg_err)}")
             logger.error(traceback.format_exc())
@@ -390,11 +481,26 @@ async def kiwify_webhook(
 
         # Calcular expiração
         expires_at = transaction_data.get("due_date")
+        customer_access = _extract_customer_access(order)
+        keep_access_until: Optional[datetime] = None
+
         if action == "activate":
             expires_at = calculate_expires_at(
                 expires_at,
                 transaction_data.get("recurrence_period"),
                 transaction_data.get("paid_at"),
+            )
+        elif action == "deactivate":
+            # Cancelamento não corta acesso na hora: vale até o fim do período pago
+            keep_access_until = _resolve_keep_access_until(event, customer_access, expires_at)
+            if keep_access_until is not None:
+                expires_at = keep_access_until
+            logger.info(
+                "Kiwify deactivate user=%s evento=%s has_access=%s acesso_ate=%s",
+                email,
+                event,
+                customer_access.get("has_access"),
+                keep_access_until.isoformat() if keep_access_until else None,
             )
 
         subscription_service = SubscriptionService(SubscriptionRepository(db))
@@ -446,12 +552,16 @@ async def kiwify_webhook(
                 provider_payment_status=transaction_data.get("payment_status"),
                 provider_payment_method=transaction_data.get("payment_method"),
                 provider_order_id=transaction_data.get("transaction_id"),
+                keep_access_until=keep_access_until if action == "deactivate" else UNSET,
             )
 
+            # O webhook é a validação mais recente que temos do provider — vale para
+            # qualquer ação, senão o usuário cai na revalidação síncrona a cada request.
+            subscription.last_validation_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(subscription)
+
             if action == "activate":
-                subscription.last_validation_at = datetime.now(timezone.utc)
-                db.commit()
-                db.refresh(subscription)
                 db.refresh(user)
 
                 background_tasks.add_task(
@@ -473,6 +583,7 @@ async def kiwify_webhook(
                 "plan": subscription.plan,
                 "plano_periodo": subscription.plano_periodo,
                 "subscription_active": subscription.is_active,
+                "acesso_ate": keep_access_until.isoformat() if keep_access_until else None,
                 "next_payment_date": (
                     subscription.provider_due_date.isoformat()
                     if subscription.provider_due_date

@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
 from app.repositories.subscription_repository import SubscriptionRepository
-from app.services.subscription_service import SubscriptionService
+from app.services.subscription_service import SubscriptionService, subscription_has_access
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -180,9 +180,9 @@ def require_active_subscription(
                 detail="Assinatura não está ativa. Por favor, renove sua assinatura.",
             )
     else:
-        # Usar cache (verificar is_active no banco)
+        # Usar cache (verificar acesso efetivo no banco)
         subscription = subscription_service.repo.get_by_user_id(current_user.id)
-        if not subscription or not subscription.is_active:
+        if not subscription_has_access(subscription):
             logger.warning(f"Usuário {current_user.id} não tem assinatura ativa (cache)")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -243,11 +243,12 @@ def get_user_plan_context(
     )
 
     sub = SubscriptionRepository(db).get_by_user_id(current_user.id)
+    has_access = subscription_has_access(sub)
     plan = normalize_plan(sub.plan if sub else None)
     periodo = (sub.plano_periodo if sub and sub.plano_periodo else None) or "mensal"
     status_assinatura = (
         (sub.assinatura_status if sub and sub.assinatura_status else None)
-        or ("ativa" if sub and sub.is_active else "cancelada")
+        or ("ativa" if has_access else "cancelada")
     )
     cfg = FEATURES[plan]
     vence = None
@@ -259,7 +260,7 @@ def get_user_plan_context(
         "periodo": periodo,
         "assinatura_status": status_assinatura,
         "assinatura_vence_em": vence.isoformat() if vence else None,
-        "is_active": bool(sub and sub.is_active),
+        "is_active": has_access,
         "is_demo": bool(getattr(current_user, "is_demo", False)),
         "menus": sorted(cfg["menus"]),
         "pro_only_menus": sorted(PRO_ONLY_MENUS),
