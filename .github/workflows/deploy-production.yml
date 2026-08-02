@@ -54,16 +54,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Trigger Coolify deployment
+      - name: Trigger Coolify deployment (API)
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
-          curl -X POST "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_PROD }}" \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            || echo "Deployment triggered"
+          chmod +x .github/scripts/trigger-deploy.sh
+          .github/scripts/trigger-deploy.sh api "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_PROD }}"
+
+      # O worker roda as tasks Celery (sync Shopee/Facebook, processamento de CSV)
+      # a partir de um Dockerfile.worker próprio — é OUTRO recurso no Coolify.
+      # Sem este passo ele fica com o código de quando foi subido à mão, enquanto
+      # o CI reporta deploy verde. Foi o que aconteceu entre 29/07 e 02/08/2026.
+      - name: Trigger Coolify deployment (Celery worker)
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          .github/scripts/trigger-deploy.sh worker "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_PROD }}"
 
       - name: Deployment status
         run: |
-          echo "✅ Deployment triggered for production (main branch)"
+          echo "✅ API + worker atualizados em produção (branch main)"
           echo "Repository: ${{ github.repository }}"
           echo "Commit: ${{ github.sha }}"
           echo "Branch: ${{ github.ref }}"

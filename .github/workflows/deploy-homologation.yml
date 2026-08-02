@@ -54,16 +54,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Trigger Coolify deployment
+      - name: Trigger Coolify deployment (API)
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
-          curl -X POST "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_HML }}" \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            || echo "Deployment triggered"
+          chmod +x .github/scripts/trigger-deploy.sh
+          .github/scripts/trigger-deploy.sh api "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_HML }}"
+
+      # Ver comentário no deploy-production.yml: o worker Celery é um recurso
+      # separado no Coolify e precisa do próprio disparo.
+      - name: Trigger Coolify deployment (Celery worker)
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          .github/scripts/trigger-deploy.sh worker "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_HML }}"
 
       - name: Deployment status
         run: |
-          echo "✅ Deployment triggered for homologation (develop branch)"
+          echo "✅ API + worker atualizados em homologação (branch develop)"
           echo "Repository: ${{ github.repository }}"
           echo "Commit: ${{ github.sha }}"
           echo "Branch: ${{ github.ref }}"
