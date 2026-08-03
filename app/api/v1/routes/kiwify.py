@@ -136,27 +136,59 @@ def _map_event_to_action(event: str, order: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _lookup_plan_product(db: Session, product_id: Optional[str]):
-    """Busca mapeamento product_id → (plano, periodo). None se desconhecido."""
-    if not product_id:
+def _plan_lookup_keys(order: Dict[str, Any]) -> list:
+    """
+    Chaves candidatas para identificar o plano, da mais específica pra menos.
+
+    `Product.product_id` NÃO serve sozinho: na Kiwify existe um único produto
+    ("MarketDash") e todos os planos compartilham o mesmo UUID. Quem distingue
+    Essencial/Pro e mensal/trimestral/anual é o slug do checkout — que vem em
+    `checkout_link` e é exatamente como kiwify_plan_products está chaveada.
+    """
+    product = order.get("Product") or order.get("product") or {}
+    if not isinstance(product, dict):
+        product = {}
+    subscription = order.get("Subscription") or order.get("subscription") or {}
+    if not isinstance(subscription, dict):
+        subscription = {}
+    plan = subscription.get("plan") if isinstance(subscription.get("plan"), dict) else {}
+
+    brutos = [
+        order.get("checkout_link"),
+        plan.get("id"),
+        product.get("product_id") or product.get("id"),
+        order.get("product_id"),
+    ]
+
+    chaves = []
+    for bruto in brutos:
+        if not bruto:
+            continue
+        texto = str(bruto).strip()
+        if not texto:
+            continue
+        # Pode vir como URL completa do checkout
+        slug = texto.rstrip("/").split("/")[-1]
+        for candidato in (texto, slug):
+            if candidato and candidato not in chaves:
+                chaves.append(candidato)
+    return chaves
+
+
+def _lookup_plan_product(db: Session, keys: list):
+    """Busca mapeamento (plano, periodo) testando as chaves candidatas em ordem."""
+    if not keys:
         return None
     from app.models.kiwify_plan_product import KiwifyPlanProduct
 
-    row = (
-        db.query(KiwifyPlanProduct)
-        .filter(KiwifyPlanProduct.product_id == str(product_id))
-        .first()
-    )
-    if row:
-        return row
-    # Checkout slug pode vir no final da URL
-    slug = str(product_id).rstrip("/").split("/")[-1]
-    if slug != product_id:
-        return (
+    for key in keys:
+        row = (
             db.query(KiwifyPlanProduct)
-            .filter(KiwifyPlanProduct.product_id == slug)
+            .filter(KiwifyPlanProduct.product_id == key)
             .first()
         )
+        if row:
+            return row
     return None
 
 
@@ -443,27 +475,34 @@ async def kiwify_webhook(
                 detail="Erro na extração de dados",
             )
 
-        # Verificar filtro legado de produto (env) — se vazio, aceita todos
+        # Verificar filtro legado de produto (env) — se vazio, aceita todos.
+        # Testa todas as chaves: o env pode ter sido preenchido com slug de
+        # checkout ou com o UUID do produto.
         product_id = transaction_data.get("product_id")
-        if not _product_allowed(product_id):
-            logger.warning(f"Produto Kiwify não autorizado (env filter): {product_id}")
+        plan_keys = _plan_lookup_keys(order)
+        if not any(_product_allowed(k) for k in (plan_keys or [product_id])):
+            logger.warning(
+                "Produto Kiwify não autorizado (env filter). Chaves: %s", plan_keys
+            )
             return {"status": "ignored", "reason": "product_not_allowed", "product_id": product_id}
 
-        # Mapeamento product_id → (plano, periodo)
-        plan_product = _lookup_plan_product(db, product_id)
-        if action == "activate" and not plan_product:
+        # Mapeamento → (plano, periodo)
+        plan_product = _lookup_plan_product(db, plan_keys)
+        plano_indefinido = action == "activate" and not plan_product
+        if plano_indefinido:
+            # NUNCA descartar uma compra paga por causa disso. Antes o webhook
+            # retornava aqui, ANTES de criar o usuário — o cliente pagava, o evento
+            # ficava gravado (painel admin mostrava a ativação) e ele nunca recebia
+            # o e-mail de acesso. Agora seguimos: cria o usuário, manda o e-mail e
+            # libera no menor plano; o alerta abaixo diz o que cadastrar pra acertar
+            # o tier.
             logger.error(
-                "ALERTA: product_id Kiwify não mapeado (%s). "
-                "Mantendo plano atual do usuário %s. Adicione em kiwify_plan_products.",
-                product_id,
+                "ALERTA: plano Kiwify não mapeado para %s. Chaves tentadas: %s. "
+                "Liberando acesso no plano mínimo — cadastre em kiwify_plan_products "
+                "e reenvie o webhook para corrigir o tier.",
                 email,
+                plan_keys,
             )
-            return {
-                "status": "ignored",
-                "reason": "product_not_mapped",
-                "product_id": product_id,
-                "note": "plano atual preservado",
-            }
 
         # Buscar ou criar usuário
         try:
@@ -520,9 +559,17 @@ async def kiwify_webhook(
                     "assinatura_status": "inadimplente",
                 }
 
-            if action == "activate":
+            if action == "activate" and plan_product:
                 plan_id = plan_product.plano
                 periodo = plan_product.periodo
+            elif action == "activate":
+                # Plano não mapeado: preserva o que o usuário já tinha; se for
+                # cliente novo, entra no mínimo. Melhor tier errado que sem acesso.
+                current = subscription_service.repo.get_by_user_id(user.id)
+                plan_id = (current.plan if current and current.plan else None) or "essencial"
+                periodo = (current.plano_periodo if current else None) or (
+                    transaction_data.get("plan_frequency") or None
+                )
             else:
                 plan_id = "essencial"
                 periodo = None
@@ -583,6 +630,7 @@ async def kiwify_webhook(
                 "plan": subscription.plan,
                 "plano_periodo": subscription.plano_periodo,
                 "subscription_active": subscription.is_active,
+                "plano_mapeado": not plano_indefinido,
                 "acesso_ate": keep_access_until.isoformat() if keep_access_until else None,
                 "next_payment_date": (
                     subscription.provider_due_date.isoformat()
