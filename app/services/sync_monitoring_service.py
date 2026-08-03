@@ -5,6 +5,7 @@ preocupação operacional diferente.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -20,6 +21,43 @@ from app.repositories.shopee_integration_repository import ShopeeIntegrationRepo
 from app.repositories.sync_run_repository import SyncRunRepository
 
 STALE_RUNNING_SECONDS = 3600  # running há mais de 1h = provavelmente morta (SIGKILL do time_limit)
+
+# Código da API Shopee → rótulo. Sem isso "108 erros" não diz se a ação é nossa,
+# da aluna ou de ninguém (instabilidade do fornecedor).
+MOTIVOS_SHOPEE = {
+    "10000": "Instabilidade Shopee",
+    "10010": "Erro de query",
+    "10020": "Autenticação/credencial",
+    "10030": "Rate limit",
+    "11000": "Negócio/parâmetros",
+    "11001": "Negócio/parâmetros",
+    "11002": "Negócio/parâmetros",
+}
+MOTIVO_INTERNO = "Erro interno (nosso código)"
+MOTIVO_OUTROS = "Outros"
+
+_RE_CODIGO_SHOPEE = re.compile(r"error\s*\[(\d{4,5})\]")
+
+
+def classificar_erro(mensagem: Optional[str]) -> Dict[str, Optional[str]]:
+    """
+    Extrai o código estruturado da mensagem e devolve o motivo.
+
+    A Shopee responde `error [10000]: System Error` — parsear isso é o que separa
+    "instabilidade do fornecedor, ignora" de "credencial da aluna expirou, aja".
+    """
+    if not mensagem:
+        return {"codigo": None, "motivo": MOTIVO_OUTROS}
+    achado = _RE_CODIGO_SHOPEE.search(mensagem)
+    if achado:
+        codigo = achado.group(1)
+        return {"codigo": codigo, "motivo": MOTIVOS_SHOPEE.get(codigo, MOTIVO_OUTROS)}
+    # credencial inválida também chega já traduzida pelo nosso código
+    if "credencial" in mensagem.lower() and "10020" in mensagem:
+        return {"codigo": "10020", "motivo": MOTIVOS_SHOPEE["10020"]}
+    if "shopee" not in mensagem.lower():
+        return {"codigo": None, "motivo": MOTIVO_INTERNO}
+    return {"codigo": None, "motivo": MOTIVO_OUTROS}
 
 
 def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -56,6 +94,29 @@ def _serialize_run(run: SyncRun) -> Dict[str, Any]:
         "is_stale_running": is_stale_running,
         "error_message": run.error_message,
         "details": run.details,
+        **(
+            {"erro_codigo": c["codigo"], "erro_motivo": c["motivo"]}
+            if (c := classificar_erro(run.error_message)) and run.error_message
+            else {"erro_codigo": None, "erro_motivo": None}
+        ),
+    }
+
+
+def _mapa_usuarios(db: Session, user_ids) -> Dict[int, Dict[str, Any]]:
+    """id → nome/e-mail. 'User: 20' é id interno e não diz nada pra quem lê."""
+    ids = {uid for uid in user_ids if uid}
+    if not ids:
+        return {}
+    from app.models.user import User
+    from app.services.platform_usage_service import capitalizar_nome
+
+    return {
+        uid: {
+            "user_id": uid,
+            "nome": capitalizar_nome(nome) or (email or f"#{uid}"),
+            "email": email,
+        }
+        for uid, nome, email in db.query(User.id, User.name, User.email).filter(User.id.in_(ids))
     }
 
 
@@ -75,7 +136,45 @@ class SyncMonitoringService:
         runs = self.run_repo.list_by_filters(
             source=source, trigger=trigger, status=status, user_id=user_id, limit=limit,
         )
-        return [_serialize_run(r) for r in runs]
+        usuarios = _mapa_usuarios(self.db, [r.user_id for r in runs])
+        saida = []
+        for r in runs:
+            item = _serialize_run(r)
+            item["usuario"] = usuarios.get(r.user_id)
+            saida.append(item)
+        return saida
+
+    def erros_por_motivo(self, horas: int = 24, source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Agrupa as falhas recentes por motivo — dá direção pro número bruto."""
+        desde = datetime.now(timezone.utc) - timedelta(hours=horas)
+        q = self.db.query(SyncRun).filter(
+            SyncRun.status == "failed", SyncRun.started_at >= desde
+        )
+        if source:
+            q = q.filter(SyncRun.source == source)
+
+        contagem: Dict[str, Dict[str, Any]] = {}
+        for run in q.all():
+            c = classificar_erro(run.error_message)
+            chave = c["motivo"] or MOTIVO_OUTROS
+            bucket = contagem.setdefault(
+                chave, {"motivo": chave, "codigo": c["codigo"], "total": 0, "usuarios": set()}
+            )
+            bucket["total"] += 1
+            if run.user_id:
+                bucket["usuarios"].add(run.user_id)
+
+        total = sum(b["total"] for b in contagem.values())
+        return [
+            {
+                "motivo": b["motivo"],
+                "codigo": b["codigo"],
+                "total": b["total"],
+                "usuarios": len(b["usuarios"]),
+                "proporcao": round(b["total"] / total, 4) if total else 0,
+            }
+            for b in sorted(contagem.values(), key=lambda x: x["total"], reverse=True)
+        ]
 
     def full_sync_health(
         self,

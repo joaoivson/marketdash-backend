@@ -54,6 +54,84 @@ def _freq_divisor(frequency: Optional[str]) -> int:
     return 1
 
 
+def _add_months(dt: datetime, months: int) -> datetime:
+    """Soma meses preservando o dia; encurta pro último dia quando o mês é menor."""
+    total = dt.month - 1 + months
+    ano = dt.year + total // 12
+    mes = total % 12 + 1
+    dia = min(dt.day, monthrange(ano, mes)[1])
+    return dt.replace(year=ano, month=mes, day=dia)
+
+
+def _utc(value):
+    """Normaliza para datetime aware em UTC."""
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def build_coverage_periods(events: List["SubscriptionEvent"]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Reconstrói, por assinante, os períodos em que a assinatura esteve paga.
+
+    Base do MRR histórico: sem snapshot mensal, a única fonte de verdade do
+    passado são as cobranças. Cada cobrança paga cobre da data dela até
+    +1/+3/+12 meses conforme a periodicidade. Reembolso encerra a vigência na
+    data do reembolso (nunca retroage pro mês da venda). Quando o último evento
+    traz `access_until` explícito — caso do cancelado-com-acesso — ele prevalece
+    sobre a conta.
+
+    A conta bate com o `access_until` que a Kiwify manda em todos os assinantes
+    de produção, o que serve de conferência da regra.
+    """
+    por_assinante: Dict[str, List] = defaultdict(list)
+    for ev in events:
+        por_assinante[_subscriber_key(ev)].append(ev)
+
+    resultado: Dict[str, List[Dict[str, Any]]] = {}
+    for chave, evs in por_assinante.items():
+        periodos: List[Dict[str, Any]] = []
+        for c in extract_paid_charges_union(evs):
+            inicio = _utc(c.get("paid_at"))
+            if not inicio:
+                continue
+            div = _freq_divisor(c.get("frequency"))
+            periodos.append({
+                "inicio": inicio,
+                "fim": _add_months(inicio, div),
+                "net_cents": c["net_cents"],
+                "gross_cents": c["gross_cents"],
+                "divisor": div,
+            })
+        periodos.sort(key=lambda p: p["inicio"])
+
+        reembolsos = [
+            _utc(ev.refunded_at or ev.received_at)
+            for ev in evs
+            if (ev.event_type or "").lower() in REFUND_EVENTS
+        ]
+        reembolso = min([r for r in reembolsos if r], default=None)
+
+        if reembolso:
+            cortados = []
+            for p in periodos:
+                if p["inicio"] >= reembolso:
+                    continue
+                p["fim"] = min(p["fim"], reembolso)
+                cortados.append(p)
+            periodos = cortados
+        elif periodos:
+            ultimo_ev = max(evs, key=lambda e: _utc(e.received_at) or datetime.min.replace(tzinfo=timezone.utc))
+            acesso_ate = _utc(getattr(ultimo_ev, "access_until", None))
+            if acesso_ate:
+                periodos[-1]["fim"] = acesso_ate
+
+        resultado[chave] = periodos
+    return resultado
+
+
 def _normalize_plan_label(name: Optional[str], plan_id: Optional[str] = None) -> str:
     blob = f"{name or ''} {plan_id or ''}".lower()
     if "max" in blob:
@@ -339,6 +417,27 @@ class AdminMetricsService:
             gross += g // div
         return {"net": net, "gross": gross}
 
+    def mrr_at(
+        self,
+        momento: datetime,
+        periodos: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    ) -> Dict[str, int]:
+        """MRR num instante: soma das assinaturas cuja vigência paga cobre `momento`."""
+        if periodos is None:
+            periodos = build_coverage_periods(self._all_events())
+        net = gross = 0
+        for lista in periodos.values():
+            # o período mais recente que cobre o instante (renovação sobrepõe a anterior)
+            cobrindo = None
+            for p in lista:
+                if p["inicio"] <= momento < p["fim"]:
+                    if cobrindo is None or p["inicio"] > cobrindo["inicio"]:
+                        cobrindo = p
+            if cobrindo:
+                net += cobrindo["net_cents"] // cobrindo["divisor"]
+                gross += cobrindo["gross_cents"] // cobrindo["divisor"]
+        return {"net": net, "gross": gross}
+
     def _last_paid_for(self, ev: SubscriptionEvent) -> Optional[SubscriptionEvent]:
         q = self.db.query(SubscriptionEvent).filter(SubscriptionEvent.event_type.in_(PAID_EVENTS))
         if ev.subscription_id:
@@ -430,6 +529,14 @@ class AdminMetricsService:
 
     def renewal_rate(self, year: int, month: int) -> Optional[float]:
         start, end = _month_bounds(year, month)
+        # Vencimento que ainda não chegou não é renovação falha. No mês corrente
+        # o denominador vai só até hoje — senão agosto nasce 0% porque ninguém
+        # "renovou" um vencimento que é dia 25.
+        agora = datetime.now(timezone.utc)
+        if end > agora:
+            end = agora
+        if end < start:
+            return None  # mês futuro
         due = (
             self.db.query(SubscriptionEvent)
             .filter(
@@ -571,15 +678,26 @@ class AdminMetricsService:
             if (d.year, d.month) < (rev_y, rev_m):
                 rev_y, rev_m = d.year, d.month
 
+        # MRR histórico é RECONSTRUÍDO das cobranças, não é o retrato de hoje
+        # repetido pra trás. Se um webhook antigo entrar depois, o passado fica
+        # mais correto — recalcular é o comportamento desejado aqui.
+        periodos = build_coverage_periods(all_events)
+        agora = datetime.now(timezone.utc)
+        primeira_cobranca = min(
+            (p["inicio"] for lista in periodos.values() for p in lista), default=None
+        )
+        if primeira_cobranca:
+            mrr_y, mrr_m = primeira_cobranca.year, primeira_cobranca.month
+
         mrr_series: List[Dict[str, Any]] = []
         y, m = mrr_y, mrr_m
         while (y, m) <= (today.year, today.month):
-            end_day = monthrange(y, m)[1]
-            as_of = date(y, m, end_day)
-            if (y, m) == (today.year, today.month):
-                as_of = today
-            actives = self.active_subscribers(as_of=as_of)
-            mrr = self.mrr_cents(actives)
+            # mês fechado: último instante do mês. mês corrente: retrato de agora.
+            fim_do_mes = datetime(
+                y, m, monthrange(y, m)[1], 23, 59, 59, tzinfo=timezone.utc
+            )
+            momento = agora if (y, m) == (today.year, today.month) else fim_do_mes
+            mrr = self.mrr_at(momento, periodos)
             mrr_series.append({
                 "month": f"{y:04d}-{m:02d}",
                 "net": mrr["net"],

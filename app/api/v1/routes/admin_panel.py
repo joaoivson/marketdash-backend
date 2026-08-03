@@ -405,6 +405,28 @@ def admin_sync_runs(
     )
 
 
+@router.get("/platform-usage")
+def admin_platform_usage(
+    periodo: str = Query("7d", pattern="^(hoje|7d|30d|90d)$"),
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Aba "Uso da plataforma": cards, gráfico, atividade por usuária e telas."""
+    from app.services.platform_usage_service import PlatformUsageService
+
+    return PlatformUsageService(db).resumo(periodo)
+
+
+@router.get("/sync-runs/error-reasons")
+def admin_sync_error_reasons(
+    hours: int = Query(24, ge=1, le=720),
+    source: Optional[str] = None,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return SyncMonitoringService(db).erros_por_motivo(horas=hours, source=source)
+
+
 @router.get("/sync-runs/health")
 def admin_sync_health(
     source: str = "shopee",
@@ -449,6 +471,6 @@ def record_daily_access_route(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Beacon de último acesso — no máximo 1 registro por usuário por dia (BRT)."""
+    """Beacon de acesso — uma linha por autenticação (ver daily_access_service)."""
     record_daily_access(db, user.id)
     return None

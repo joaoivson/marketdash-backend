@@ -1,30 +1,44 @@
-"""Registro idempotente de último acesso (1 registro/usuário/dia BRT)."""
+"""
+Registro de acessos — uma linha por autenticação efetiva.
+
+Regra (rodada 4): acesso = cada autenticação. Logou de manhã = 1; sessão caiu e
+relogou à tarde = 2; renovação silenciosa de token com a pessoa ativa não conta.
+Substitui a regra anterior de 1 registro por usuário/dia, que escondia a
+diferença entre "abriu uma vez" e "usa o dia todo".
+
+Quem garante que renovação de token não vira acesso é o frontend (AccessBeacon
+só dispara em SIGNED_IN). A janela de dedupe aqui existe só para colapsar o
+disparo duplo da MESMA autenticação — a tela de login chama o beacon e o evento
+SIGNED_IN do Supabase dispara logo em seguida.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from app.models.user_login import UserLogin
 
+JANELA_DEDUPE = timedelta(minutes=2)
 
-def record_daily_access(db: Session, user_id: int) -> None:
-    today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
-    start = datetime(today.year, today.month, today.day, tzinfo=ZoneInfo("America/Sao_Paulo")).astimezone(
-        timezone.utc
-    )
-    end = start + timedelta(days=1)
-    exists = (
+
+def record_access(db: Session, user_id: int) -> bool:
+    """Grava uma autenticação. Retorna False quando colapsada pela janela."""
+    agora = datetime.now(timezone.utc)
+    recente = (
         db.query(UserLogin.id)
         .filter(
             UserLogin.user_id == user_id,
-            UserLogin.logged_at >= start,
-            UserLogin.logged_at < end,
+            UserLogin.logged_at >= agora - JANELA_DEDUPE,
         )
         .first()
     )
-    if exists:
-        return
-    db.add(UserLogin(user_id=user_id, logged_at=datetime.now(timezone.utc)))
+    if recente:
+        return False
+    db.add(UserLogin(user_id=user_id, logged_at=agora))
     db.commit()
+    return True
+
+
+# Nome antigo mantido para não quebrar import existente.
+record_daily_access = record_access

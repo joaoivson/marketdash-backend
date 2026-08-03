@@ -294,8 +294,11 @@ def test_mrr_series_includes_current_month_when_first_event_is_now(monkeypatch):
     monkeypatch.setattr(
         svc, "revenue_for_month", lambda y, m: {"net": 100, "gross": 110, "refund_net": 0}
     )
-    monkeypatch.setattr(svc, "active_subscribers", lambda as_of=None: [])
-    monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
+    # Rodada 4: a série usa mrr_at (reconstrução por cobrança), não mais
+    # active_subscribers/mrr_cents.
+    monkeypatch.setattr(
+        svc, "mrr_at", lambda momento, periodos=None: {"net": 50, "gross": 55}
+    )
 
     series = svc.series_12m()
     assert series["mrr"][0]["month"] == "2026-07"
@@ -347,5 +350,7 @@ def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
     assert "2026-04" in rev_months
     assert "2026-07" in rev_months
     assert rev_months == ["2026-04", "2026-05", "2026-06", "2026-07"]
-    assert "2026-04" not in mrr_months
-    assert mrr_months == ["2026-07"]
+    # Rodada 4: o MRR passou a ser RECONSTRUÍDO das cobranças, então a série
+    # começa no mês da cobrança retroativa junto com o faturamento — antes ela
+    # começava no primeiro received_at e o passado ficava sem MRR.
+    assert mrr_months == ["2026-04", "2026-05", "2026-06", "2026-07"]
