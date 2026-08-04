@@ -94,6 +94,34 @@ class CSVService:
     """Service for processing and validating CSV files."""
 
     @staticmethod
+    def parse_datetime_series(series: pd.Series) -> pd.Series:
+        """
+        Converte datas aceitando ISO (`2026-08-03`) e formato BR (`03/08/2026`)
+        sem trocar dia por mês.
+
+        `dayfirst=True` cru corrompe ISO: o pandas lê `2026-08-03` como 8 de março
+        e, quando o dia passa de 12, não consegue interpretar e devolve NaT. No
+        relatório de cliques da Shopee (que é ISO) isso zerava 184 de 253 linhas e
+        jogava as 69 restantes meses pra trás — o upload "funcionava" e os dados
+        sumiam do período.
+
+        Estratégia: tenta ISO primeiro; só cai pra dayfirst quando o arquivo
+        realmente é BR, e fica com a leitura que reconheceu mais linhas.
+        """
+        texto = series.astype(str).str.strip()
+
+        try:
+            iso = pd.to_datetime(texto, errors="coerce", format="ISO8601")
+        except (ValueError, TypeError):
+            iso = pd.to_datetime(texto, errors="coerce")
+
+        if iso.notna().all():
+            return iso
+
+        br = pd.to_datetime(texto, errors="coerce", dayfirst=True)
+        return iso if iso.notna().sum() >= br.notna().sum() else br
+
+    @staticmethod
     def _clean_numeric_series(series: pd.Series) -> pd.Series:
         """
         Limpa strings com R$, espaços e converte para numérico de forma robusta.
@@ -177,11 +205,11 @@ class CSVService:
 
             # Date e time
             if "date" in col_map:
-                parsed_date = pd.to_datetime(df[col_map["date"]], errors="coerce", dayfirst=True)
+                parsed_date = CSVService.parse_datetime_series(df[col_map["date"]])
             else:
                 parsed_date = None
                 for col in original_cols:
-                    candidate = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+                    candidate = CSVService.parse_datetime_series(df[col])
                     if candidate.notna().any():
                         parsed_date = candidate
                         break
@@ -327,11 +355,11 @@ class CSVService:
 
             # Date e time (lógica similar ao original)
             if "date" in col_map:
-                parsed_date = pd.to_datetime(df[col_map["date"]], errors="coerce", dayfirst=True)
+                parsed_date = CSVService.parse_datetime_series(df[col_map["date"]])
             else:
                 parsed_date = None
                 for col in original_cols:
-                    candidate = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
+                    candidate = CSVService.parse_datetime_series(df[col])
                     if candidate.notna().any():
                         parsed_date = candidate
                         break
@@ -340,7 +368,7 @@ class CSVService:
                     errors.append("Data ausente no arquivo de cliques; usando hoje.")
 
             # Separar data e hora: se a coluna tiver datetime (ex.: 2026-01-07 23:59:22), extrair .date e .time
-            parsed_dt = pd.to_datetime(parsed_date, errors="coerce", dayfirst=True)
+            parsed_dt = pd.to_datetime(parsed_date, errors="coerce")
             out["date"] = parsed_dt.dt.date if hasattr(parsed_dt, "dt") else parsed_dt
 
             if "time" in col_map:

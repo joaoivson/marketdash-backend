@@ -1,4 +1,5 @@
 import base64
+import logging
 from datetime import date
 from pathlib import Path
 from typing import List, Optional
@@ -20,6 +21,8 @@ from app.services.click_service import ClickService
 from app.services.storage import upload_file_obj, is_storage_configured
 from app.tasks.csv_tasks import process_click_csv_task
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["clicks"])
 
 
@@ -39,6 +42,35 @@ async def upload_click_csv(
     )
     db.commit()
     db.refresh(dataset)
+
+    # Arquivo pequeno: processa aqui mesmo. Ver CSV_SYNC_MAX_BYTES — a fila é o
+    # que fazia o upload morrer em silêncio, e um CSV de 250 linhas leva ~2 ms.
+    conteudo_pequeno = await file.read()
+    await file.seek(0)
+    if len(conteudo_pequeno) <= settings.CSV_SYNC_MAX_BYTES:
+        click_service = ClickService(dataset_repo, ClickRowRepository(db))
+        try:
+            click_service.process_click_csv(
+                dataset.id, current_user.id, conteudo_pequeno, file.filename
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Estado terminal sempre: dataset preso em "pending" faz a tela do
+            # usuário girar pra sempre sem dizer o que houve.
+            logger.exception("Falha ao processar CSV de cliques do dataset %s", dataset.id)
+            db.rollback()
+            dataset.status = "error"
+            dataset.error_message = str(exc)[:500]
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Não foi possível processar o arquivo: {exc}",
+            )
+        db.refresh(dataset)
+        return {
+            "task_id": f"sync-{dataset.id}",
+            "dataset_id": dataset.id,
+            "status": dataset.status,
+        }
 
     if settings.PROCESS_CSV_SYNC:
         if settings.UPLOAD_TEMP_DIR:

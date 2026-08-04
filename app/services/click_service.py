@@ -198,6 +198,28 @@ class ClickService:
                 )
             )
 
+        if not click_rows:
+            # Sem isso o dataset ficava em "pending" PARA SEMPRE: nenhum status
+            # terminal era gravado, o front seguia perguntando "já terminou?" e a
+            # tela girava indefinidamente. Acontece quando o agrupamento não sobra
+            # nada — por exemplo, arquivo sem nenhuma data válida (groupby descarta
+            # chave nula) ou CSV só com cabeçalho.
+            dataset.row_count = total_original_rows
+            dataset.status = "error"
+            dataset.error_message = (
+                "Nenhum clique válido encontrado no arquivo. Verifique se as colunas "
+                "de data e canal estão preenchidas."
+            )
+            self.dataset_repo.db.commit()
+            logger.warning(
+                "Cliques: dataset %s ficou sem linhas após o agrupamento "
+                "(%s linhas no CSV, %s datas inválidas)",
+                dataset_id,
+                total_original_rows,
+                int(df["date"].isna().sum()) if "date" in df.columns else "?",
+            )
+            return
+
         if click_rows:
             self.click_repo.bulk_create(click_rows)
             # IMPORTANTE: row_count deve refletir TODAS as linhas originais do CSV

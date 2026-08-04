@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False
 
+    # Abaixo deste tamanho o CSV é processado na própria requisição, sem fila.
+    # Um relatório de cliques típico tem ~20 KB e leva ~2 ms pra parsear — mandar
+    # isso pro Celery só adiciona um modo de falha: se a task não for consumida,
+    # o dataset fica "pending" pra sempre, sem erro, e a tela do usuário gira
+    # indefinidamente. Arquivos grandes continuam indo pra fila.
+    CSV_SYNC_MAX_BYTES: int = 2 * 1024 * 1024
+
     # Jobs pipeline: upload via presigned URL + chunking (Object Storage + Celery). Se False, rotas /jobs não são registradas.
     USE_JOBS_PIPELINE: bool = False
 
