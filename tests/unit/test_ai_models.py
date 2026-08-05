@@ -23,6 +23,11 @@ def test_colunas_do_ledger():
     assert {"user_id", "diagnostic_id", "tipo", "creditos", "saldo_apos"} <= cols
 
 
+def test_colunas_do_diagnostico_message():
+    cols = set(AiDiagnosticMessage.__table__.columns.keys())
+    assert {"id", "diagnostic_id", "papel", "conteudo", "criado_em"} <= cols
+
+
 def test_status_comeca_em_gerando():
     assert AiDiagnostic.__table__.c.status.default.arg == STATUS_GERANDO
     assert (STATUS_GERANDO, STATUS_PRONTO, STATUS_ERRO) == ("gerando", "pronto", "erro")
