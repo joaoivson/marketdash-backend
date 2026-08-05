@@ -15,7 +15,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "menus": frozenset(
             {"dashboard", "campanhas", "upload_cliques", "indique_ganhe", "configuracoes", "planos"}
         ),
-        "limites": {"paginas_captura": 0, "links": 0},
+        "limites": {"paginas_captura": 0, "links": 0, "creditos_ia": 0},
         "label": "Essencial",
     },
     "pro": {
@@ -26,12 +26,13 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "upload_cliques",
                 "captura",
                 "meus_links",
+                "diagnostico_ia",
                 "indique_ganhe",
                 "configuracoes",
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": 15, "links": 30},
+        "limites": {"paginas_captura": 15, "links": 30, "creditos_ia": 200},
         "label": "Pro",
     },
     "max": {
@@ -43,18 +44,19 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "upload_cliques",
                 "captura",
                 "meus_links",
+                "diagnostico_ia",
                 "indique_ganhe",
                 "configuracoes",
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": 50, "links": 100},
+        "limites": {"paginas_captura": 50, "links": 100, "creditos_ia": 1000},
         "label": "Max",
     },
 }
 
 # Menus que exigem plano Pro (cadeado no Essencial).
-PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links"})
+PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links", "diagnostico_ia"})
 
 # Checkout Kiwify por (plano, periodo) — product_id preenchido via tabela/env.
 PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {
