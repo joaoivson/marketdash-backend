@@ -41,6 +41,10 @@ class Settings(BaseSettings):
 
     # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
+    # IA (Diagnóstico) — sem chave, a feature fica indisponível em vez de quebrar.
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
     PROCESS_CSV_SYNC: bool = False
 
     # Abaixo deste tamanho o CSV é processado na própria requisição, sem fila.
