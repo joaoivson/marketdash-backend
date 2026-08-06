@@ -57,10 +57,29 @@ class OpenAiClient:
             logger.error("OpenAI %s: %s", r.status_code, r.text[:300])
             raise ErroIA("http", f"status {r.status_code}")
 
-        dados = r.json()
-        conteudo = dados["choices"][0]["message"]["content"]
+        # Protege leitura de corpo da resposta contra formatos inesperados.
+        # A API pode responder 200 com corpo malformado (não-JSON, estrutura alterada,
+        # choices vazio ou ausente), o que violaria o contrato se escapasse como exceção crua.
+        try:
+            dados = r.json()
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ErroIA("formato", f"corpo não é JSON válido: {str(e)[:100]}")
+
+        try:
+            # Garante que choices existe, é lista não-vazia, e tem a estrutura esperada
+            conteudo = dados["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise ErroIA("formato", f"estrutura de resposta inesperada: {str(e)[:100]}")
+
+        # Extrai tokens com cuidado para valor não numérico
         uso = dados.get("usage") or {}
-        return conteudo, int(uso.get("prompt_tokens") or 0), int(uso.get("completion_tokens") or 0)
+        try:
+            prompt_tokens = int(uso.get("prompt_tokens") or 0)
+            completion_tokens = int(uso.get("completion_tokens") or 0)
+        except (ValueError, TypeError) as e:
+            raise ErroIA("formato", f"tokens não numéricos: {str(e)[:100]}")
+
+        return conteudo, prompt_tokens, completion_tokens
 
     def completar_json(self, sistema: str, usuario: str,
                        timeout: float = 60.0) -> Tuple[Dict[str, Any], int, int]:

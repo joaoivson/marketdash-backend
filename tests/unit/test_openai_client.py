@@ -90,3 +90,63 @@ def test_modelo_vai_no_corpo_da_requisicao():
     _cliente(handler).completar_json("sistema", "usuario")
     assert capturado["model"] == "gpt-4o-mini"
     assert capturado["messages"][0]["role"] == "system"
+
+
+def test_corpo_nao_json_levanta_erro_formato():
+    """Resposta 200 com corpo que não é JSON válido."""
+    c = _cliente(lambda req: httpx.Response(200, content=b"isso nao e json"))
+    with pytest.raises(ErroIA) as exc:
+        c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert exc.value.motivo == "formato"
+
+
+def test_json_sem_choices_levanta_erro_formato():
+    """Resposta 200 com JSON válido mas sem choices."""
+    c = _cliente(lambda req: httpx.Response(200, json={}))
+    with pytest.raises(ErroIA) as exc:
+        c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert exc.value.motivo == "formato"
+
+
+def test_json_com_choices_vazio_levanta_erro_formato():
+    """Resposta 200 com JSON válido mas choices é lista vazia."""
+    c = _cliente(lambda req: httpx.Response(200, json={"choices": []}))
+    with pytest.raises(ErroIA) as exc:
+        c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert exc.value.motivo == "formato"
+
+
+def test_json_com_estrutura_incompleta_levanta_erro_formato():
+    """Resposta 200 com choices mas sem message.content."""
+    c = _cliente(lambda req: httpx.Response(200, json={"choices": [{"message": {}}]}))
+    with pytest.raises(ErroIA) as exc:
+        c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert exc.value.motivo == "formato"
+
+
+def test_usage_com_prompt_tokens_nao_numerico_levanta_erro_formato():
+    """Resposta 200 com usage.prompt_tokens não numérico."""
+    c = _cliente(lambda req: httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": "nao-e-numero", "completion_tokens": 50},
+        },
+    ))
+    with pytest.raises(ErroIA) as exc:
+        c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert exc.value.motivo == "formato"
+
+
+def test_authorization_header_é_enviado():
+    """Verifica que o header Authorization com Bearer token é enviado."""
+    cabecalhos_capturados = {}
+
+    def handler(req):
+        cabecalhos_capturados["auth"] = req.headers.get("Authorization")
+        return _resposta("resposta do chat")
+
+    _cliente(handler, api_key="sk-teste-seguro").completar_texto(
+        "sistema", [{"role": "user", "content": "oi"}]
+    )
+    assert cabecalhos_capturados["auth"] == "Bearer sk-teste-seguro"
