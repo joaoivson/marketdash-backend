@@ -1,11 +1,11 @@
 """Acesso às sessões de diagnóstico e suas mensagens."""
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from app.models.ai_diagnostic import (
-    STATUS_GERANDO, AiDiagnostic, AiDiagnosticMessage,
+    PAPEL_USUARIA, STATUS_GERANDO, AiDiagnostic, AiDiagnosticMessage,
 )
 
 
@@ -60,6 +60,22 @@ class AiDiagnosticRepository:
         self.db.refresh(m)
         return m
 
+    def adicionar_mensagens(self, diagnostic_id: int,
+                            mensagens: List[Tuple[str, str]]) -> List[AiDiagnosticMessage]:
+        # Um único commit para todas: no chat isso grava pergunta+resposta juntas,
+        # então uma falha no meio do caminho não deixa a pergunta da usuária
+        # gravada sem a resposta correspondente (ou as duas entram, ou nenhuma).
+        objetos = [
+            AiDiagnosticMessage(diagnostic_id=diagnostic_id, papel=papel, conteudo=conteudo)
+            for papel, conteudo in mensagens
+        ]
+        for m in objetos:
+            self.db.add(m)
+        self.db.commit()
+        for m in objetos:
+            self.db.refresh(m)
+        return objetos
+
     def listar_mensagens(self, diagnostic_id: int) -> List[AiDiagnosticMessage]:
         return (
             self.db.query(AiDiagnosticMessage)
@@ -73,7 +89,7 @@ class AiDiagnosticRepository:
             self.db.query(AiDiagnosticMessage)
             .filter(
                 AiDiagnosticMessage.diagnostic_id == diagnostic_id,
-                AiDiagnosticMessage.papel == "user",
+                AiDiagnosticMessage.papel == PAPEL_USUARIA,
             )
             .count()
         )

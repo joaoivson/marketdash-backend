@@ -2,8 +2,12 @@
 Orquestração do Diagnóstico IA.
 
 Dois invariantes valem mais que tudo aqui:
-  1. a sessão NUNCA fica em "gerando" — sempre termina em pronto ou erro;
-  2. falha da IA NÃO debita crédito.
+  1. a sessão NUNCA fica em "gerando" — sempre termina em pronto ou erro,
+     não importa o tipo de exceção (ErroIA ou qualquer outra: banco,
+     conexão, bug no cliente);
+  2. crédito e entrega andam juntos — o débito acontece com a resposta da
+     IA já em mãos e ANTES de marcar pronto (ou expor a resposta do chat),
+     então falha da IA não debita e débito que falha não entrega.
 """
 from datetime import date
 from types import SimpleNamespace
@@ -58,6 +62,17 @@ class _FakeRepo:
                             papel=papel, conteudo=conteudo)
         self.mensagens.append(m)
         return m
+
+    def adicionar_mensagens(self, diagnostic_id, mensagens):
+        # Espelha o commit único do repository real: só entra na lista se
+        # TODAS as mensagens puderem ser criadas (nada é anexado aos poucos).
+        objetos = [
+            SimpleNamespace(id=len(self.mensagens) + i + 1, diagnostic_id=diagnostic_id,
+                            papel=papel, conteudo=conteudo)
+            for i, (papel, conteudo) in enumerate(mensagens)
+        ]
+        self.mensagens.extend(objetos)
+        return objetos
 
     def listar_mensagens(self, diagnostic_id):
         return [m for m in self.mensagens if m.diagnostic_id == diagnostic_id]
@@ -117,6 +132,34 @@ class _FakeCredito:
         self._saldo -= creditos
         self.debitos.append({"tipo": tipo, "creditos": creditos, "diag": diagnostic_id})
         return self._saldo
+
+
+class _FakeRepoFalhaAoSalvarPronto(_FakeRepo):
+    """Simula uma falha genérica (NÃO ErroIA) na gravação final — ex.: erro de
+    banco no commit. Usada para provar que o invariante "nunca fica em
+    gerando" vale mesmo fora do caminho de ErroIA."""
+
+    def salvar(self, sessao):
+        if sessao.status == "pronto":
+            raise RuntimeError("falha simulada ao gravar sessão pronta")
+        return super().salvar(sessao)
+
+
+class _FakeCreditoQueFalhaAoDebitar(_FakeCredito):
+    """Simula a corrida real: tem_saldo() já passou (leitura solta), mas o
+    débito em si falha — ex.: outra requisição consumiu o crédito antes, ou o
+    backend de crédito caiu no meio do caminho."""
+
+    def debitar(self, user_id, plano, tipo, creditos, diagnostic_id=None):
+        raise SaldoInsuficiente(0, creditos)
+
+
+class _FakeRepoFalhaAoGravarMensagens(_FakeRepo):
+    """Simula a gravação atômica de pergunta+resposta falhando — nada deve
+    ficar no histórico quando isso acontece, nem a pergunta sozinha."""
+
+    def adicionar_mensagens(self, diagnostic_id, mensagens):
+        raise RuntimeError("falha simulada ao gravar mensagens do chat")
 
 
 def _servico(cliente=None, snapshot=None, credito=None, repo=None):
@@ -211,3 +254,37 @@ def test_falha_no_chat_nao_debita():
     with pytest.raises(ErroIA):
         s.responder(1, "pro", sessao.id, "por quê?")
     assert credito.debitos == []
+
+
+def test_excecao_nao_erroia_durante_geracao_termina_em_erro_nunca_gerando():
+    # Repositório falha ao gravar o estado "pronto" com uma exceção genérica
+    # (não ErroIA) — o invariante "nunca fica em gerando" precisa valer aqui
+    # também, não só quando a IA falha.
+    repo = _FakeRepoFalhaAoSalvarPronto()
+    s = _servico(repo=repo)
+    sessao = s.gerar(1, "pro", *P)
+    assert sessao.status == STATUS_ERRO
+    assert sessao.status != "gerando"
+
+
+def test_debito_falha_apos_resposta_da_ia_deixa_sessao_em_erro_sem_entregar_analise():
+    # tem_saldo() já passou, mas o débito em si falha (corrida real). A
+    # sessão não pode ficar "pronto" sem ter sido cobrada.
+    credito = _FakeCreditoQueFalhaAoDebitar()
+    s = _servico(credito=credito)
+    sessao = s.gerar(1, "pro", *P)
+    assert sessao.status == STATUS_ERRO
+    assert sessao.relatorio is None
+
+
+def test_falha_ao_gravar_resposta_do_chat_nao_deixa_pergunta_orfa():
+    repo = _FakeRepoFalhaAoGravarMensagens()
+    credito = _FakeCredito()
+    s = _servico(repo=repo, credito=credito)
+    sessao = s.gerar(1, "pro", *P)
+
+    with pytest.raises(RuntimeError):
+        s.responder(1, "pro", sessao.id, "por quê?")
+
+    # Nem a pergunta da usuária pode sobrar sozinha no histórico.
+    assert repo.listar_mensagens(sessao.id) == []
