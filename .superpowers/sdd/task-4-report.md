@@ -163,3 +163,92 @@ python -m pytest tests/unit -q
 ✅ Header `Authorization` auditado  
 ✅ Nenhuma chamada real de rede (httpx.MockTransport)  
 ✅ Commit com mensagem em português explicando a importância da tipagem
+
+---
+
+# Defeito Residual: `usage` Não-Dict na Resposta OpenAI
+
+## Status
+**DONE**
+
+## Commit Hash
+`06c7f34`
+
+## Defeito Identificado
+
+Método `_chamar()` linha 75 tinha proteção incompleta contra `usage` malformado:
+
+```python
+# ANTES (vulnerável)
+uso = dados.get("usage") or {}
+try:
+    prompt_tokens = int(uso.get("prompt_tokens") or 0)
+```
+
+**Problema**: Se API retorna 200 com `usage` truthy MAS não-dict (ex: string `"quebrado"`, lista `[1,2]`, número `5`), o `or {}` **não ativa** (fallback só cai se falsy). Depois, `uso.get()` levanta `AttributeError` crua, escapando sem tipagem.
+
+**Exemplo de resposta vulnerável**:
+```json
+{
+  "choices": [{"message": {"content": "ok"}}],
+  "usage": "quebrado"
+}
+```
+
+Neste caso: `"quebrado".get(...)` → `AttributeError`, não capturado.
+
+## Correção Implementada
+
+Validar tipo antes de usar `.get()`:
+
+```python
+# DEPOIS (protegido)
+uso = dados.get("usage")
+if not isinstance(uso, dict):
+    uso = {}
+try:
+    prompt_tokens = int(uso.get("prompt_tokens") or 0)
+    completion_tokens = int(uso.get("completion_tokens") or 0)
+except (ValueError, TypeError) as e:
+    raise ErroIA("formato", f"tokens não numéricos: {str(e)[:100]}") from e
+```
+
+**Decisão de design**: Tokens são **telemetria**; resposta (conteúdo) é válida mesmo com `usage` quebrado. Portanto, gracefully degradar para tokens=0 ao invés de bloquear.
+
+**Bônus**: Adicionar `from e` nos `raise ErroIA(...)` existentes para preservar traceback.
+
+## Testes Adicionados
+
+3 novos testes cobrindo `usage` não-dict:
+
+1. **`test_usage_string_ao_invez_de_dict_nao_levanta_exceção`** — `"usage": "quebrado"` → tokens zerados, sem exceção crua
+2. **`test_usage_lista_ao_invez_de_dict_nao_levanta_exceção`** — `"usage": [1, 2, 3]` → tokens zerados
+3. **`test_usage_numero_ao_invez_de_dict_nao_levanta_exceção`** — `"usage": 42` → tokens zerados
+
+Todas verificam que: (1) nenhuma exceção crua escapa; (2) conteúdo da resposta é retornado corretamente; (3) tokens caem para (0, 0).
+
+## Execução de Testes
+
+```bash
+cd /Users/joaoivson/Desktop/PROJETOS/MarketDash/marketdash-backend
+source .venv312/bin/activate
+python -m pytest tests/unit -q
+```
+
+**Resultado**:
+```
+3 failed, 268 passed, 17 warnings in 1.40s
+```
+
+- **268 passed**: 265 baseline + 3 novos (usage não-dict)
+- **3 failed**: pré-existentes em `test_shopee_upsert_additive.py` (não modificados conforme instrução)
+
+## Verificação
+
+✅ Todos os 3 novos testes para `usage` não-dict PASSAM  
+✅ Baseline mantida: 265 + 3 novos = 268 total  
+✅ Nenhuma regressão introduzida  
+✅ Código em português com comentário explicando POR QUE (telemetria vs conteúdo)  
+✅ Nenhuma chamada real de rede (httpx.MockTransport)  
+✅ `from e` adicionado para preservar causa do erro  
+✅ Commit com mensagem conforme convenção português
