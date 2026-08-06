@@ -150,3 +150,45 @@ def test_authorization_header_é_enviado():
         "sistema", [{"role": "user", "content": "oi"}]
     )
     assert cabecalhos_capturados["auth"] == "Bearer sk-teste-seguro"
+
+
+def test_usage_string_ao_invez_de_dict_nao_levanta_exceção():
+    """Resposta 200 com usage como string ao invés de dict."""
+    c = _cliente(lambda req: httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": "quebrado",  # string, não dict
+        },
+    ))
+    texto, entrada, saida = c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert texto == "ok"
+    assert (entrada, saida) == (0, 0)  # tokens zerados
+
+
+def test_usage_lista_ao_invez_de_dict_nao_levanta_exceção():
+    """Resposta 200 com usage como lista ao invés de dict."""
+    c = _cliente(lambda req: httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": [1, 2, 3],  # lista, não dict
+        },
+    ))
+    texto, entrada, saida = c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert texto == "ok"
+    assert (entrada, saida) == (0, 0)  # tokens zerados
+
+
+def test_usage_numero_ao_invez_de_dict_nao_levanta_exceção():
+    """Resposta 200 com usage como número ao invés de dict."""
+    c = _cliente(lambda req: httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": 42,  # número, não dict
+        },
+    ))
+    texto, entrada, saida = c.completar_texto("sistema", [{"role": "user", "content": "oi"}])
+    assert texto == "ok"
+    assert (entrada, saida) == (0, 0)  # tokens zerados

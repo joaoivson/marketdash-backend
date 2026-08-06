@@ -63,21 +63,25 @@ class OpenAiClient:
         try:
             dados = r.json()
         except (json.JSONDecodeError, ValueError) as e:
-            raise ErroIA("formato", f"corpo não é JSON válido: {str(e)[:100]}")
+            raise ErroIA("formato", f"corpo não é JSON válido: {str(e)[:100]}") from e
 
         try:
             # Garante que choices existe, é lista não-vazia, e tem a estrutura esperada
             conteudo = dados["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
-            raise ErroIA("formato", f"estrutura de resposta inesperada: {str(e)[:100]}")
+            raise ErroIA("formato", f"estrutura de resposta inesperada: {str(e)[:100]}") from e
 
-        # Extrai tokens com cuidado para valor não numérico
-        uso = dados.get("usage") or {}
+        # Extrai tokens com cuidado para valor não numérico.
+        # Se usage não for dict (ex: string, lista, número), trata como vazio.
+        # Tokens são telemetria; a resposta é válida mesmo se falhar.
+        uso = dados.get("usage")
+        if not isinstance(uso, dict):
+            uso = {}
         try:
             prompt_tokens = int(uso.get("prompt_tokens") or 0)
             completion_tokens = int(uso.get("completion_tokens") or 0)
         except (ValueError, TypeError) as e:
-            raise ErroIA("formato", f"tokens não numéricos: {str(e)[:100]}")
+            raise ErroIA("formato", f"tokens não numéricos: {str(e)[:100]}") from e
 
         return conteudo, prompt_tokens, completion_tokens
 
