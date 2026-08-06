@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
@@ -78,12 +79,42 @@ class AiSnapshotService:
             "sub_id": agrupar(DatasetRow.sub_id1),
         }
 
+    def _gasto_ads_do_periodo(self, user_id: int, inicio: date, fim: date) -> float:
+        """Soma bruta de `ad_spends` no período, direto da fonte do investimento.
+
+        Existe separado de `kpis["gasto"]` porque aquele vem do RATEIO de
+        `DatasetRow.cost` (feito por `dataset_service.apply_ad_spend`), e esse
+        rateio exige linhas de venda para distribuir o valor — sem venda, não
+        há onde ratear e o gasto nunca chega em `DatasetRow`. Lendo `ad_spends`
+        direto, enxergamos o gasto mesmo quando não houve nenhuma venda no
+        período (o caso mais crítico: dinheiro queimado, retorno zero).
+        """
+        total = (
+            self.db.query(func.coalesce(func.sum(AdSpend.amount), 0))
+            .filter(
+                AdSpend.user_id == user_id,
+                AdSpend.date >= inicio,
+                AdSpend.date <= fim,
+            )
+            .scalar()
+        )
+        # func.sum sobre Float do SQLAlchemy já retorna float nativo do driver,
+        # mas o float(...) explícito blinda contra Decimal caso o dialeto mude.
+        return round(float(total or 0), 2)
+
     # -- montagem ---------------------------------------------------------
 
     def montar(self, user_id: int, inicio: date, fim: date) -> Dict[str, Any]:
         kpis = self._kpis_do_periodo(user_id, inicio, fim)
         tops = self._tops(user_id, inicio, fim)
         tem_meta = self._tem_meta(user_id)
+
+        # Quarto sinal para a flag `vazio`: gasto bruto de anúncio no período,
+        # que existe independente de venda/campanha sincronizada. Vai dentro de
+        # `kpis` (chave distinta de "gasto") para que a IA também receba o
+        # número — sem isso, um período com R$ X gastos e zero venda não teria
+        # como a IA narrar o prejuízo.
+        kpis["investimento_ads"] = self._gasto_ads_do_periodo(user_id, inicio, fim)
 
         campanhas: List[Dict[str, Any]] = []
         if tem_meta:
@@ -103,7 +134,17 @@ class AiSnapshotService:
                     "cliques": int(m.clicks),
                 })
 
-        vazio = kpis["pedidos"] == 0 and kpis["comissao_liquida"] == 0 and not campanhas
+        # `vazio` só é True quando NÃO há absolutamente nada acionável: sem
+        # pedido, sem comissão, sem campanha e sem gasto de anúncio. Antes
+        # dessa última condição, um período com gasto e zero venda (o pior
+        # cenário: prejuízo puro) caía aqui como "vazio" e a análise nem era
+        # gerada — exatamente o período que a afiliada mais precisa ver.
+        vazio = (
+            kpis["pedidos"] == 0
+            and kpis["comissao_liquida"] == 0
+            and not campanhas
+            and kpis["investimento_ads"] == 0
+        )
 
         return {
             "periodo": {"inicio": inicio.isoformat(), "fim": fim.isoformat()},

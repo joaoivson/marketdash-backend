@@ -22,17 +22,7 @@ def _campanha(nome, health, roas, spend, commission_net, profit, orders=0):
     )
 
 
-class _FakeCampaignService:
-    def __init__(self, campanhas):
-        self._campanhas = campanhas
-
-    def list_campaigns(self, user_id, start_date=None, end_date=None,
-                       status_filter="all", search=None):
-        return SimpleNamespace(campaigns=self._campanhas, has_tax=False,
-                               kpis=SimpleNamespace(total_spend=0.0))
-
-
-def _servico(campanhas=None, kpis=None, tops=None, tem_meta=True):
+def _servico(campanhas=None, kpis=None, tops=None, tem_meta=True, gasto_ads=0.0):
     svc = AiSnapshotService(db=None)
     svc._campanhas_do_periodo = lambda u, i, f: (campanhas or [])
     svc._kpis_do_periodo = lambda u, i, f: (kpis or {
@@ -41,6 +31,7 @@ def _servico(campanhas=None, kpis=None, tops=None, tem_meta=True):
     })
     svc._tops = lambda u, i, f: (tops or {"canal": [], "categoria": [], "sub_id": []})
     svc._tem_meta = lambda u: tem_meta
+    svc._gasto_ads_do_periodo = lambda u, i, f: gasto_ads
     return svc
 
 
@@ -84,6 +75,44 @@ def test_periodo_sem_dado_marca_vazio():
 def test_periodo_com_dado_nao_marca_vazio():
     s = _servico().montar(1, date(2026, 8, 1), date(2026, 8, 5))
     assert s["vazio"] is False
+
+
+def test_gasto_de_anuncio_sem_venda_nao_marca_vazio():
+    # Caso do defeito: gastou em anúncio e não vendeu nada, sem campanha
+    # sincronizada. Antes da correção, isso caía como "vazio" e a análise
+    # nem era gerada — exatamente o período mais acionável (prejuízo puro).
+    s = _servico(
+        kpis={"comissao_liquida": 0.0, "receita": 0.0, "gasto": 0.0,
+              "lucro": 0.0, "pedidos": 0},
+        tem_meta=False,
+        gasto_ads=400.0,
+    ).montar(1, date(2026, 8, 1), date(2026, 8, 5))
+    assert s["vazio"] is False
+
+
+def test_gasto_de_anuncio_aparece_no_snapshot():
+    # Não basta usar o gasto para decidir a flag: a IA precisa do número para
+    # poder narrar o prejuízo. Fica em kpis["investimento_ads"], separado de
+    # kpis["gasto"] (que vem do rateio de DatasetRow.cost e não existe sem
+    # venda para ratear).
+    s = _servico(
+        kpis={"comissao_liquida": 0.0, "receita": 0.0, "gasto": 0.0,
+              "lucro": 0.0, "pedidos": 0},
+        tem_meta=False,
+        gasto_ads=400.0,
+    ).montar(1, date(2026, 8, 1), date(2026, 8, 5))
+    assert s["kpis"]["investimento_ads"] == 400.0
+
+
+def test_sem_pedido_sem_campanha_e_sem_gasto_de_anuncio_marca_vazio():
+    # Confirma que a nova condição não afrouxou o caso realmente vazio.
+    s = _servico(
+        kpis={"comissao_liquida": 0.0, "receita": 0.0, "gasto": 0.0,
+              "lucro": 0.0, "pedidos": 0},
+        tem_meta=False,
+        gasto_ads=0.0,
+    ).montar(1, date(2026, 8, 1), date(2026, 8, 5))
+    assert s["vazio"] is True
 
 
 def test_snapshot_e_serializavel_em_json():
