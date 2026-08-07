@@ -108,7 +108,41 @@ services:
     volumes:
       - minio_data:/data
 
+  # Evolution API para desenvolver o resumo diário no WhatsApp sem depender do
+  # servidor de homologação. Em hml/produção ela roda como recurso próprio no
+  # Coolify — ver docs/whatsapp-evolution.md.
+  #
+  # Perfil `whatsapp`: não sobe no `docker-compose up` padrão, porque conectar
+  # um número aqui e outro no Coolify na MESMA instância derruba a sessão dos
+  # dois. Suba de propósito:  docker compose --profile whatsapp up evolution
+  evolution:
+    image: evoapicloud/evolution-api:v2.2.3
+    container_name: marketdash_evolution
+    profiles: ["whatsapp"]
+    ports:
+      - "8085:8080"
+    environment:
+      AUTHENTICATION_API_KEY: chave-local-de-desenvolvimento
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://dashads_user:dashads_password@db:5432/dashads_db?schema=evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      # Cache local, não Redis: no Docker daqui o nome `redis` resolve só em
+      # IPv6 e o cliente da Evolution não conecta, enchendo o log de erro. Em
+      # produção o Redis vale a pena; para desenvolver, cache em memória basta.
+      CACHE_REDIS_ENABLED: "false"
+      CACHE_LOCAL_ENABLED: "true"
+      # Só o evento de mensagem recebida: é tudo que o webhook do SAIR precisa.
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      LOG_LEVEL: ERROR
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - evolution_data:/evolution/instances
+
 volumes:
   postgres_data:
   upload_temp_data:
   minio_data:
+  evolution_data:

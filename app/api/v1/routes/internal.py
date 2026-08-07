@@ -144,6 +144,41 @@ async def cron_facebook_sync(
     return {"status": "accepted", "mode": "background-inline"}
 
 
+@router.post("/cron/whatsapp-resumo", status_code=status.HTTP_202_ACCEPTED)
+async def cron_whatsapp_resumo(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """
+    Resumo diário no WhatsApp — pg_cron às 12h UTC (9h de Brasília).
+
+    Inline num BackgroundTask, como o sync do Facebook: o lote dorme alguns
+    segundos entre mensagens (anti-banimento), então levaria minutos e estouraria
+    o timeout de 5s do pg_net se fosse síncrono. Idempotência é do banco, não
+    daqui — o índice único de (user_id, tipo, dia) impede repetir a mensagem se
+    este endpoint for chamado duas vezes.
+
+    Query:
+      - user_id=<int> opcional — manda só para essa afiliada (teste / ops).
+    """
+    caller_ip = request.client.host if request.client else "unknown"
+    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
+
+    from app.services.whatsapp_runner import rodar_resumo_diario
+
+    bruto = request.query_params.get("user_id")
+    try:
+        apenas = int(bruto) if bruto else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="user_id inválido")
+
+    background_tasks.add_task(rodar_resumo_diario, apenas_user_id=apenas)
+    logger.info("cron.whatsapp-resumo aceito caller_ip=%s user_id=%s", caller_ip, apenas)
+    return {"status": "accepted", "mode": "background-inline"}
+
+
 @router.get("/cron/health", status_code=status.HTTP_200_OK)
 def cron_health(
     request: Request,
