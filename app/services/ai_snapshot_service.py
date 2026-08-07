@@ -16,9 +16,8 @@ from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
-from app.schemas.dashboard import DashboardFilters
 from app.services.campaign_service import CampaignService
-from app.services.dashboard_service import DashboardService
+from app.services.kpi_service import KpiService
 
 LIMITE_TOP = 5
 
@@ -38,46 +37,30 @@ class AiSnapshotService:
         return svc.list_campaigns(user_id, start_date=inicio, end_date=fim).campaigns
 
     def _kpis_do_periodo(self, user_id: int, inicio: date, fim: date) -> Dict[str, float]:
-        kpis = DashboardService.get_kpis(
-            self.db, user_id, DashboardFilters(start_date=inicio, end_date=fim)
-        )
+        """
+        KPIs do KpiService — a MESMA regra que a tela usa.
+
+        Antes lia DashboardService.get_kpis, que soma colunas cruas: `cost` e
+        `profit` estão mortas no banco (gasto vive em ad_spends), a comissão vinha
+        bruta e `pedidos` contava linha em vez de pedido distinto, inflando ~49%
+        porque a Shopee grava uma linha por item. A IA narrava lucro zero ao lado
+        de uma tela mostrando lucro real.
+        """
+        k = KpiService(self.db).kpis(user_id, inicio, fim)
         return {
-            "comissao_liquida": round(kpis.total_commission, 2),
-            "receita": round(kpis.total_revenue, 2),
-            "gasto": round(kpis.total_cost, 2),
-            "lucro": round(kpis.total_profit, 2),
-            "pedidos": int(kpis.total_rows),
+            "receita": k.faturamento,
+            "comissao_bruta": k.comissao_bruta,
+            "comissao_liquida": k.comissao_liquida,
+            "gasto_com_imposto": k.gasto_com_imposto,
+            "lucro": k.lucro,
+            "roas_real": k.roas,
+            "pedidos": k.pedidos,
+            "pedidos_diretos": k.pedidos_diretos,
         }
 
     def _tops(self, user_id: int, inicio: date, fim: date) -> Dict[str, List[Dict[str, Any]]]:
-        def agrupar(coluna):
-            linhas = (
-                self.db.query(
-                    coluna.label("chave"),
-                    func.coalesce(func.sum(DatasetRow.commission), 0).label("comissao"),
-                    func.count(DatasetRow.id).label("pedidos"),
-                )
-                .filter(
-                    DatasetRow.user_id == user_id,
-                    DatasetRow.date >= inicio,
-                    DatasetRow.date <= fim,
-                    coluna.isnot(None),
-                )
-                .group_by(coluna)
-                .order_by(func.coalesce(func.sum(DatasetRow.commission), 0).desc())
-                .limit(LIMITE_TOP)
-                .all()
-            )
-            return [
-                {"nome": r.chave, "comissao": float(r.comissao or 0), "pedidos": int(r.pedidos)}
-                for r in linhas
-            ]
-
-        return {
-            "canal": agrupar(DatasetRow.channel),
-            "categoria": agrupar(DatasetRow.category),
-            "sub_id": agrupar(DatasetRow.sub_id1),
-        }
+        """Top canal/categoria/sub_id do KpiService — mesma regra de status e imposto."""
+        return KpiService(self.db).tops(user_id, inicio, fim, limite=LIMITE_TOP)
 
     def _gasto_ads_do_periodo(self, user_id: int, inicio: date, fim: date) -> float:
         """Soma bruta de `ad_spends` no período, direto da fonte do investimento.
@@ -114,8 +97,7 @@ class AiSnapshotService:
         # `kpis` (chave distinta de "gasto") para que a IA também receba o
         # número — sem isso, um período com R$ X gastos e zero venda não teria
         # como a IA narrar o prejuízo.
-        kpis["investimento_ads"] = self._gasto_ads_do_periodo(user_id, inicio, fim)
-
+        
         campanhas: List[Dict[str, Any]] = []
         if tem_meta:
             for c in self._campanhas_do_periodo(user_id, inicio, fim):
@@ -143,7 +125,7 @@ class AiSnapshotService:
             kpis["pedidos"] == 0
             and kpis["comissao_liquida"] == 0
             and not campanhas
-            and kpis["investimento_ads"] == 0
+            and kpis["gasto_com_imposto"] == 0
         )
 
         return {

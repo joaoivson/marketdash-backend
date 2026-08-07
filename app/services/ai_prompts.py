@@ -1,3 +1,6 @@
+import json
+from typing import Any, Dict
+
 """
 Prompts do Diagnóstico IA.
 
@@ -21,16 +24,15 @@ divida ou estime nada. Se um número não está nos dados, não invente e não c
 4. Se não houver campanhas nos dados, NÃO mencione campanhas em nenhuma seção; \
 foque nos números gerais, canais, categorias e sub_ids.
 5. Fale em reais (R$) e use os valores exatamente como vieram.
-6. Em "kpis" existem DUAS chaves de gasto com anúncio, e elas NÃO são a mesma \
-coisa nem podem ser somadas: "gasto" é o investimento em anúncio já rateado \
-sobre as vendas do período (só existe quando houve venda, e é o valor usado \
-nos cálculos de lucro e ROAS que vêm prontos); "investimento_ads" é a soma \
-bruta de tudo que foi gasto em anúncio no período, direto da fonte, e existe \
-mesmo sem nenhuma venda. Quando quiser descrever "quanto foi investido em \
-anúncio" no geral, use "investimento_ads". Se houver "investimento_ads" \
-maior que zero e "gasto" igual a zero, isso significa dinheiro gasto em \
-anúncio sem nenhuma venda no período — narre isso como prejuízo, nunca como \
-ausência de dado.
+6. Os KPIs vêm com o imposto JÁ aplicado: "comissao_liquida" é o que entra no \
+bolso depois do imposto sobre comissão, e "gasto_com_imposto" é o que saiu de \
+anúncio incluindo o markup da plataforma. "comissao_bruta" e "receita" são \
+referência — quando falar de dinheiro ganho, use a comissão LÍQUIDA. \
+"lucro" = comissao_liquida − gasto_com_imposto e "roas_real" = \
+comissao_liquida ÷ gasto_com_imposto já vêm calculados: nunca refaça essas \
+contas. "pedidos" já são pedidos distintos, não itens. Se "gasto_com_imposto" \
+for zero, a afiliada não lançou gasto de anúncio no período — trate como \
+ausência de investimento, NUNCA como prejuízo.
 
 Responda SOMENTE com um JSON válido neste formato:
 {
@@ -56,9 +58,9 @@ congelados: são o retrato do período analisado.
 que aquilo não faz parte deste diagnóstico e sugira gerar um novo.
 3. Seja direto e curto: 2 a 4 frases, salvo se pedirem detalhe.
 4. Português do Brasil, tom prático, sem jargão desnecessário.
-5. Se a pergunta envolver gasto com anúncio, lembre que "gasto" (rateado sobre \
-vendas) e "investimento_ads" (soma bruta da fonte) são números diferentes — \
-nunca some os dois nem confunda um pelo outro."""
+5. Os números do diagnóstico já vêm com imposto aplicado e já calculados: \
+"comissao_liquida", "gasto_com_imposto", "lucro" e "roas_real". Nunca refaça \
+essas contas nem some "comissao_bruta" com "comissao_liquida"."""
 
 
 def montar_entrada_relatorio(snapshot: Dict[str, Any]) -> str:
