@@ -1,12 +1,20 @@
 """Acesso às sessões de diagnóstico e suas mensagens."""
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ai_diagnostic import (
-    PAPEL_USUARIA, STATUS_GERANDO, AiDiagnostic, AiDiagnosticMessage,
+    PAPEL_USUARIA, STATUS_ERRO, STATUS_GERANDO, AiDiagnostic, AiDiagnosticMessage,
 )
+
+# Índice parcial da migration 044: uma sessão "gerando" por usuária.
+INDICE_GERACAO_UNICA = "ux_ai_diagnostics_gerando_por_usuario"
+
+
+class GeracaoDuplicada(Exception):
+    """O banco recusou: já havia uma geração em andamento para esta usuária."""
 
 
 class AiDiagnosticRepository:
@@ -20,7 +28,16 @@ class AiDiagnosticRepository:
             snapshot=snapshot, status=STATUS_GERANDO,
         )
         self.db.add(sessao)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError as e:
+            # Perdemos a corrida com outra requisição da mesma usuária. Quem
+            # decide o que isso significa é o serviço; aqui só traduzimos o
+            # erro do banco para algo que não seja SQLAlchemy.
+            self.db.rollback()
+            if INDICE_GERACAO_UNICA in str(getattr(e, "orig", e)):
+                raise GeracaoDuplicada() from e
+            raise
         self.db.refresh(sessao)
         return sessao
 
@@ -42,6 +59,34 @@ class AiDiagnosticRepository:
             .filter(AiDiagnostic.user_id == user_id, AiDiagnostic.status == STATUS_GERANDO)
             .first()
         )
+
+    def expirar_travadas(self, user_id: int, limite: datetime) -> int:
+        """
+        Encerra sessões "gerando" criadas antes de `limite`.
+
+        Geração dura segundos e sempre termina em pronto/erro — sobrou em
+        "gerando" porque o processo morreu no meio. Sem isso a usuária fica
+        presa num 409 para sempre, e o índice único da 044 nunca libera.
+        """
+        n = (
+            self.db.query(AiDiagnostic)
+            .filter(
+                AiDiagnostic.user_id == user_id,
+                AiDiagnostic.status == STATUS_GERANDO,
+                AiDiagnostic.criado_em < limite,
+            )
+            .update(
+                {
+                    AiDiagnostic.status: STATUS_ERRO,
+                    AiDiagnostic.erro_mensagem: "Análise interrompida. Tente de novo.",
+                    AiDiagnostic.concluido_em: datetime.now(timezone.utc),
+                },
+                synchronize_session=False,
+            )
+        )
+        if n:
+            self.db.commit()
+        return n
 
     def listar(self, user_id: int, limite: int = 30) -> List[AiDiagnostic]:
         return (
@@ -80,7 +125,9 @@ class AiDiagnosticRepository:
         return (
             self.db.query(AiDiagnosticMessage)
             .filter(AiDiagnosticMessage.diagnostic_id == diagnostic_id)
-            .order_by(AiDiagnosticMessage.criado_em.asc())
+            # id desempata: pergunta e resposta entram no MESMO commit e podem
+            # dividir o timestamp, o que inverteria a conversa na tela.
+            .order_by(AiDiagnosticMessage.criado_em.asc(), AiDiagnosticMessage.id.asc())
             .all()
         )
 

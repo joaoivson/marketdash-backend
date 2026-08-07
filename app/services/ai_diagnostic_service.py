@@ -15,20 +15,26 @@ Dois invariantes:
      foi cobrada.
 """
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.models.ai_diagnostic import (
     PAPEL_IA, PAPEL_USUARIA, STATUS_ERRO, STATUS_PRONTO,
 )
+from app.repositories.ai_diagnostic_repository import GeracaoDuplicada
 from app.services.ai_credit_service import CUSTO_CHAT, CUSTO_GERACAO
 from app.services.ai_prompts import (
     SISTEMA_RELATORIO, montar_contexto_chat, montar_entrada_relatorio,
 )
+from app.services.ai_relatorio import RelatorioInvalido, validar_relatorio
 from app.services.openai_client import ErroIA
 
 logger = logging.getLogger(__name__)
 
 TETO_MENSAGENS = 20
+
+# Geração leva 5-15s. Passou disso, o processo morreu no meio e a sessão não
+# pode continuar bloqueando a usuária.
+TEMPO_MAXIMO_GERANDO = timedelta(minutes=15)
 
 MENSAGEM_POR_MOTIVO = {
     "sem_chave": "A análise por IA está indisponível no momento.",
@@ -58,6 +64,10 @@ class AiDiagnosticService:
         self.credito_svc = credito_svc
 
     def gerar(self, user_id: int, plano: str, inicio: date, fim: date):
+        self.repo.expirar_travadas(user_id, datetime.now(timezone.utc) - TEMPO_MAXIMO_GERANDO)
+
+        # Checagem amigável: responde 409 sem montar snapshot nem chamar a IA.
+        # Não é garantia — quem garante é o índice único, no criar() abaixo.
         em_curso = self.repo.em_andamento(user_id)
         if em_curso:
             raise GeracaoEmAndamento(em_curso.id)
@@ -72,7 +82,13 @@ class AiDiagnosticService:
             # Não gasta crédito para dizer "não há dados".
             raise PeriodoVazio()
 
-        sessao = self.repo.criar(user_id, inicio, fim, snapshot)
+        try:
+            sessao = self.repo.criar(user_id, inicio, fim, snapshot)
+        except GeracaoDuplicada:
+            # Outra requisição da mesma usuária chegou primeiro entre a
+            # checagem acima e este insert. Nada foi debitado.
+            raise GeracaoEmAndamento(None)
+
         try:
             relatorio, entrada, saida = self.cliente.completar_json(
                 SISTEMA_RELATORIO, montar_entrada_relatorio(snapshot)
@@ -88,6 +104,15 @@ class AiDiagnosticService:
             # por meses) e o custo de repetir isso aqui é alto.
             logger.exception("Diagnóstico %s: erro inesperado ao chamar a IA", sessao.id)
             return self._marcar_erro(sessao, "Falha ao gerar a análise. Tente de novo.")
+
+        # A IA respondeu JSON válido — o que não quer dizer relatório. Antes de
+        # cobrar 10 créditos, confere se há o que ler: a tela tem blindagem
+        # contra campo faltando e renderizaria uma página quase vazia calada.
+        try:
+            relatorio = validar_relatorio(relatorio)
+        except RelatorioInvalido as e:
+            logger.warning("Diagnóstico %s: relatório fora de forma (%s)", sessao.id, e)
+            return self._marcar_erro(sessao, MENSAGEM_POR_MOTIVO["formato"])
 
         # Débito ANTES de marcar pronto: a resposta da IA já está em mãos, e é
         # aqui que a corrida real acontece (tem_saldo() é leitura solta; duas

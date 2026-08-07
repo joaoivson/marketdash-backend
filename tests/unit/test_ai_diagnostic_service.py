@@ -9,22 +9,27 @@ Dois invariantes valem mais que tudo aqui:
      IA já em mãos e ANTES de marcar pronto (ou expor a resposta do chat),
      então falha da IA não debita e débito que falha não entrega.
 """
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from app.models.ai_diagnostic import STATUS_ERRO, STATUS_PRONTO
 from app.services.ai_credit_service import CUSTO_CHAT, CUSTO_GERACAO, SaldoInsuficiente
+from app.repositories.ai_diagnostic_repository import GeracaoDuplicada
 from app.services.ai_diagnostic_service import (
-    TETO_MENSAGENS, AiDiagnosticService, LimiteDeMensagens, PeriodoVazio,
+    TEMPO_MAXIMO_GERANDO, TETO_MENSAGENS, AiDiagnosticService,
+    GeracaoEmAndamento, LimiteDeMensagens, PeriodoVazio,
 )
 from app.services.openai_client import ErroIA
 
+# Relatório com seção preenchida: resumo sozinho não é entregável e o serviço
+# recusa cobrar por ele (ver test_relatorio_sem_secao_nao_debita).
 RELATORIO = {
     "resumo_executivo": "Operação saudável.",
-    "escalar": [], "pausar": [], "observar": [],
-    "detalhamento": [], "numeros": {}, "proximos_passos": [],
+    "escalar": [{"nome": "X", "motivo": "ROAS 2,4", "acao": "aumentar verba"}],
+    "pausar": [], "observar": [],
+    "detalhamento": [], "numeros": {}, "proximos_passos": ["Revisar a X."],
     "perguntas_sugeridas": ["Por que a X está no vermelho?"],
 }
 
@@ -52,6 +57,15 @@ class _FakeRepo:
     def buscar(self, diagnostic_id, user_id):
         s = self.sessoes.get(diagnostic_id)
         return s if s and s.user_id == user_id else None
+
+    def expirar_travadas(self, user_id, limite):
+        travadas = [s for s in self.sessoes.values()
+                    if s.user_id == user_id and s.status == "gerando"
+                    and getattr(s, "criado_em", None) and s.criado_em < limite]
+        for s in travadas:
+            s.status = "erro"
+            s.erro_mensagem = "Análise interrompida. Tente de novo."
+        return len(travadas)
 
     def em_andamento(self, user_id):
         return next((s for s in self.sessoes.values()
@@ -288,3 +302,77 @@ def test_falha_ao_gravar_resposta_do_chat_nao_deixa_pergunta_orfa():
 
     # Nem a pergunta da usuária pode sobrar sozinha no histórico.
     assert repo.listar_mensagens(sessao.id) == []
+
+
+# --- uma geração por vez ----------------------------------------------------
+
+class _FakeRepoQueRecusaDuplicada(_FakeRepo):
+    """Espelha o índice único da migration 044: o banco recusa a segunda
+    sessão "gerando" da mesma usuária mesmo quando a checagem em Python passa
+    (é exatamente a janela entre em_andamento() e o insert)."""
+
+    def criar(self, user_id, inicio, fim, snapshot):
+        raise GeracaoDuplicada()
+
+
+def test_geracao_simultanea_recusada_pelo_banco_vira_409_sem_debitar():
+    credito = _FakeCredito()
+    s = _servico(repo=_FakeRepoQueRecusaDuplicada(), credito=credito)
+    with pytest.raises(GeracaoEmAndamento):
+        s.gerar(1, "pro", *P)
+    assert credito.debitos == []
+
+
+def test_sessao_em_andamento_bloqueia_nova_geracao():
+    repo = _FakeRepo()
+    repo.criar(1, *P, {})   # fica em "gerando"
+    with pytest.raises(GeracaoEmAndamento):
+        _servico(repo=repo).gerar(1, "pro", *P)
+
+
+def test_sessao_travada_ha_muito_tempo_nao_bloqueia_para_sempre():
+    # Processo morreu no meio: sem expirar, a usuária levava 409 eterno.
+    repo = _FakeRepo()
+    presa = repo.criar(1, *P, {})
+    presa.criado_em = datetime.now(timezone.utc) - TEMPO_MAXIMO_GERANDO - timedelta(minutes=1)
+
+    sessao = _servico(repo=repo).gerar(1, "pro", *P)
+    assert sessao.status == STATUS_PRONTO
+    assert presa.status == STATUS_ERRO
+
+
+def test_sessao_gerando_recente_continua_bloqueando():
+    repo = _FakeRepo()
+    recente = repo.criar(1, *P, {})
+    recente.criado_em = datetime.now(timezone.utc)
+    with pytest.raises(GeracaoEmAndamento):
+        _servico(repo=repo).gerar(1, "pro", *P)
+
+
+# --- relatório fora de forma ------------------------------------------------
+
+def test_relatorio_sem_secao_nao_debita_e_termina_em_erro():
+    # JSON válido, relatório inútil: a tela renderizaria quase em branco e os
+    # 10 créditos já teriam saído.
+    credito = _FakeCredito()
+    cliente = _FakeCliente(json_resposta={"resumo_executivo": "Tudo certo."})
+    sessao = _servico(cliente=cliente, credito=credito).gerar(1, "pro", *P)
+    assert sessao.status == STATUS_ERRO
+    assert credito.debitos == []
+
+
+def test_relatorio_que_nem_e_objeto_nao_debita():
+    credito = _FakeCredito()
+    cliente = _FakeCliente(json_resposta=["lista", "no", "lugar", "errado"])
+    sessao = _servico(cliente=cliente, credito=credito).gerar(1, "pro", *P)
+    assert sessao.status == STATUS_ERRO
+    assert credito.debitos == []
+
+
+def test_relatorio_gravado_vem_normalizado():
+    cliente = _FakeCliente(json_resposta={
+        "resumo_executivo": "Resumo.", "escalar": [{"nome": "X"}], "pausar": None,
+    })
+    sessao = _servico(cliente=cliente).gerar(1, "pro", *P)
+    assert sessao.status == STATUS_PRONTO
+    assert sessao.relatorio["pausar"] == []

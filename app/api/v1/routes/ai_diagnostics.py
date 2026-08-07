@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["diagnostico-ia"])
 
+# A tela oferece 7/14/30 dias. O teto existe para o caso de alguém chamar a API
+# direto: período grande incha o snapshot, o custo do token e o tempo de
+# resposta de uma rota síncrona — pelo mesmo preço de 10 créditos.
+MAXIMO_DE_DIAS = 92
+
 
 def traduzir_erro(exc: Exception) -> Optional[HTTPException]:
     """Exceção de domínio → HTTP. Devolve None quando não é erro conhecido."""
@@ -123,6 +128,11 @@ def gerar(
 ):
     if payload.fim < payload.inicio:
         raise HTTPException(status_code=400, detail="Período inválido.")
+    if (payload.fim - payload.inicio).days + 1 > MAXIMO_DE_DIAS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"O período não pode passar de {MAXIMO_DE_DIAS} dias.",
+        )
     try:
         sessao = _servico(db).gerar(
             current_user.id, _plano(db, current_user.id), payload.inicio, payload.fim
