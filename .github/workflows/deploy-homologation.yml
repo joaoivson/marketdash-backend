@@ -8,6 +8,10 @@ on:
       - '**.md'
       - '.gitignore'
       - 'README.md'
+  # Redeploy sob demanda. Mudança de variável de ambiente no Coolify não
+  # reinicia o container sozinho, e sem este gatilho a única forma de aplicar
+  # era um commit vazio só para acordar o CI.
+  workflow_dispatch:
 
 jobs:
   validate:
