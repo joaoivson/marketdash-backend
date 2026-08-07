@@ -21,6 +21,15 @@ from app.services.kpi_service import KpiService
 
 LIMITE_TOP = 5
 
+# Rótulos de `_health` do campaign_service, em português. A regra continua sendo
+# do backend; só o texto que chega na IA muda.
+CLASSIFICACAO_EM_PORTUGUES = {
+    "healthy": "saudável",
+    "warning": "atenção",
+    "loss": "prejuízo",
+    "unlinked": "sem vínculo",
+}
+
 
 class AiSnapshotService:
     def __init__(self, db: Session):
@@ -104,8 +113,11 @@ class AiSnapshotService:
                 m = c.metrics
                 campanhas.append({
                     "nome": c.name,
-                    # classificação do backend, intocada — a IA não reclassifica
-                    "classificacao": c.health,
+                    # Classificação do backend, intocada — a IA não reclassifica.
+                    # Traduzida porque o modelo copia o rótulo para o texto: com o
+                    # enum cru saía "campanhas classificadas como 'healthy'" na
+                    # tela de uma afiliada brasileira.
+                    "classificacao": CLASSIFICACAO_EM_PORTUGUES.get(c.health, c.health),
                     "ativa": bool(c.is_active),
                     "vinculada": bool(c.linked),
                     "roas": round(float(m.roas), 2),

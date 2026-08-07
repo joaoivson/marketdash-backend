@@ -59,9 +59,11 @@ def test_campanhas_preservam_a_classificacao_do_backend():
     ]
     s = _servico(campanhas).montar(1, date(2026, 8, 1), date(2026, 8, 5))
     por_nome = {c["nome"]: c for c in s["campanhas"]}
-    assert por_nome["escala"]["classificacao"] == "healthy"
-    assert por_nome["perde"]["classificacao"] == "loss"
-    assert por_nome["limite"]["classificacao"] == "warning"
+    # O veredito é o do backend; só o rótulo vai traduzido, porque o modelo
+    # copiava o enum cru para o relatório ("classificadas como 'healthy'").
+    assert por_nome["escala"]["classificacao"] == "saudável"
+    assert por_nome["perde"]["classificacao"] == "prejuízo"
+    assert por_nome["limite"]["classificacao"] == "atenção"
     assert por_nome["perde"]["roas"] == 0.4
     assert por_nome["perde"]["lucro"] == -60.0
 
