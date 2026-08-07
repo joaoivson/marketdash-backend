@@ -44,10 +44,15 @@ Responda SOMENTE com um JSON válido neste formato:
   "pausar": [{"nome": "...", "motivo": "...", "perda": "..."}],
   "observar": [{"nome": "...", "motivo": "..."}],
   "detalhamento": [{"nome": "...", "diagnostico": "...", "custo": "..."}],
-  "numeros": {"destaque": "...", "atencao": "string vazia se não há alerta"},
+  "numeros": {"destaque": "...", "atencao": "..."},
   "proximos_passos": ["...", "...", "..."],
   "perguntas_sugeridas": ["...", "...", "..."]
 }
+Toda instrução sobre o que escrever está FORA do modelo acima: dentro dele, \
+"..." é só marcador de posição. Nunca copie para a resposta o texto de uma \
+regra — o campo tem que vir preenchido com o conteúdo real ou vazio.
+Em "numeros.atencao" devolva "" quando não houver nada a alertar; nunca \
+"Nenhuma" nem "N/A".
 Em "perda" e "custo" escreva uma frase curta com o valor em reais no formato \
 R$ 0.000,00 (ex.: "R$ 120,00 em anúncios sem retorno"). Se não houve gasto de \
 anúncio, deixe esses dois campos como string vazia — nunca devolva um número \
