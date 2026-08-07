@@ -44,7 +44,7 @@ Responda SOMENTE com um JSON válido neste formato:
   "pausar": [{"nome": "...", "motivo": "...", "perda": "..."}],
   "observar": [{"nome": "...", "motivo": "..."}],
   "detalhamento": [{"nome": "...", "diagnostico": "...", "custo": "..."}],
-  "numeros": {"destaque": "...", "atencao": "..."},
+  "numeros": {"destaque": "...", "atencao": "string vazia se não há alerta"},
   "proximos_passos": ["...", "...", "..."],
   "perguntas_sugeridas": ["...", "...", "..."]
 }
