@@ -54,3 +54,62 @@ def test_pedidos_de_saida_sao_reconhecidos(texto):
 ])
 def test_conversa_normal_nao_desliga_ninguem(texto):
     assert pediu_para_sair(texto) is False
+
+
+# --- provisionamento da instância -------------------------------------------
+#
+# Estes caminhos foram exercitados contra uma Evolution real subida localmente;
+# os mocks abaixo existem para travar o comportamento contra regressão.
+
+import httpx
+
+from app.services.evolution_client import ErroWhatsapp, EvolutionClient
+
+
+def _cliente(responder):
+    c = EvolutionClient("http://evolution", "chave", "marketdash")
+    c._transport = httpx.MockTransport(responder)
+    return c
+
+
+def test_instancia_ja_existente_nao_e_erro():
+    # A tela do admin chama isto toda vez que abre; 403 "already in use" é o
+    # caso normal a partir da segunda vez.
+    def responder(req):
+        return httpx.Response(403, json={"response": {"message": ["already in use"]}})
+
+    assert _cliente(responder).criar_instancia() == {"ja_existia": True}
+
+
+def test_falha_de_verdade_ao_criar_instancia_sobe_tipada():
+    def responder(req):
+        return httpx.Response(500, json={"message": "boom"})
+
+    with pytest.raises(ErroWhatsapp) as e:
+        _cliente(responder).criar_instancia()
+    assert e.value.motivo == "criar_instancia"
+
+
+def test_chave_invalida_continua_sendo_auth():
+    def responder(req):
+        return httpx.Response(401, json={"message": "Unauthorized"})
+
+    with pytest.raises(ErroWhatsapp) as e:
+        _cliente(responder).estado()
+    assert e.value.motivo == "auth" and e.value.fatal
+
+
+def test_webhook_manda_token_e_so_o_evento_de_mensagem():
+    capturado = {}
+
+    def responder(req):
+        import json as _json
+        capturado.update(_json.loads(req.content))
+        return httpx.Response(200, json={"ok": True})
+
+    _cliente(responder).configurar_webhook("https://api/x/webhook", "segredo")
+    wh = capturado["webhook"]
+    assert wh["enabled"] is True
+    assert wh["url"] == "https://api/x/webhook"
+    assert wh["headers"]["X-Webhook-Token"] == "segredo"
+    assert wh["events"] == ["MESSAGES_UPSERT"]

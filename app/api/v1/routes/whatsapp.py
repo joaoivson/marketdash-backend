@@ -110,11 +110,35 @@ def desligar(
 
 
 @router.get("/instancia", response_model=InstanciaResponse)
-def instancia(_: User = Depends(require_admin)):
-    """Estado do número do MarketDash + QR quando precisa parear. Só admin."""
+def instancia(request: Request, _: User = Depends(require_admin)):
+    """
+    Estado do número do MarketDash + QR quando precisa parear. Só admin.
+
+    Se a instância ainda não existe na Evolution, cria e já aponta o webhook do
+    SAIR. Antes isso eram dois `curl` no passo a passo de implantação — passos
+    que precisam ser refeitos toda vez que o ambiente é recriado ou o número é
+    trocado depois de um banimento, e que ninguém lembra na hora certa.
+    """
     cliente = _cliente()
     if not cliente.configurado():
         return InstanciaResponse(configurado=False, estado="sem_config")
+
+    try:
+        if not cliente.instancia_existe():
+            logger.info("Instância %s não existe na Evolution — criando",
+                        settings.EVOLUTION_INSTANCIA)
+            cliente.criar_instancia()
+            if settings.EVOLUTION_WEBHOOK_TOKEN:
+                url = str(request.url_for("webhook"))
+                cliente.configurar_webhook(url, settings.EVOLUTION_WEBHOOK_TOKEN)
+                logger.info("Webhook do WhatsApp apontado para %s", url)
+            else:
+                # Sem webhook, quem responder SAIR continua recebendo — e é
+                # assim que um número é denunciado.
+                logger.error("EVOLUTION_WEBHOOK_TOKEN ausente: o SAIR não vai funcionar")
+    except ErroWhatsapp as e:
+        return InstanciaResponse(configurado=True, estado=f"erro: {e.motivo}")
+
     try:
         estado = cliente.estado()
     except ErroWhatsapp as e:

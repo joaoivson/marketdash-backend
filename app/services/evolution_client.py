@@ -79,7 +79,8 @@ class EvolutionClient:
         return bool(self.base_url and self.api_key and self.instancia)
 
     def _pedir(self, metodo: str, caminho: str,
-               corpo: Optional[Dict[str, Any]] = None) -> Tuple[int, Any]:
+               corpo: Optional[Dict[str, Any]] = None,
+               auth_em_403: bool = True) -> Tuple[int, Any]:
         if not self.configurado():
             raise ErroWhatsapp("sem_config", "EVOLUTION_URL/API_KEY/INSTANCIA ausentes")
         try:
@@ -94,7 +95,10 @@ class EvolutionClient:
         except httpx.HTTPError as e:
             raise ErroWhatsapp("rede", str(e)[:120]) from e
 
-        if r.status_code in (401, 403):
+        # 403 é ambíguo na Evolution: chave errada E "instância já existe" usam
+        # o mesmo código. Quem sabe distinguir é o método que chamou — criar
+        # instância trata 403 como conflito, não como credencial inválida.
+        if r.status_code == 401 or (r.status_code == 403 and auth_em_403):
             raise ErroWhatsapp("auth", f"status {r.status_code}")
         try:
             dados = r.json()
@@ -126,6 +130,56 @@ class EvolutionClient:
         a ausência do QR como estado normal, não como erro.
         """
         _, dados = self._pedir("GET", f"/instance/connect/{self.instancia}")
+        return dados if isinstance(dados, dict) else {}
+
+    def instancia_existe(self) -> bool:
+        status, _ = self._pedir("GET", f"/instance/connectionState/{self.instancia}")
+        return status < 400
+
+    def criar_instancia(self) -> Dict[str, Any]:
+        """
+        Cria a instância se ela ainda não existe.
+
+        Antes isso era um `curl` no passo a passo de implantação, o que quer
+        dizer um passo a mais para errar toda vez que o ambiente é recriado ou
+        o número é trocado depois de um banimento. A tela do admin chama isto.
+        """
+        status, dados = self._pedir(
+            "POST", "/instance/create",
+            {"instanceName": self.instancia, "integration": "WHATSAPP-BAILEYS", "qrcode": True},
+            auth_em_403=False,
+        )
+        if status >= 400:
+            # Instância já existente é sucesso para o nosso propósito: o método
+            # é chamado toda vez que a tela do admin abre.
+            #
+            # A Evolution responde este 403 ANTES de conferir a chave, então
+            # aqui uma chave errada também cairia como "já existia". Não é
+            # problema no fluxo real: a rota chama instancia_existe() primeiro,
+            # que usa /connectionState e devolve 401 com chave inválida.
+            if any(p in str(dados).lower() for p in ("already", "in use", "exists")):
+                return {"ja_existia": True}
+            raise ErroWhatsapp("criar_instancia", f"status {status}: {str(dados)[:150]}")
+        return dados if isinstance(dados, dict) else {}
+
+    def configurar_webhook(self, url: str, token: str) -> Dict[str, Any]:
+        """
+        Aponta o webhook para a nossa API. Só MESSAGES_UPSERT: é tudo que o
+        SAIR precisa, e receber o resto seria guardar conversa alheia sem motivo.
+        """
+        status, dados = self._pedir(
+            "POST", f"/webhook/set/{self.instancia}",
+            {"webhook": {
+                "enabled": True,
+                "url": url,
+                "headers": {"X-Webhook-Token": token, "Content-Type": "application/json"},
+                "byEvents": False,
+                "base64": False,
+                "events": ["MESSAGES_UPSERT"],
+            }},
+        )
+        if status >= 400:
+            raise ErroWhatsapp("webhook", f"status {status}: {str(dados)[:150]}")
         return dados if isinstance(dados, dict) else {}
 
     def enviar_texto(self, numero: str, texto: str) -> Dict[str, Any]:
