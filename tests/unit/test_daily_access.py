@@ -33,3 +33,15 @@ def test_record_daily_access_skips_when_exists_today():
 
     db.add.assert_not_called()
     db.commit.assert_not_called()
+
+
+def test_record_daily_access_grava_ip_e_user_agent_quando_disponiveis():
+    """Item 11 (Rodada 5): sem isso, é impossível investigar um outlier de
+    acessos (várias sessões reais vs. bug de sessão reautenticando)."""
+    db = _mock_db(exists=False)
+
+    record_daily_access(db, user_id=42, ip="203.0.113.5", user_agent="Mozilla/5.0")
+
+    added = db.add.call_args[0][0]
+    assert added.ip == "203.0.113.5"
+    assert added.user_agent == "Mozilla/5.0"

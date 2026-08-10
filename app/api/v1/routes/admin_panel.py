@@ -7,7 +7,7 @@ from calendar import monthrange
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import cast, Date, func
@@ -93,6 +93,37 @@ def admin_clients(
     })
 
 
+# Espelham FREQUENCY_LABELS/STATUS_LABELS de admin-panel.service.ts (frontend)
+# — o CSV é gerado aqui no backend, então a tradução não pode vir só do TS.
+_CSV_FREQUENCY_LABELS = {
+    "monthly": "Mensal", "mensal": "Mensal",
+    "quarterly": "Trimestral", "trimestral": "Trimestral",
+    "yearly": "Anual", "annual": "Anual", "anual": "Anual",
+}
+_CSV_STATUS_LABELS = {
+    "ativo": "Ativo", "atrasado": "Atrasado", "inativo": "Inativo",
+    "cancelado_com_acesso": "Cancelado c/ acesso",
+}
+_CSV_PLAN_LABELS = {"essencial": "Essencial", "pro": "Pro", "max": "Max"}
+
+
+def _csv_cents_to_brl(cents: Optional[int]) -> str:
+    valor = (cents or 0) / 100
+    texto = f"{valor:,.2f}"
+    # pt-BR: milhar com ponto, decimal com vírgula (inverso do formato en-US do f-string).
+    texto = texto.replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"R$ {texto}"
+
+
+def _csv_date_ddmmaaaa(iso_value: Optional[str]) -> str:
+    if not iso_value:
+        return "—"
+    try:
+        return datetime.fromisoformat(iso_value.replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except ValueError:
+        return iso_value
+
+
 @router.get("/clients/export.csv")
 def export_clients_csv(
     _: User = Depends(require_admin),
@@ -101,11 +132,24 @@ def export_clients_csv(
     rows = AdminMetricsService(db).list_clients({})
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["name", "email", "plan", "frequency", "status", "next_payment", "total_paid_net_cents", "semaphore"])
+    w.writerow([
+        "Nome", "E-mail", "CPF", "Plano", "Periodicidade", "Status",
+        "Próx. cobrança", "Total pago", "Último acesso", "Semáforo",
+    ])
     for r in rows:
+        status_ = (r.get("status") or "").lower()
+        proxima_cobranca = r.get("access_until") if status_ == "cancelado_com_acesso" else r.get("next_payment")
         w.writerow([
-            r.get("name"), r.get("email"), r.get("plan"), r.get("frequency"),
-            r.get("status"), r.get("next_payment"), r.get("total_paid_net_cents"), r.get("semaphore"),
+            r.get("name"),
+            r.get("email"),
+            r.get("cpf"),
+            _CSV_PLAN_LABELS.get((r.get("plan") or "").lower(), r.get("plan")),
+            _CSV_FREQUENCY_LABELS.get((r.get("frequency") or "").lower(), r.get("frequency") or "—"),
+            _CSV_STATUS_LABELS.get(status_, r.get("status")),
+            _csv_date_ddmmaaaa(proxima_cobranca),
+            _csv_cents_to_brl(r.get("total_paid_net_cents")),
+            _csv_date_ddmmaaaa(r.get("last_login_at")),
+            r.get("semaphore"),
         ])
     buf.seek(0)
     return StreamingResponse(
@@ -468,9 +512,21 @@ def record_page_view(
 
 @router.post("/access", status_code=status.HTTP_204_NO_CONTENT)
 def record_daily_access_route(
+    request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Beacon de acesso — uma linha por autenticação (ver daily_access_service)."""
-    record_daily_access(db, user.id)
+    """Beacon de acesso — uma linha por autenticação (ver daily_access_service).
+
+    ip/user_agent gravados só pra investigar outliers (ex.: uma usuária com
+    muito mais acessos/dia que as outras) — dá pra distinguir "vários
+    dispositivos reais" de "bug de sessão reautenticando" olhando o banco,
+    o que hoje é impossível (essas colunas existem mas nunca são preenchidas).
+    """
+    record_daily_access(
+        db,
+        user.id,
+        ip=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return None

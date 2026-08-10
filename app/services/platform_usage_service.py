@@ -36,6 +36,7 @@ NOMES_DE_TELA = [
     ("/dashboard/captura-site", "Página de Captura"),
     ("/dashboard/meus-links", "Meus Links"),
     ("/dashboard/configuracoes", "Configurações"),
+    ("/dashboard/settings", "Configurações"),  # mesma tela, rota alternativa — não duplicar no ranking
     ("/dashboard/assinatura", "Assinatura"),
     ("/dashboard/afiliados", "Afiliados"),
     ("/dashboard/relatorios", "Relatórios"),
@@ -149,6 +150,7 @@ class PlatformUsageService:
             "acessos": acessos,
             "usuarias_ativas": usuarias_ativas,
             "base_ativa": len(base_ativa),
+            "contas_no_total": self._contas_no_total(),
             "taxa_uso": (
                 round(usuarias_ativas / len(base_ativa), 4) if base_ativa else None
             ),
@@ -157,17 +159,27 @@ class PlatformUsageService:
         }
 
     def _base_ativa(self) -> List[int]:
-        """Clientes com assinatura ativa (exclui admin/demo)."""
-        from app.models.subscription import Subscription
+        """Usuárias com acesso vigente HOJE (exclui admin/demo) — quem pode usar
+        a plataforma agora, independente de como paga (inclui cortesias e
+        cancelado-com-acesso). Vem de subscription_events (AdminMetricsService),
+        computado on-the-fly — não de subscriptions.is_active, que é revalidado
+        preguiçosamente (só quando a usuária bate numa rota protegida) e por
+        isso fica desatualizado pra quem churnou e nunca mais voltou a logar.
+        Também: assinantes importados (histórico Kiwify) só existem em
+        subscription_events, não em subscriptions — a fonte antiga nunca os via.
+        """
+        from app.services.admin_metrics_service import AdminMetricsService
 
         excluidos = set(self._ids_admin())
-        return [
-            uid
-            for (uid,) in self.db.query(Subscription.user_id).filter(
-                Subscription.is_active.is_(True)
-            )
-            if uid not in excluidos
-        ]
+        actives = AdminMetricsService(self.db).active_subscribers()
+        return [ev.user_id for ev in actives if ev.user_id and ev.user_id not in excluidos]
+
+    def _contas_no_total(self) -> int:
+        """Todas as contas já criadas na história (exclui admin/demo) — contexto
+        secundário do card, não mais o denominador principal (ver _base_ativa)."""
+        return self.db.query(func.count(User.id)).filter(
+            User.is_admin.is_(False), User.is_demo.is_(False)
+        ).scalar() or 0
 
     def usuarias_por_dia(self, periodo: str) -> List[Dict[str, Any]]:
         """Pessoas DISTINTAS por dia — hits inflam, distintas mostram adoção."""

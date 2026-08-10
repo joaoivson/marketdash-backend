@@ -14,6 +14,7 @@ SIGNED_IN do Supabase dispara logo em seguida.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -22,8 +23,16 @@ from app.models.user_login import UserLogin
 JANELA_DEDUPE = timedelta(minutes=2)
 
 
-def record_access(db: Session, user_id: int) -> bool:
-    """Grava uma autenticação. Retorna False quando colapsada pela janela."""
+def record_access(
+    db: Session, user_id: int, ip: Optional[str] = None, user_agent: Optional[str] = None
+) -> bool:
+    """Grava uma autenticação. Retorna False quando colapsada pela janela.
+
+    ip/user_agent são opcionais (não quebra chamadores existentes) — gravados
+    quando disponíveis pra permitir investigar outliers de acesso (várias
+    sessões reais vs. bug de sessão reautenticando), o que hoje é impossível
+    porque essas colunas existem no modelo mas nunca são preenchidas.
+    """
     agora = datetime.now(timezone.utc)
     recente = (
         db.query(UserLogin.id)
@@ -35,7 +44,7 @@ def record_access(db: Session, user_id: int) -> bool:
     )
     if recente:
         return False
-    db.add(UserLogin(user_id=user_id, logged_at=agora))
+    db.add(UserLogin(user_id=user_id, logged_at=agora, ip=ip, user_agent=user_agent))
     db.commit()
     return True
 

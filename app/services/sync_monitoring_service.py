@@ -36,7 +36,7 @@ MOTIVOS_SHOPEE = {
 MOTIVO_INTERNO = "Erro interno (nosso código)"
 MOTIVO_OUTROS = "Outros"
 
-_RE_CODIGO_SHOPEE = re.compile(r"error\s*\[(\d{4,5})\]")
+_RE_CODIGO_SHOPEE = re.compile(r"error\s*\[(\d{4,5})\]", re.IGNORECASE)
 
 
 def classificar_erro(mensagem: Optional[str]) -> Dict[str, Optional[str]]:

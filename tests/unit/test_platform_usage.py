@@ -39,6 +39,12 @@ def test_subrota_cai_na_tela_pai():
     assert nome_da_tela("/dashboard/campanhas/42") == "Campanhas"
 
 
+def test_settings_e_configuracoes_sao_a_mesma_tela():
+    """/dashboard/settings e /dashboard/configuracoes são a mesma tela em rotas
+    diferentes — não podem virar 2 entradas separadas no ranking."""
+    assert nome_da_tela("/dashboard/settings") == nome_da_tela("/dashboard/configuracoes") == "Configurações"
+
+
 def test_upload_cliques_nao_e_confundido_com_upload():
     """Prefixo mais longo primeiro — senão /upload engoliria /upload-cliques."""
     assert nome_da_tela("/dashboard/upload-cliques") == "Upload Cliques"
@@ -85,6 +91,15 @@ def test_classifica_codigos_da_shopee():
         r = classificar_erro(msg)
         assert r["codigo"] == codigo, msg
         assert r["motivo"] == rotulo
+
+
+def test_classifica_codigo_com_error_maiusculo():
+    """Mensagens de exceção variam capitalização ('Error' vs 'error') — a
+    regex precisa ser case-insensitive, senão cai em 'Outros' por acidente."""
+    msg = "Erro ao sincronizar Shopee: Error [10000]: System busy"
+    r = classificar_erro(msg)
+    assert r["codigo"] == "10000"
+    assert r["motivo"] == "Instabilidade Shopee"
 
 
 def test_credencial_traduzida_pelo_nosso_codigo_ainda_classifica():
