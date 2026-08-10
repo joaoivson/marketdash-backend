@@ -50,6 +50,9 @@ class _FakeDb:
     TABELA = {
         "u12boOS": type("Row", (), {"plano": "pro", "periodo": "mensal"})(),
         "uMRfGkI": type("Row", (), {"plano": "essencial", "periodo": "mensal"})(),
+        "rTfikTj": type("Row", (), {"plano": "max", "periodo": "mensal"})(),
+        "HPql4oU": type("Row", (), {"plano": "max", "periodo": "trimestral"})(),
+        "5l1Sdau": type("Row", (), {"plano": "max", "periodo": "anual"})(),
     }
 
     def query(self, _modelo):
@@ -106,6 +109,15 @@ def test_encontra_essencial_mensal():
     payload = dict(PAYLOAD_RUBIANE, checkout_link="uMRfGkI")
     row = _lookup_plan_product(_FakeDb(), _plan_lookup_keys(payload))
     assert (row.plano, row.periodo) == ("essencial", "mensal")
+
+
+def test_checkout_link_max_e_reconhecido():
+    """As 3 ofertas MAX (mensal/trimestral/anual) precisam ser reconhecidas
+    pelo mesmo caminho — o webhook não sabe nada sobre tiers específicos."""
+    for slug, periodo in (("rTfikTj", "mensal"), ("HPql4oU", "trimestral"), ("5l1Sdau", "anual")):
+        payload = dict(PAYLOAD_RUBIANE, checkout_link=slug)
+        row = _lookup_plan_product(_FakeDb(), _plan_lookup_keys(payload))
+        assert (row.plano, row.periodo) == ("max", periodo)
 
 
 def test_slug_desconhecido_retorna_none():

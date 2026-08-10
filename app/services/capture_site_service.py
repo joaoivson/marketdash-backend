@@ -37,12 +37,15 @@ class CaptureSiteService:
         return plan_limit(normalize_plan(sub.plan if sub else None), "paginas_captura")
 
     def create_site(self, user_id: int, site_in: CaptureSiteCreate) -> CaptureSite:
+        from app.core.plans import is_unlimited
+
         existing_sites = self.repository.get_by_user(user_id)
         max_sites = self._max_sites(user_id)
-        if max_sites <= 0:
-            raise ValueError("PLANO_INSUFICIENTE: Páginas de captura disponíveis no plano Pro")
-        if len(existing_sites) >= max_sites:
-            raise ValueError(f"Limite de {max_sites} páginas de captura atingido")
+        if not is_unlimited(max_sites):
+            if max_sites <= 0:
+                raise ValueError("PLANO_INSUFICIENTE: Páginas de captura disponíveis no plano Pro")
+            if len(existing_sites) >= max_sites:
+                raise ValueError(f"Limite de {max_sites} páginas de captura atingido")
 
         # Check slug uniqueness before creation
         if site_in.slug:

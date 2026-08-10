@@ -42,12 +42,15 @@ class CustomLinkService:
         return plan_limit(normalize_plan(sub.plan if sub else None), "links")
 
     def create_link(self, user_id: int, link_in: CustomLinkCreate) -> CustomLink:
+        from app.core.plans import is_unlimited
+
         existing_links = self.repository.get_by_user(user_id)
         max_links = self._max_links(user_id)
-        if max_links <= 0:
-            raise ValueError("PLANO_INSUFICIENTE: Links rastreáveis disponíveis no plano Pro")
-        if len(existing_links) >= max_links:
-            raise ValueError(f"Limite de {max_links} links atingido")
+        if not is_unlimited(max_links):
+            if max_links <= 0:
+                raise ValueError("PLANO_INSUFICIENTE: Links rastreáveis disponíveis no plano Pro")
+            if len(existing_links) >= max_links:
+                raise ValueError(f"Limite de {max_links} links atingido")
 
         if link_in.slug:
             existing = self.repository.get_by_slug(link_in.slug)

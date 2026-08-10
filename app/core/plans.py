@@ -36,7 +36,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "label": "Pro",
     },
     "max": {
-        # Futuro — espelha Pro até haver regras próprias.
+        # Ainda fora da página de vendas — liberado só por link direto Kiwify.
         "menus": frozenset(
             {
                 "dashboard",
@@ -50,10 +50,18 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": 50, "links": 100, "creditos_ia": 1000},
+        "limites": {"paginas_captura": -1, "links": -1, "creditos_ia": 1000},
         "label": "Max",
     },
 }
+
+# Sentinela de "ilimitado" em plan_limit() — mantém o retorno int (sem mudar
+# assinatura pra Optional). -1 nunca é um limite real válido.
+UNLIMITED = -1
+
+
+def is_unlimited(value: int) -> bool:
+    return value == UNLIMITED
 
 # Menus que exigem plano Pro (cadeado no Essencial).
 PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links", "diagnostico_ia"})
@@ -112,6 +120,18 @@ CHECKOUT_LINKS: Dict[tuple[str, str], Dict[str, str]] = {
     ("pro", "anual"): {
         "price": "447",
         "url": "https://pay.kiwify.com.br/4lhuudg",
+    },
+    ("max", "mensal"): {
+        "price": "97",
+        "url": "https://pay.kiwify.com.br/rTfikTj",
+    },
+    ("max", "trimestral"): {
+        "price": "207",
+        "url": "https://pay.kiwify.com.br/HPql4oU",
+    },
+    ("max", "anual"): {
+        "price": "627",
+        "url": "https://pay.kiwify.com.br/5l1Sdau",
     },
 }
 
