@@ -5,6 +5,7 @@ from calendar import monthrange
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -31,6 +32,10 @@ REFUND_EVENTS = {
     "compra_reembolsada",
 }
 CANCEL_EVENTS = {"subscription_canceled"}
+# Cancelamento feito pelo produtor (ajuste/teste do Luiz no painel Kiwify) não é
+# churn real — cliente não saiu, foi um ajuste administrativo. is_plan_change
+# não serve pra isso (é semântica de continuação/upgrade); cancel_reason sim.
+PRODUTOR_ADJUSTMENT_REASONS = {"cancelado pelo produtor"}
 FAILED_PAY_EVENTS = {
     "subscription_late",
     "order_refused",
@@ -38,11 +43,26 @@ FAILED_PAY_EVENTS = {
 }
 
 
+BRT = ZoneInfo("America/Sao_Paulo")
+
+
 def _month_bounds(year: int, month: int) -> Tuple[datetime, datetime]:
-    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    """Início/fim do mês em BRT (America/Sao_Paulo), convertidos pra instantes
+    UTC — todo dado é gravado em UTC, mas o negócio é brasileiro. Sem isso, uma
+    cobrança de véspera de virada de mês perto da meia-noite (ex.: 21h BRT =
+    00h UTC do dia seguinte) cai no mês civil errado."""
+    start = datetime(year, month, 1, tzinfo=BRT).astimezone(timezone.utc)
     last = monthrange(year, month)[1]
-    end = datetime(year, month, last, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    end = (
+        datetime(year, month, last, 23, 59, 59, 999999, tzinfo=BRT)
+        .astimezone(timezone.utc)
+    )
     return start, end
+
+
+def _brt_date(dt: datetime) -> date:
+    """Data civil (BRT) de um datetime aware — para bucketing por mês."""
+    return dt.astimezone(BRT).date()
 
 
 def _freq_divisor(frequency: Optional[str]) -> int:
@@ -210,8 +230,19 @@ def _charges_completed_for_event(ev) -> list:
 
 
 def extract_paid_charges_union(events) -> list[dict]:
-    """Une charges.completed de vários webhooks; dedupe por order_id; só status paid."""
+    """Une charges.completed de vários webhooks; dedupe por order_id; só status paid.
+
+    O array `charges.completed` é cumulativo: um webhook de renovação cita
+    cobranças antigas da mesma assinatura, às vezes sem o bloco `Commissions`
+    completo (só `amount`). Se um evento posterior processasse por cima com
+    esse `amount` fraco, uma fonte com `my_commission` correto (líquido já
+    pós-afiliado) seria substituída por um valor pré-afiliado — inflando o
+    faturamento exatamente pelo valor da comissão do afiliado. Por isso: uma
+    fonte "forte" (com `Commissions.my_commission` explícito) nunca é
+    sobrescrita por uma fonte "fraca" (só `amount`) do mesmo order_id.
+    """
     by_id: dict[str, dict] = {}
+    fonte_forte: dict[str, bool] = {}
     for ev in events:
         for ch in _charges_completed_for_event(ev):
             if not isinstance(ch, dict):
@@ -221,7 +252,11 @@ def extract_paid_charges_union(events) -> list[dict]:
             oid = ch.get("order_id")
             if not oid:
                 continue
+            oid = str(oid)
             commissions = ch.get("Commissions") or ch.get("commissions") or {}
+            forte = commissions.get("my_commission") is not None or ch.get("my_commission") is not None
+            if oid in by_id and fonte_forte.get(oid) and not forte:
+                continue
             net = _charge_as_cents(
                 commissions.get("my_commission")
                 or ch.get("my_commission")
@@ -247,8 +282,8 @@ def extract_paid_charges_union(events) -> list[dict]:
 
             fee = raw_fee if raw_fee else max(gross - net, 0)
 
-            by_id[str(oid)] = {
-                "order_id": str(oid),
+            by_id[oid] = {
+                "order_id": oid,
                 "net_cents": net,
                 "gross_cents": gross,
                 "fee_cents": fee,
@@ -256,6 +291,7 @@ def extract_paid_charges_union(events) -> list[dict]:
                 "plan": plan,
                 "frequency": freq,
             }
+            fonte_forte[oid] = forte
     return list(by_id.values())
 
 
@@ -269,7 +305,9 @@ def revenue_from_charges_for_month(events, year: int, month: int) -> dict:
         dt = c.get("paid_at")
         if not dt:
             continue
-        d = dt.date() if hasattr(dt, "date") else dt
+        # Mês civil BRT, não UTC — cobrança de fim de mês perto da meia-noite
+        # (ex.: 21h BRT = 00h UTC do dia seguinte) senão cai no mês errado.
+        d = _brt_date(dt) if isinstance(dt, datetime) else dt
         if d.year == year and d.month == month:
             net += c["net_cents"]
             gross += c["gross_cents"]
@@ -301,7 +339,7 @@ def _fees_from_charges_for_month(events, year: int, month: int) -> int:
         dt = c.get("paid_at")
         if not dt:
             continue
-        d = dt.date() if hasattr(dt, "date") else dt
+        d = _brt_date(dt) if isinstance(dt, datetime) else dt
         if d.year == year and d.month == month:
             fees += c.get("fee_cents") if c.get("fee_cents") is not None else max(
                 (c["gross_cents"] or 0) - (c["net_cents"] or 0), 0
@@ -339,6 +377,14 @@ _SUBSCRIBER_STATE_PRIORITY = {
     "order_refunded": 2,
     "order_chargedback": 2,
     "chargeback": 2,
+    # Snapshot de estado do import histórico Kiwify — precisa do mesmo tier de
+    # subscription_canceled: sem isso, alguém com uma assinatura CANCELADA
+    # antiga (prioridade 2) seguida de uma ATIVA nova (sem isto, prioridade 0)
+    # sob o mesmo CPF tem o evento cancelado antigo vencendo o "latest" mesmo
+    # sendo cronologicamente anterior — puxando plano/periodicidade errados
+    # pro cálculo de MRR (caso real: Laysla e Cristiana, cada uma com uma
+    # assinatura cancelada de periodicidade diferente da atual).
+    "import_subscription_active": 2,
     "order_approved": 1,
     "compra_aprovada": 1,
 }
@@ -396,7 +442,16 @@ class AdminMetricsService:
         self.db = db
 
     def _all_events(self) -> List[SubscriptionEvent]:
-        return self.db.query(SubscriptionEvent).order_by(SubscriptionEvent.received_at.asc()).all()
+        # id como desempate: dois eventos com o MESMO received_at (caso real do
+        # import histórico — continuação, cancela e reassina no mesmo instante)
+        # ficariam em ordem não-determinística só com received_at, e
+        # _latest_by_subscriber() decidiria "o estado atual" ao acaso a cada
+        # query. id crescente = ordem de inserção, desempate estável.
+        return (
+            self.db.query(SubscriptionEvent)
+            .order_by(SubscriptionEvent.received_at.asc(), SubscriptionEvent.id.asc())
+            .all()
+        )
 
     def active_subscribers(self, as_of: Optional[date] = None) -> List[SubscriptionEvent]:
         today = as_of or datetime.now(timezone.utc).date()
@@ -405,17 +460,19 @@ class AdminMetricsService:
 
     def mrr_cents(self, actives: Optional[List[SubscriptionEvent]] = None) -> Dict[str, int]:
         actives = actives if actives is not None else self.active_subscribers()
-        net = 0
-        gross = 0
+        # Precisão cheia por assinante, arredonda só no total — dividir em inteiro
+        # (`// div`) por assinante perde centavos a cada um antes de somar.
+        net_frac = 0.0
+        gross_frac = 0.0
         for ev in actives:
             div = _freq_divisor(ev.plan_frequency)
             # última cobrança paga da assinatura
             paid = self._last_paid_for(ev)
             n = (paid.amount_net_cents if paid else ev.amount_net_cents) or 0
             g = (paid.amount_gross_cents if paid else ev.amount_gross_cents) or 0
-            net += n // div
-            gross += g // div
-        return {"net": net, "gross": gross}
+            net_frac += n / div
+            gross_frac += g / div
+        return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
 
     def mrr_at(
         self,
@@ -425,7 +482,8 @@ class AdminMetricsService:
         """MRR num instante: soma das assinaturas cuja vigência paga cobre `momento`."""
         if periodos is None:
             periodos = build_coverage_periods(self._all_events())
-        net = gross = 0
+        # Mesmo cuidado de mrr_cents: precisão cheia por assinante, arredonda só no total.
+        net_frac = gross_frac = 0.0
         for lista in periodos.values():
             # o período mais recente que cobre o instante (renovação sobrepõe a anterior)
             cobrindo = None
@@ -434,9 +492,9 @@ class AdminMetricsService:
                     if cobrindo is None or p["inicio"] > cobrindo["inicio"]:
                         cobrindo = p
             if cobrindo:
-                net += cobrindo["net_cents"] // cobrindo["divisor"]
-                gross += cobrindo["gross_cents"] // cobrindo["divisor"]
-        return {"net": net, "gross": gross}
+                net_frac += cobrindo["net_cents"] / cobrindo["divisor"]
+                gross_frac += cobrindo["gross_cents"] / cobrindo["divisor"]
+        return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
 
     def _last_paid_for(self, ev: SubscriptionEvent) -> Optional[SubscriptionEvent]:
         q = self.db.query(SubscriptionEvent).filter(SubscriptionEvent.event_type.in_(PAID_EVENTS))
@@ -522,6 +580,11 @@ class AdminMetricsService:
             )
             .all()
         )
+        # Ajuste do produtor não é churn real — cliente não saiu.
+        cancels = [
+            c for c in cancels
+            if (c.cancel_reason or "").strip().lower() not in PRODUTOR_ADJUSTMENT_REASONS
+        ]
         # unique by subscriber
         keys = {_subscriber_key(c) for c in cancels}
         n = len(keys)
@@ -674,7 +737,7 @@ class AdminMetricsService:
             dt = c.get("paid_at")
             if not dt:
                 continue
-            d = dt.date() if hasattr(dt, "date") else dt
+            d = _brt_date(dt) if isinstance(dt, datetime) else dt
             if (d.year, d.month) < (rev_y, rev_m):
                 rev_y, rev_m = d.year, d.month
 
@@ -861,11 +924,16 @@ class AdminMetricsService:
                 .first()
             )
 
-            sub_filter = (
-                (SubscriptionEvent.subscription_id == ev.subscription_id)
-                if ev.subscription_id
-                else (SubscriptionEvent.customer_email == ev.customer_email)
-            )
+            # Mesma prioridade de _subscriber_key() (subscription_id → CPF → e-mail) —
+            # sem isso, 2 assinaturas de uma mesma pessoa com CPFs diferentes mas o
+            # mesmo e-mail (ex.: reassinatura com CPF trocado) caem no filtro por
+            # e-mail e mostram o total pago das DUAS combinado em cada linha.
+            if ev.subscription_id:
+                sub_filter = SubscriptionEvent.subscription_id == ev.subscription_id
+            elif ev.customer_cpf:
+                sub_filter = SubscriptionEvent.customer_cpf == ev.customer_cpf
+            else:
+                sub_filter = SubscriptionEvent.customer_email == ev.customer_email
             sub_events = self.db.query(SubscriptionEvent).filter(sub_filter).all()
             # Preferir união de charges paid; fallback legado se união vazia
             # (sem array OU só waiting_payment / não-paid).
@@ -954,11 +1022,15 @@ class AdminMetricsService:
         )
         latest = events[0] if events else None
         clients = self.list_clients({"q": user.email})
-        base = clients[0] if clients else {
-            "user_id": user_id,
-            "name": user.name,
-            "email": user.email,
-        }
+        # Pessoa com mais de uma assinatura histórica (CPFs diferentes, ex.: caso
+        # Alexandre) aparece como mais de uma linha em list_clients — pega a mais
+        # recente (started_at), senão a ficha mostraria o status/plano de uma
+        # assinatura antiga em vez do estado atual.
+        base = (
+            max(clients, key=lambda c: c.get("started_at") or "")
+            if clients
+            else {"user_id": user_id, "name": user.name, "email": user.email}
+        )
         logins = (
             self.db.query(UserLogin)
             .filter(UserLogin.user_id == user_id, UserLogin.logged_at >= datetime.now(timezone.utc) - timedelta(days=30))

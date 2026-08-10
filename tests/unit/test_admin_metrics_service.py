@@ -354,3 +354,20 @@ def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
     # começa no mês da cobrança retroativa junto com o faturamento — antes ela
     # começava no primeiro received_at e o passado ficava sem MRR.
     assert mrr_months == ["2026-04", "2026-05", "2026-06", "2026-07"]
+
+
+def test_mrr_cents_nao_perde_centavos_com_divisao_por_assinante():
+    """3 assinantes trimestrais com resto não-nulo cada (100/3 = 33,33...) — a
+    divisão inteira por assinante (100 // 3 = 33) perderia 1 centavo em cada um,
+    3 no total. Precisão cheia + arredondar só a soma preserva o valor exato."""
+    from app.services.admin_metrics_service import AdminMetricsService
+
+    svc = AdminMetricsService.__new__(AdminMetricsService)  # sem DB
+    svc._last_paid_for = lambda ev: None  # força usar amount_net_cents/gross direto
+    actives = [
+        SimpleNamespace(plan_frequency="quarterly", amount_net_cents=100, amount_gross_cents=100)
+        for _ in range(3)
+    ]
+    result = svc.mrr_cents(actives)
+    assert result["net"] == 100  # não 99 (3 × (100 // 3))
+    assert result["gross"] == 100

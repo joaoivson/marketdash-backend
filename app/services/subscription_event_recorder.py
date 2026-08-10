@@ -142,8 +142,23 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
     }
 
 
-def _mark_plan_change_if_needed(db: Session, fields: Dict[str, Any]) -> bool:
-    """Anti-churn falso: mesmo CPF cancela e reassina plano diferente em ≤30 dias."""
+def _mark_plan_change_if_needed(
+    db: Session, fields: Dict[str, Any], reference_time: Optional[datetime] = None
+) -> bool:
+    """Anti-churn falso: mesmo CPF cancela e reassina em janela curta.
+
+    Duas regras, mesmo mecanismo (`is_plan_change=True` nos dois eventos
+    envolvidos, filtrado tanto em churn_for_month quanto em new_subscriptions):
+    - Continuação: cancela e reassina o MESMO plano em ≤1 dia (troca de forma
+      de pagamento, não saiu de verdade — ex.: mesma pessoa, mesmo instante).
+    - Upgrade/downgrade: cancela e reassina plano DIFERENTE em ≤30 dias.
+
+    `reference_time` (default None → datetime.now()) existe pra permitir
+    processar eventos HISTÓRICOS com a janela ancorada na data do próprio
+    evento, não em "agora" — sem isso, importar uma linha de abril nunca
+    dispara a regra, porque abril já estaria fora da janela de 30 dias
+    contados da data de execução do import.
+    """
     cpf = fields.get("customer_cpf")
     event = fields.get("event_type") or ""
     if not cpf:
@@ -151,12 +166,15 @@ def _mark_plan_change_if_needed(db: Session, fields: Dict[str, Any]) -> bool:
 
     from datetime import timedelta
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    agora = reference_time or datetime.now(timezone.utc)
+    cutoff = agora - timedelta(days=30)
     recent = (
         db.query(SubscriptionEvent)
         .filter(
             SubscriptionEvent.customer_cpf == cpf,
             SubscriptionEvent.received_at >= cutoff,
+            SubscriptionEvent.received_at <= agora,
+            SubscriptionEvent.event_type == "subscription_canceled",
         )
         .order_by(SubscriptionEvent.received_at.desc())
         .limit(20)
@@ -164,15 +182,21 @@ def _mark_plan_change_if_needed(db: Session, fields: Dict[str, Any]) -> bool:
     )
 
     paid_like = event in ("order_approved", "subscription_renewed", "compra_aprovada")
-    cancel_like = event in ("subscription_canceled", "order_refunded", "order_chargedback")
-
-    if paid_like:
-        for ev in recent:
-            if (ev.event_type or "") in ("subscription_canceled",) and (ev.plan_name or "") != (fields.get("plan_name") or ""):
-                return True
-    if cancel_like:
-        # marcado no cancel se depois vier upgrade; aqui só prepara — o paid seta a flag
+    if not paid_like:
         return False
+
+    for ev in recent:
+        recebido = ev.received_at
+        if recebido is not None and recebido.tzinfo is None:
+            recebido = recebido.replace(tzinfo=timezone.utc)
+        gap = agora - (recebido or agora)
+        mesmo_plano = (ev.plan_name or "") == (fields.get("plan_name") or "") and (
+            ev.plan_frequency or ""
+        ) == (fields.get("plan_frequency") or "")
+        if mesmo_plano and gap <= timedelta(days=1):
+            return True  # continuação
+        if not mesmo_plano and gap <= timedelta(days=30):
+            return True  # upgrade/downgrade
     return False
 
 
@@ -249,6 +273,19 @@ def record_subscription_event(
         )
         db.add(row)
         db.flush()
+
+        # Backfill: assim que a Kiwify manda um subscription_id real pra um CPF
+        # que já tinha histórico órfão (ex.: importado sem subscription_id, ou
+        # de antes desse campo existir), "adota" retroativamente esse histórico
+        # pro mesmo grupo — sem isso, a pessoa vira "2 assinantes" a partir da
+        # primeira renovação real pós-import (o histórico fica preso na chave
+        # por CPF, o evento novo abre uma chave por subscription_id à parte).
+        if fields.get("subscription_id") and fields.get("customer_cpf"):
+            db.query(SubscriptionEvent).filter(
+                SubscriptionEvent.customer_cpf == fields["customer_cpf"],
+                SubscriptionEvent.subscription_id.is_(None),
+            ).update({"subscription_id": fields["subscription_id"]}, synchronize_session=False)
+
         logger.info(
             "subscription_event recorded type=%s order=%s",
             fields["event_type"],

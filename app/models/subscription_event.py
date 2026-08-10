@@ -42,6 +42,8 @@ class SubscriptionEvent(Base):
     subscription_start = Column(DateTime(timezone=True), nullable=True)
     approved_date = Column(DateTime(timezone=True), nullable=True)
     refunded_at = Column(DateTime(timezone=True), nullable=True)
+    canceled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
     funds_status = Column(Text, nullable=True)
     deposit_date = Column(DateTime(timezone=True), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)

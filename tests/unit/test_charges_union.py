@@ -153,6 +153,22 @@ def test_installment_surcharge_does_not_inflate_gross():
     assert c["fee_cents"] == 1130
 
 
+def test_fonte_forte_nao_e_sobrescrita_por_fonte_fraca_do_mesmo_order_id():
+    """Webhook A (dono da cobrança) traz Commissions.my_commission correto (pós-
+    afiliado). Webhook B, posterior, só CITA a mesma cobrança no histórico
+    cumulativo, sem o bloco Commissions — só um "amount" pré-afiliado, maior.
+    O valor forte deve vencer, mesmo processado antes do fraco."""
+    forte = {
+        "order_id": "o1", "status": "paid", "approved_date": "2026-08-03",
+        "Commissions": {"my_commission": 4235, "charge_amount": 6700, "kiwify_fee": 2465},
+    }
+    fraca = {"order_id": "o1", "status": "paid", "approved_date": "2026-08-03", "amount": 6700}
+    events = [_ev([forte], event_type="order_approved"), _ev([fraca], event_type="subscription_renewed")]
+    union = extract_paid_charges_union(events)
+    assert len(union) == 1
+    assert union[0]["net_cents"] == 4235
+
+
 def test_paid_total_falls_back_when_only_non_paid_charges():
     waiting = {
         "order_id": "w1",
