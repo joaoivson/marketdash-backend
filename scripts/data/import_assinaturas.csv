@@ -1,0 +1,44 @@
+nome,email,cpf,telefone,plano,periodicidade,liquido_cents,status,inicio_brt,ultima_cobranca_brt,acesso_ate_brt,cancelada_em_brt,motivo_cancelamento,ja_no_painel
+Luiz Fernando de Oliveira,lfernandooliveira@outlook.com,11355560675,5534997936282,Pro,monthly,6050,canceled,2026-04-07 20:36,2026-04-07 20:36,2026-05-07 20:36,2026-04-09 13:23,Cancelado pelo produtor,nao
+Lara Luiza Da silva,laraluiza12@icloud.com,14193503666,5534999628464,Pro,monthly,6050,canceled,2026-04-10 09:14,2026-04-10 09:14,2026-05-10 09:14,2026-04-10 18:35,Cancelado pelo produtor,nao
+Lara Luiza Da silva,laraluiza12@icloud.com,14193503666,5534999628464,Pro,monthly,6050,canceled,2026-04-12 12:07,2026-04-12 12:07,2026-05-12 12:07,2026-04-14 11:32,Cancelado pelo produtor,nao
+Luiz Fernando de Oliveira,lfernandooliveira@outlook.com,11355560675,5534997936282,Pro,monthly,6050,canceled,2026-04-14 11:23,2026-05-14 04:45,2026-06-14 04:45,2026-06-15 10:50,Cancelado pelo comprador,nao
+Karem Cristina Martins de Sousa,karem.sousa@yahoo.com,40406231850,5518996653829,Pro,monthly,6050,active,2026-04-14 14:50,2026-07-15 03:19,2026-08-15 03:19,,,nao
+Monique Gonçalves Passos,monygpassos@yahoo.com.br,6057524519,5573981797088,Pro,monthly,6050,canceled,2026-04-18 08:29,2026-05-18 04:06,2026-06-18 04:06,2026-06-18 21:00,Cancelado pelo comprador,nao
+Debora Luiza Oliveira,debora.uiza@hotmail.com,5552767675,5534996554343,Pro,monthly,6050,canceled,2026-04-22 17:28,2026-04-22 17:28,2026-05-22 17:29,2026-07-02 03:30,Pagamento não efetuado,nao
+LAYSLA SABRIENE DE FATIMA MENDES,laysla726@gmail.com,10576183652,5534992241049,Pro,yearly,41773,canceled,2026-04-27 20:12,2026-04-27 20:12,2027-04-27 20:12,2026-05-06 10:39,Cancelado pelo produtor,nao
+Bruna Alves dos Santos,bas_alves@hotmail.com,10329701975,5545998034142,Pro,quarterly,13570,canceled,2026-04-28 06:10,2026-04-28 06:10,2026-07-28 06:10,2026-08-05 08:45,Pagamento não efetuado,nao
+Cristina Aparecida Dias De Paula,cd052923@gmail.com,12854404637,5534996746376,Pro,monthly,6050,canceled,2026-05-02 12:16,2026-05-02 12:16,2026-06-02 12:17,2026-07-02 05:20,Pagamento não efetuado,nao
+Neidiane Rader,neydyrader@hotmail.com,5123436910,5545999900937,Pro,yearly,41773,active,2026-05-04 17:27,2026-05-04 17:27,2027-05-04 17:27,,,nao
+Alexandre Marinho Rodrigues,alexandrerodivas@gmail.com,10677893671,5533999572450,Pro,monthly,6050,canceled,2026-05-05 01:05,2026-05-05 01:05,2026-06-05 01:05,2026-07-02 05:50,Pagamento não efetuado,nao
+Cristiana de Fatima  Cota,cristiana.cota@gmail.com,2253612995,5541984192401,Pro,yearly,41773,canceled,2026-05-18 16:15,2026-05-18 16:15,2027-05-18 16:15,2026-05-22 18:40,Cancelado pelo produtor,nao
+Emanuelle Machado,machado.e.carine@gmail.com,6616678474,5567999021035,Pro,quarterly,13570,active,2026-05-22 23:00,2026-05-22 23:00,2026-08-22 23:00,,,nao
+Letícia Opuchkevich,leticiaopuchkevich2006@gmail.com,9364074920,5541995309335,Pro,monthly,6050,active,2026-05-25 22:00,2026-07-25 03:15,2026-08-25 03:15,,,sim
+nadege maria da costa de oliveira,nadegemaria07@icloud.com,5288315183,5569992613091,Pro,monthly,6050,canceled,2026-05-30 13:49,2026-05-30 13:49,2026-06-30 13:49,2026-07-11 00:55,Pagamento não efetuado,nao
+Irina kasburg da Silva,nina_bonzatto@hotmail.com,9853747995,5541999868754,Pro,monthly,6050,active,2026-05-30 17:23,2026-07-30 02:45,2026-08-30 02:45,,,sim
+Cristiana de Fatima  Cota,cristiana.cota@gmail.com,2253612995,5541984192401,Pro,quarterly,13570,active,2026-05-31 18:43,2026-05-31 18:43,2026-08-31 18:43,,,nao
+breno mendonca silva,brenoms01@hotmail.com,10496478664,5534997729080,Pro,quarterly,13570,active,2026-05-31 21:09,2026-05-31 21:09,2026-08-31 21:09,,,nao
+KATIA MARIA DA SILVA TOSTES MENDES,katiatostesmendes@gmail.com,8846951743,5521974210201,Pro,quarterly,13570,active,2026-06-03 19:24,2026-06-03 19:24,2026-09-03 19:26,,,nao
+Vivian de Paula Oro,viviandepaulaoro@gmail.com,4711897909,5542999422833,Pro,quarterly,13570,active,2026-06-03 21:34,2026-06-03 21:34,2026-09-03 21:34,,,nao
+Lígia Bohn,ligiabohn10@gmail.com,176169059,5555999439349,Pro,quarterly,8142,active,2026-06-05 11:20,2026-06-05 11:20,2026-09-05 11:20,,,nao
+DAYANE CRUZ BINDA,dayanempu@hotmail.com,1650403275,5592993481395,Pro,monthly,6050,canceled,2026-06-08 00:05,2026-06-08 00:05,2026-07-08 00:06,2026-07-14 00:15,Pagamento não efetuado,nao
+THAIS CRISTHINA SILVA,thaiscsilva2008@hotmail.com,13108072641,5534999234436,Pro,yearly,41773,active,2026-06-11 10:58,2026-06-11 10:58,2027-06-11 10:58,,,nao
+Luiz Fernando de Oliveira,lfernandooliveira@outlook.com,11355560675,5534997936282,Pro,monthly,6050,active,2026-06-15 10:50,2026-07-15 05:06,2026-08-15 05:06,,,nao
+Rafael Henrique Ferreira Pinheiro,fael-e.hf@hotmail.com,13451629607,5531973409231,Pro,monthly,6050,canceled,2026-06-29 13:18,2026-06-29 13:18,2026-07-29 13:19,2026-08-04 13:25,Pagamento não efetuado,sim
+Geisielle Henrique Carvalho,geisielleh.c@gmail.com,2166476651,5517992722852,Pro,quarterly,13570,active,2026-07-05 22:47,2026-07-05 22:47,2026-10-05 22:47,,,nao
+LILIAN SILVA MATOS,lilian.silva.matos@gmail.com,11012432602,5534996837883,Pro,quarterly,13570,active,2026-07-06 09:53,2026-07-06 09:53,2026-10-06 09:53,,,nao
+Alexandre Marinho Rodrigues,alexandrerodivas@gmail.com,11068644680,5533999572450,Pro,monthly,6050,active,2026-07-09 14:17,2026-08-09 07:39,2026-09-09 00:00,,,sim
+Girlene Batista da Silva,girlenesilva1718@gmail.com,10119158558,5534999364963,Pro,monthly,6050,active,2026-07-10 12:45,2026-07-10 12:45,2026-08-10 12:47,,,nao
+Daniel Silva,danielsilvavilarinho92@gmail.com,9418793644,5534996863183,Pro,quarterly,13570,canceled,2026-07-10 19:10,2026-07-10 19:10,2026-10-10 19:12,2026-07-21 07:15,Cancelado pelo comprador no app do banco,sim
+Fabiana Cezaria de Souza Silvestre Canata,canatafabiana@gmail.com,21943221839,5518996871267,Pro,monthly,4235,active,2026-07-12 11:55,2026-07-12 11:55,2026-08-12 11:56,,,nao
+anaisa.berbel@hotmail.com,anaisa.berbel@hotmail.com,40093629877,5518996823478,Pro,monthly,4235,active,2026-07-13 22:36,2026-07-13 22:36,2026-08-13 22:36,,,nao
+Deivit Rafael Ferreira Martins,deivitrafael56@gmail.com,9784781697,5534999810777,Essencial,monthly,4169,canceled,2026-07-31 19:05,2026-07-31 19:05,2026-08-31 19:06,2026-07-31 19:07,Cancelado pelo comprador no app do banco,sim
+rubiane de melo carvalho,rubianekrisca@hotmail.com,962240028,5551993401054,Pro,monthly,6050,active,2026-08-02 15:23,2026-08-02 15:23,2026-09-02 15:23,,,sim
+Daniele Ferreira Santos,danielefsantos@hotmail.com,1464136602,5561992528027,Pro,quarterly,13570,active,2026-08-03 13:37,2026-08-03 13:37,2026-11-03 13:43,,,sim
+bruna cabral sueta,brunapradocabral15@gmail.com,48884112800,5518988141304,Pro,monthly,4235,active,2026-08-03 20:28,2026-08-03 20:28,2026-09-03 20:28,,,sim
+ROBERTA OLIVEIRA COSTA,robertt_acosta@hotmail.com,41200547802,5511951617036,Essencial,monthly,4169,active,2026-08-04 08:41,2026-08-04 08:41,2026-09-04 08:42,,,sim
+Mariana da Cruz Silva,marianacruz484@gmail.com,70495582140,5564992341045,Pro,quarterly,9499,active,2026-08-04 13:47,2026-08-04 13:47,2026-11-04 13:47,,,sim
+Evellyn Loyanne,evellynmoreiraelm26@gmail.com,70324134126,5562999487067,Essencial,monthly,4169,active,2026-08-05 12:55,2026-08-05 12:55,2026-09-05 12:55,,,sim
+Renata Rosa santos,renatarosasantos44@gmail.com,7794288622,5538998322251,Essencial,monthly,4169,active,2026-08-05 16:30,2026-08-05 16:30,2026-09-05 16:31,,,sim
+Brenda Alcântara Araújo,brendaalcantaraaraujo@gmail.com,19775639700,5527999878767,Essencial,monthly,4169,active,2026-08-06 11:03,2026-08-06 11:03,2026-09-06 00:00,,,sim
+LAYSLA SABRIENE DE FATIMA MENDES,laysla726@gmail.com,10576183652,5534992241049,Pro,monthly,6050,active,2026-08-07 09:16,2026-08-07 09:16,2026-09-07 00:00,,,sim
