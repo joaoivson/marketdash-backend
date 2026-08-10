@@ -478,6 +478,11 @@ Aceito
 
 ## Changelog
 
+> O `CHANGELOG.md` real do projeto vive na raiz do monorepo
+> (`/Users/joaoivson/Desktop/PROJETOS/MarketDash/CHANGELOG.md`), cobrindo
+> backend e frontend juntos — não em cada subprojeto separado. Consultar/editar
+> esse arquivo, não recriar um novo aqui.
+
 ### Formato (Keep a Changelog)
 
 ```markdown
