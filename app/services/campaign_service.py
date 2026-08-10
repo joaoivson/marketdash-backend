@@ -225,6 +225,13 @@ class CampaignService:
         ad_rate, comm_rate, has_tax = self._tax_rates(user_id)
         campaigns = self.repo.list_by_user(user_id)
 
+        # Retrato do agora para o card "Orçamento/dia": TODAS as campanhas ativas do
+        # usuário, calculado ANTES de search/status_filter/has_movement — o card não
+        # muda com nenhum filtro da tela (só o resto da lista muda).
+        active_now = [c for c in campaigns if _is_active(c)]
+        budget_now = round(sum(c.daily_budget or 0.0 for c in active_now), 2)
+        active_count_now = len(active_now)
+
         if search:
             term = search.strip().lower()
             campaigns = [c for c in campaigns if term in (c.name or "").lower()]
@@ -270,7 +277,7 @@ class CampaignService:
         # Ordena por maior gasto no topo. Vínculo não afeta a ordem.
         responses.sort(key=lambda r: r.metrics.spend, reverse=True)
 
-        kpis = self._compute_kpis(responses)
+        kpis = self._compute_kpis(responses, budget_now, active_count_now)
         return CampaignListResponse(kpis=kpis, campaigns=responses, has_tax=has_tax)
 
     def sub_id_options(self, user_id: int, campaign_id: int) -> SubIdOptionsResponse:
@@ -296,13 +303,14 @@ class CampaignService:
         )
         return SubIdOptionsResponse(options=options)
 
-    def _compute_kpis(self, responses: List[CampaignResponse]) -> CampaignKPIs:
+    def _compute_kpis(
+        self, responses: List[CampaignResponse], total_daily_budget: float, active_campaigns_count: int
+    ) -> CampaignKPIs:
         total_spend = sum(r.metrics.spend for r in responses)
         total_clicks = sum(r.metrics.clicks for r in responses)
         total_commission = sum(r.metrics.commission for r in responses)
         total_spend_with_tax = sum(r.metrics.spend_with_tax for r in responses)
         total_commission_net = sum(r.metrics.commission_net for r in responses)
-        total_daily_budget = sum(r.daily_budget or 0.0 for r in responses if r.is_active)
         return CampaignKPIs(
             avg_cpc=round(total_spend / total_clicks, 2) if total_clicks > 0 else None,
             total_spend=round(total_spend, 2),
@@ -312,6 +320,7 @@ class CampaignService:
             total_profit=round(total_commission_net - total_spend_with_tax, 2),
             avg_roas=round(total_commission_net / total_spend_with_tax, 2) if total_spend_with_tax > 0 else 0.0,
             total_daily_budget=round(total_daily_budget, 2),
+            active_campaigns_count=active_campaigns_count,
         )
 
     def get_detail(
@@ -330,15 +339,20 @@ class CampaignService:
         ins_by_date = {i.date: i for i in insights}
         # Comissão por dia (Shopee) e agregado do período (p/ direct_orders, que não é por dia).
         daily_comm = self.repo.daily_by_subid(user_id, campaign.sub_id, start_date, end_date) if campaign.sub_id else {}
+        # Cliques Shopee por dia (Upload Cliques), pro bloco "Anúncios × Shopee".
+        daily_clicks_shopee = (
+            self.repo.daily_clicks_by_subid(user_id, campaign.sub_id, start_date, end_date)
+            if campaign.sub_id else {}
+        )
         comm_period = (
             self.repo.aggregate_by_subids(user_id, [campaign.sub_id], start_date, end_date).get(campaign.sub_id, {})
             if campaign.sub_id else {}
         )
 
-        # Dia a dia: UNIÃO de datas com gasto (insight) OU comissão (Shopee) — senão comissão
-        # de um dia sem gasto fica órfã (entra no total, some do dia a dia). Já com imposto.
+        # Dia a dia: UNIÃO de datas com gasto (insight), comissão (Shopee) ou cliques Shopee
+        # — senão um dia com só um desses três fica órfão (entra no total, some do dia a dia).
         daily: List[CampaignDailyPoint] = []
-        for d in sorted(set(ins_by_date) | set(daily_comm), reverse=True):
+        for d in sorted(set(ins_by_date) | set(daily_comm) | set(daily_clicks_shopee), reverse=True):
             ins = ins_by_date.get(d)
             c = daily_comm.get(d, {})
             spend = (ins.spend or 0.0) if ins else 0.0
@@ -348,6 +362,7 @@ class CampaignService:
             commission = c.get("commission", 0.0)
             spend_wt = round(spend * (1 + ad_rate), 2)
             comm_net = round(commission * (1 - comm_rate), 2)
+            clicks_shopee = daily_clicks_shopee.get(d)
             daily.append(
                 CampaignDailyPoint(
                     date=d,
@@ -363,6 +378,8 @@ class CampaignService:
                     orders=c.get("orders", 0),
                     profit=round(comm_net - spend_wt, 2),
                     roas=round(comm_net / spend_wt, 2) if spend_wt > 0 else 0.0,
+                    clicks_shopee=clicks_shopee,
+                    cpc_shopee=round(spend / clicks_shopee, 2) if clicks_shopee else None,
                 )
             )
 

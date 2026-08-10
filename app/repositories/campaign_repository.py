@@ -2,13 +2,14 @@ import logging
 from datetime import date
 from typing import Dict, List, Optional
 
-from sqlalchemy import distinct, func
+from sqlalchemy import case, distinct, func
 from sqlalchemy.orm import Session
 
 from app.models.ad_spend import AdSpend
 from app.models.campaign import Campaign, CampaignDailyInsight
 from app.models.click_row import ClickRow
 from app.models.dataset_row import DatasetRow
+from app.utils.order_status import STATUS_CANCELADO
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,15 @@ def _norm_sub_id():
     para exibir valores legíveis no modal.
     """
     return func.rtrim(DatasetRow.sub_id1, "-")
+
+
+def _order_id_if_not_cancelled():
+    """NULL se a linha está cancelada — COUNT(DISTINCT) ignora NULL, então o
+    pedido só entra no set se tiver ao menos uma linha não cancelada. A soma de
+    comissão/faturamento NÃO usa isto — continua contando a linha cancelada.
+    """
+    is_cancelled = func.lower(func.trim(func.coalesce(DatasetRow.status, ""))).in_(STATUS_CANCELADO)
+    return case((is_cancelled, None), else_=DatasetRow.order_id)
 
 
 class CampaignRepository:
@@ -269,7 +279,7 @@ class CampaignRepository:
                 norm.label("sub_id"),
                 func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
                 func.coalesce(func.sum(DatasetRow.revenue), 0.0).label("revenue"),
-                func.count(distinct(DatasetRow.order_id)).label("orders"),
+                func.count(distinct(_order_id_if_not_cancelled())).label("orders"),
             )
             .group_by(norm)
             .all()
@@ -280,7 +290,7 @@ class CampaignRepository:
             base.filter(DatasetRow.attribution_type == DIRECT_ATTRIBUTION_TYPE)
             .with_entities(
                 norm.label("sub_id"),
-                func.count(distinct(DatasetRow.order_id)).label("direct_orders"),
+                func.count(distinct(_order_id_if_not_cancelled())).label("direct_orders"),
             )
             .group_by(norm)
             .all()
@@ -319,7 +329,7 @@ class CampaignRepository:
                 DatasetRow.date.label("date"),
                 func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
                 func.coalesce(func.sum(DatasetRow.revenue), 0.0).label("revenue"),
-                func.count(distinct(DatasetRow.order_id)).label("orders"),
+                func.count(distinct(_order_id_if_not_cancelled())).label("orders"),
             )
             .group_by(DatasetRow.date)
             .all()
@@ -361,6 +371,34 @@ class CampaignRepository:
             }
             for r in rows
         ]
+
+    def daily_clicks_by_subid(
+        self,
+        user_id: int,
+        sub_id: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict[date, int]:
+        """Cliques Shopee (upload) por dia, casados pelo sub_id vinculado à campanha.
+
+        Ausência de chave no dict = sem upload naquele dia (front mostra "—",
+        distinto de upload com 0 cliques). Mesma normalização de sub_ids_from_clicks().
+        """
+        norm = func.trim(func.rtrim(ClickRow.sub_id, "-"))
+        base = self.db.query(ClickRow).filter(ClickRow.user_id == user_id, norm == sub_id)
+        if start_date:
+            base = base.filter(ClickRow.date >= start_date)
+        if end_date:
+            base = base.filter(ClickRow.date <= end_date)
+        rows = (
+            base.with_entities(
+                ClickRow.date.label("date"),
+                func.coalesce(func.sum(ClickRow.clicks), 0).label("clicks"),
+            )
+            .group_by(ClickRow.date)
+            .all()
+        )
+        return {r.date: int(r.clicks or 0) for r in rows}
 
     def sub_ids_from_clicks(self, user_id: int) -> List[str]:
         """Sub IDs distintos do upload de cliques (mesmo sem venda).

@@ -19,6 +19,10 @@ class CampaignDailyPoint(BaseModel):
     orders: int = 0
     profit: float = 0.0              # lucro líquido = commission_net - spend_with_tax
     roas: float = 0.0                # ROAS Real = commission_net / spend_with_tax
+    # Bloco "Anúncios × Shopee" — só no dia a dia. None = sem upload de cliques
+    # Shopee naquele dia (distinto de upload com 0 cliques).
+    clicks_shopee: Optional[int] = None
+    cpc_shopee: Optional[float] = None
 
 
 class CampaignMetrics(BaseModel):
@@ -68,7 +72,10 @@ class CampaignKPIs(BaseModel):
     total_commission_net: float = 0.0        # comissão líquida
     total_profit: float = 0.0                # lucro líquido
     avg_roas: float = 0.0                     # ROAS Real médio
+    # Retrato do agora: soma/contagem de TODAS as campanhas ativas do usuário, sem
+    # relação com o período/busca/status filtrados na tela (ver list_campaigns).
     total_daily_budget: float = 0.0
+    active_campaigns_count: int = 0
 
 
 class CampaignListResponse(BaseModel):
