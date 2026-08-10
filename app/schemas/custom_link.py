@@ -38,6 +38,7 @@ class CustomLinkResponse(CustomLinkBase):
     is_active: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
+    last_click_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

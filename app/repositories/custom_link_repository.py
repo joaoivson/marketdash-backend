@@ -1,4 +1,5 @@
 from typing import List, Optional
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.custom_link import CustomLink
 from app.models.custom_link_event import CustomLinkEvent
@@ -16,12 +17,31 @@ class CustomLinkRepository:
         return self.db.query(CustomLink).filter(CustomLink.slug == slug).first()
 
     def get_by_user(self, user_id: int) -> List[CustomLink]:
-        return (
-            self.db.query(CustomLink)
+        """Lista os links do usuário com `last_click_at` (atributo transiente,
+        não é coluna mapeada) via outerjoin de subquery agregada — sem isso,
+        link nunca clicado ficaria de fora do outerjoin em vez de vir com None.
+        """
+        last_click_sq = (
+            self.db.query(
+                CustomLinkEvent.custom_link_id.label("link_id"),
+                func.max(CustomLinkEvent.created_at).label("last_click_at"),
+            )
+            .filter(CustomLinkEvent.user_id == user_id)
+            .group_by(CustomLinkEvent.custom_link_id)
+            .subquery()
+        )
+        rows = (
+            self.db.query(CustomLink, last_click_sq.c.last_click_at)
+            .outerjoin(last_click_sq, last_click_sq.c.link_id == CustomLink.id)
             .filter(CustomLink.user_id == user_id)
             .order_by(CustomLink.created_at.desc())
             .all()
         )
+        links = []
+        for link, last_click_at in rows:
+            link.last_click_at = last_click_at
+            links.append(link)
+        return links
 
     def create(self, user_id: int, obj_in: CustomLinkCreate) -> CustomLink:
         db_obj = CustomLink(
