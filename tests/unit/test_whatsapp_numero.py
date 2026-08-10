@@ -113,3 +113,37 @@ def test_webhook_manda_token_e_so_o_evento_de_mensagem():
     assert wh["url"] == "https://api/x/webhook"
     assert wh["headers"]["X-Webhook-Token"] == "segredo"
     assert wh["events"] == ["MESSAGES_UPSERT"]
+
+
+# --- URL do webhook atrás de proxy ------------------------------------------
+
+def test_url_do_webhook_respeita_o_proto_do_proxy():
+    """
+    Bug real em homologação: a Evolution recebeu `http://api.hml...`, que
+    responde 301, e não segue redirecionamento. O SAIR nunca chegou e a
+    afiliada continuou recebendo — falha silenciosa, do tipo que só aparece
+    como denúncia.
+    """
+    from types import SimpleNamespace
+    from app.api.v1.routes.whatsapp import url_do_webhook
+
+    def req(headers):
+        return SimpleNamespace(
+            headers=headers,
+            url_for=lambda nome: "http://api.hml.marketdash.com.br/api/v1/whatsapp/webhook",
+        )
+
+    assert url_do_webhook(req({"x-forwarded-proto": "https"})).startswith("https://")
+    # cadeia de proxies: vale o primeiro
+    assert url_do_webhook(req({"x-forwarded-proto": "https, http"})).startswith("https://")
+    # sem proxy (dev local) mantém o que veio
+    assert url_do_webhook(req({})).startswith("http://")
+    # valor lixo não vira esquema
+    assert url_do_webhook(req({"x-forwarded-proto": "banana"})).startswith("http://")
+
+
+def test_webhook_atual_devolve_vazio_quando_nao_ha():
+    def responder(req):
+        return httpx.Response(404, json={"message": "not found"})
+
+    assert _cliente(responder).webhook_atual() == {}

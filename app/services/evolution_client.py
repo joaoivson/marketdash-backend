@@ -162,6 +162,11 @@ class EvolutionClient:
             raise ErroWhatsapp("criar_instancia", f"status {status}: {str(dados)[:150]}")
         return dados if isinstance(dados, dict) else {}
 
+    def webhook_atual(self) -> Dict[str, Any]:
+        """O que a Evolution tem configurado hoje — para reconciliar sem apagar."""
+        status, dados = self._pedir("GET", f"/webhook/find/{self.instancia}")
+        return dados if status < 400 and isinstance(dados, dict) else {}
+
     def configurar_webhook(self, url: str, token: str) -> Dict[str, Any]:
         """
         Aponta o webhook para a nossa API. Só MESSAGES_UPSERT: é tudo que o

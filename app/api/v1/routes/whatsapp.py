@@ -6,6 +6,7 @@ Ele se autentica por token no header.
 """
 import hmac
 import logging
+import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -37,6 +38,23 @@ def _cliente() -> EvolutionClient:
 
 def _servico(db: Session) -> WhatsappOptinService:
     return WhatsappOptinService(WhatsappRepository(db), _cliente())
+
+
+def url_do_webhook(request: Request) -> str:
+    """
+    URL pública do webhook, do jeito que a Evolution precisa alcançar.
+
+    `request.url_for` monta a partir do esquema que chega no container — http,
+    porque quem termina o TLS é o proxy. A Evolution recebia
+    `http://api.hml...`, que responde 301, e ela não segue redirecionamento:
+    o SAIR nunca chegava e a afiliada continuava recebendo. X-Forwarded-Proto é
+    o que o proxy diz sobre a requisição original.
+    """
+    url = str(request.url_for("webhook"))
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto in ("http", "https"):
+        url = re.sub(r"^https?://", f"{proto}://", url)
+    return url
 
 
 INDISPONIVEL = HTTPException(
@@ -128,14 +146,23 @@ def instancia(request: Request, _: User = Depends(require_admin)):
             logger.info("Instância %s não existe na Evolution — criando",
                         settings.EVOLUTION_INSTANCIA)
             cliente.criar_instancia()
-            if settings.EVOLUTION_WEBHOOK_TOKEN:
-                url = str(request.url_for("webhook"))
-                cliente.configurar_webhook(url, settings.EVOLUTION_WEBHOOK_TOKEN)
-                logger.info("Webhook do WhatsApp apontado para %s", url)
-            else:
-                # Sem webhook, quem responder SAIR continua recebendo — e é
-                # assim que um número é denunciado.
-                logger.error("EVOLUTION_WEBHOOK_TOKEN ausente: o SAIR não vai funcionar")
+
+        # Reconcilia a cada abertura da tela, não só na criação: um webhook
+        # apontando para o lugar errado falha em SILÊNCIO — a afiliada responde
+        # SAIR, nada acontece, e a próxima notícia é uma denúncia. Já aconteceu
+        # aqui, com http:// no lugar de https://.
+        if settings.EVOLUTION_WEBHOOK_TOKEN:
+            desejada = url_do_webhook(request)
+            atual = cliente.webhook_atual()
+            if (atual.get("url") != desejada or not atual.get("enabled")
+                    or atual.get("events") != ["MESSAGES_UPSERT"]):
+                cliente.configurar_webhook(desejada, settings.EVOLUTION_WEBHOOK_TOKEN)
+                logger.info("Webhook do WhatsApp reapontado: %s → %s",
+                            atual.get("url"), desejada)
+        else:
+            # Sem webhook, quem responder SAIR continua recebendo — e é
+            # assim que um número é denunciado.
+            logger.error("EVOLUTION_WEBHOOK_TOKEN ausente: o SAIR não vai funcionar")
     except ErroWhatsapp as e:
         return InstanciaResponse(configurado=True, estado=f"erro: {e.motivo}")
 
