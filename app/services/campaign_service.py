@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.campaign import Campaign
 from app.repositories.campaign_repository import CampaignRepository
+from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
 from app.repositories.user_settings_repository import UserSettingsRepository
 from app.services.user_settings_service import UserSettingsService
 from app.schemas.campaign import (
@@ -223,7 +224,12 @@ class CampaignService:
     ) -> CampaignListResponse:
         status_filter = status_filter if status_filter in STATUS_FILTERS else "all"
         ad_rate, comm_rate, has_tax = self._tax_rates(user_id)
-        campaigns = self.repo.list_by_user(user_id)
+        # Só contas de anúncio marcadas em Configurações → Facebook contam. Sem isso,
+        # campanha de uma conta desmarcada fica órfã (sync parou de tocar nela) mas
+        # segue com o status ACTIVE congelado, inflando "campanhas ativas" pra sempre.
+        integration = FacebookIntegrationRepository(self.repo.db).get_by_user_id(user_id)
+        selected_account_ids = integration.account_ids_list() if integration else []
+        campaigns = self.repo.list_by_user(user_id, ad_account_ids=selected_account_ids)
 
         # Retrato do agora para o card "Orçamento/dia": TODAS as campanhas ativas do
         # usuário, calculado ANTES de search/status_filter/has_movement — o card não

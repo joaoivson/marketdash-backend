@@ -44,13 +44,16 @@ class CampaignRepository:
 
     # ----------------------------- campaigns ----------------------------- #
 
-    def list_by_user(self, user_id: int) -> List[Campaign]:
-        return (
-            self.db.query(Campaign)
-            .filter(Campaign.user_id == user_id)
-            .order_by(Campaign.name.asc())
-            .all()
-        )
+    def list_by_user(self, user_id: int, ad_account_ids: Optional[List[str]] = None) -> List[Campaign]:
+        """`ad_account_ids`, quando informado, restringe às contas atualmente
+        selecionadas na integração — sem isso, campanha de uma conta que o
+        usuário desmarcou (checkbox em Configurações) fica órfã na tabela
+        (sync para de tocar nela, mas o status ACTIVE congelado nunca é
+        limpo) e continua contando como ativa pra sempre."""
+        query = self.db.query(Campaign).filter(Campaign.user_id == user_id)
+        if ad_account_ids is not None:
+            query = query.filter(Campaign.ad_account_id.in_(ad_account_ids))
+        return query.order_by(Campaign.name.asc()).all()
 
     def get_by_id(self, campaign_id: int, user_id: int) -> Optional[Campaign]:
         return (
