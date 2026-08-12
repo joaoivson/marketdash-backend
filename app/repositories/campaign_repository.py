@@ -9,7 +9,7 @@ from app.models.ad_spend import AdSpend
 from app.models.campaign import Campaign, CampaignDailyInsight
 from app.models.click_row import ClickRow
 from app.models.dataset_row import DatasetRow
-from app.utils.order_status import STATUS_CANCELADO
+from app.utils.order_status import STATUS_CANCELADO, STATUS_DO_KPI
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +32,21 @@ def _norm_sub_id():
 def _order_id_if_not_cancelled():
     """NULL se a linha está cancelada — COUNT(DISTINCT) ignora NULL, então o
     pedido só entra no set se tiver ao menos uma linha não cancelada. A soma de
-    comissão/faturamento NÃO usa isto — continua contando a linha cancelada.
+    comissão/faturamento NÃO usa isto — continua contando a linha cancelada
+    (a venda existiu), só exclui via `_status_do_kpi_filtro()` o que não é
+    KPI de verdade (ex.: UNPAID, pedido sem pagamento confirmado).
     """
     is_cancelled = func.lower(func.trim(func.coalesce(DatasetRow.status, ""))).in_(STATUS_CANCELADO)
     return case((is_cancelled, None), else_=DatasetRow.order_id)
+
+
+def _status_do_kpi_filtro():
+    """Mesma allowlist do Dashboard (`kpi.ts::KPI_STATUSES`, espelhada em
+    `kpi_service.py`) — sem isso, Campanhas soma comissão de status como
+    "UNPAID" (pedido sem pagamento confirmado) que o Dashboard já exclui,
+    e as duas telas mostram números diferentes pro mesmo período.
+    """
+    return func.lower(func.trim(func.coalesce(DatasetRow.status, ""))).in_(STATUS_DO_KPI)
 
 
 class CampaignRepository:
@@ -270,6 +281,7 @@ class CampaignRepository:
         base = self.db.query(DatasetRow).filter(
             DatasetRow.user_id == user_id,
             norm.in_(sub_ids),
+            _status_do_kpi_filtro(),
         )
         if start_date:
             base = base.filter(DatasetRow.date >= start_date)
@@ -321,6 +333,7 @@ class CampaignRepository:
         base = self.db.query(DatasetRow).filter(
             DatasetRow.user_id == user_id,
             _norm_sub_id() == sub_id,
+            _status_do_kpi_filtro(),
         )
         if start_date:
             base = base.filter(DatasetRow.date >= start_date)
@@ -362,6 +375,7 @@ class CampaignRepository:
                 DatasetRow.user_id == user_id,
                 DatasetRow.sub_id1.isnot(None),
                 norm != "",
+                _status_do_kpi_filtro(),
             )
             .group_by(norm)
             .all()

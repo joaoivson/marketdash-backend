@@ -36,15 +36,8 @@ from sqlalchemy.orm import Session
 
 from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
-from app.utils.order_status import STATUS_CANCELADO
+from app.utils.order_status import STATUS_CANCELADO, STATUS_DO_KPI
 from app.utils.shopee_normalize import DIRECT_ATTRIBUTION
-
-# Status que entram no KPI. Espelha KPI_STATUSES do frontend: cancelado entra na
-# soma de comissão (a venda existiu) mas não conta como pedido.
-STATUS_DO_KPI = {
-    "pendente", "concluído", "concluido", "cancelado",
-    "pending", "completed", "cancelled",
-}
 
 SEM_SUB_ID = "Sem Sub ID"
 
