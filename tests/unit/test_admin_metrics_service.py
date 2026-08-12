@@ -557,6 +557,196 @@ def test_list_clients_nao_colapsa_cancelamento_genuino_nao_ligado_a_troca():
     assert statuses == {"inativo", "ativo"}
 
 
+def _mock_db_for_list_clients_com_cobrancas(por_subscription_id=None, por_cpf=None):
+    """Variante de `_mock_db_for_list_clients` que sabe responder à query de
+    total pago (`sub_filter`) de acordo com a coluna/valor usados no filtro —
+    necessário pra testar que o total pago do CPF colapsado soma as cobranças
+    das DUAS subscription_id (Finding 2), não só da que sobreviveu."""
+    por_subscription_id = por_subscription_id or {}
+    por_cpf = por_cpf or {}
+    db = MagicMock()
+
+    def query_side_effect(model):
+        q = MagicMock()
+
+        def filter_side_effect(*conditions):
+            resultado = MagicMock()
+            resultado.filter.return_value = resultado
+            resultado.filter_by.return_value = resultado
+            resultado.order_by.return_value = resultado
+            resultado.first.return_value = None
+            resultado.scalar.return_value = None
+            resultado.all.return_value = []
+            if conditions:
+                condicao = conditions[0]
+                try:
+                    coluna = condicao.left.name
+                    valor = condicao.right.value
+                except AttributeError:
+                    coluna, valor = None, None
+                if coluna == "subscription_id" and valor in por_subscription_id:
+                    resultado.all.return_value = por_subscription_id[valor]
+                elif coluna == "customer_cpf" and valor in por_cpf:
+                    resultado.all.return_value = por_cpf[valor]
+            return resultado
+
+        q.filter.side_effect = filter_side_effect
+        q.filter_by.return_value = q
+        q.order_by.return_value = q
+        q.first.return_value = None
+        q.all.return_value = []
+        q.scalar.return_value = None
+        return q
+
+    db.query.side_effect = query_side_effect
+    return db
+
+
+def test_list_clients_upgrade_seguido_de_churn_genuino_nao_apaga_o_cliente():
+    """Finding 1 (Critical, task-3b): upgrade Essencial→Pro no dia 1 marca a
+    Essencial cancelada como is_plan_change=True (correto). Se a cliente
+    GENUINAMENTE cancelar a Pro no dia 10, encontrar_par_de_plan_change (fora
+    do escopo desse fix) pareia esse cancelamento contra o pagamento Essencial
+    original (dentro de ±30 dias, plano diferente) e também marca
+    is_plan_change=True — mesmo não sendo uma troca de plano de verdade. As
+    DUAS subscriber_keys do CPF batem a condição de remoção do de-dup, e o
+    código antigo (sem guarda) apagava as duas: a cliente sumia da lista
+    inteira. O fix garante que pelo menos uma linha sobra — a mais recente."""
+    cpf = "333.333.333-33"
+    t1 = datetime(2026, 6, 1, tzinfo=timezone.utc)  # upgrade Essencial -> Pro
+    t2 = datetime(2026, 6, 10, tzinfo=timezone.utc)  # churn genuíno da Pro
+
+    upgrade_superado = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-old-1",
+        customer_cpf=cpf,
+        customer_email="upgrade.depois.churn@example.com",
+        customer_name="Upgrade Depois Churn",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=True,
+        received_at=t1,
+    )
+    churn_genuino_mal_marcado = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-new-1",
+        customer_cpf=cpf,
+        customer_email="upgrade.depois.churn@example.com",
+        customer_name="Upgrade Depois Churn",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=True,  # pareado (erroneamente) contra o pagamento Essencial
+        received_at=t2,
+    )
+
+    svc = AdminMetricsService(_mock_db_for_list_clients())
+    svc._all_events = lambda: [upgrade_superado, churn_genuino_mal_marcado]
+    svc._semaphore = lambda uid: "red"
+
+    rows = svc.list_clients({})
+    cpf_rows = [r for r in rows if r["cpf"] == cpf]
+
+    assert len(cpf_rows) == 1  # nunca zero — a cliente não pode sumir
+    assert cpf_rows[0]["subscription_id"] == "sub-new-1"  # a mais recente por received_at
+
+
+def test_list_clients_total_pago_soma_as_duas_assinaturas_no_upgrade():
+    """Finding 2 (Important, task-3b): quando o de-dup colapsa um CPF em uma
+    única linha (upgrade Essencial→Pro), o total pago exibido tinha passado a
+    considerar só a subscription_id que sobreviveu (a nova) — o que a cliente
+    pagou sob a assinatura antiga (superada) sumia do total, do CSV e da
+    ficha. O total exibido tem que somar as cobranças das DUAS
+    subscription_id desse CPF."""
+    cpf = "444.444.444-44"
+    t1 = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    t2 = datetime(2026, 6, 5, tzinfo=timezone.utc)
+
+    superado = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-old-2",
+        customer_cpf=cpf,
+        customer_email="soma.total.upgrade@example.com",
+        customer_name="Soma Total Upgrade",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=True,
+        received_at=t1,
+    )
+    atual = _ev(
+        event_type="order_approved",
+        subscription_id="sub-new-2",
+        customer_cpf=cpf,
+        customer_email="soma.total.upgrade@example.com",
+        customer_name="Soma Total Upgrade",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="active",
+        has_access=True,
+        is_plan_change=True,
+        received_at=t2,
+    )
+
+    cobranca_antiga = _ev(
+        event_type="order_approved",
+        order_id="order-old-2",
+        subscription_id="sub-old-2",
+        customer_cpf=cpf,
+        amount_net_cents=5000,
+        received_at=t1,
+    )
+    cobranca_nova = _ev(
+        event_type="order_approved",
+        order_id="order-new-2",
+        subscription_id="sub-new-2",
+        customer_cpf=cpf,
+        amount_net_cents=3000,
+        received_at=t2,
+    )
+
+    db = _mock_db_for_list_clients_com_cobrancas(
+        por_subscription_id={
+            "sub-old-2": [cobranca_antiga],
+            "sub-new-2": [cobranca_nova],
+        },
+        por_cpf={
+            cpf: [cobranca_antiga, cobranca_nova],
+        },
+    )
+
+    svc = AdminMetricsService(db)
+    svc._all_events = lambda: [superado, atual]
+    svc._semaphore = lambda uid: "red"
+
+    rows = svc.list_clients({})
+    cpf_rows = [r for r in rows if r["cpf"] == cpf]
+
+    assert len(cpf_rows) == 1
+    # 5000 (assinatura antiga) + 3000 (assinatura nova) — não só os 3000 da sobrevivente
+    assert cpf_rows[0]["total_paid_net_cents"] == 8000
+
+
 def test_status_filter_aceita_lista_e_busca_ignora_filtro():
     """Rodada 6 item 10: padrão sem Inativo, mas buscar "Débora" acha a inativa."""
     from app.services.admin_metrics_service import _status_permitido

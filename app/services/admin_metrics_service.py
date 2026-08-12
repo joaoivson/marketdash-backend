@@ -906,15 +906,39 @@ class AdminMetricsService:
             cpf = getattr(ev, "customer_cpf", None)
             if cpf:
                 by_cpf[cpf].append(key)
+        # CPFs que tiveram algum grupo removido por esse de-dup — o total pago
+        # exibido (mais abaixo) precisa saber disso pra somar as duas
+        # subscription_id em vez de só a que sobreviveu (Finding 2, task 3b).
+        collapsed_cpfs: set = set()
         for cpf, keys in by_cpf.items():
             if len(keys) <= 1:
                 continue
-            for key in keys:
-                ev = all_latest[key]
-                if (ev.event_type or "").lower() == "subscription_canceled" and getattr(
-                    ev, "is_plan_change", False
-                ):
-                    del all_latest[key]
+            matched = [
+                key
+                for key in keys
+                if (all_latest[key].event_type or "").lower() == "subscription_canceled"
+                and getattr(all_latest[key], "is_plan_change", False)
+            ]
+            if not matched:
+                continue
+            if len(matched) == len(keys):
+                # Todos os grupos do CPF bateram a condição de remoção — ex.:
+                # upgrade Essencial->Pro (Essencial cancelada por troca) seguido
+                # de um churn GENUÍNO da Pro que encontrar_par_de_plan_change
+                # (subscription_event_recorder.py) pareou por engano contra o
+                # pagamento Essencial original, também marcando is_plan_change.
+                # Sem essa guarda, apagar os dois grupos some com a cliente
+                # inteira (Finding 1, task 3b, reproduzido pelo revisor).
+                # Mantém só o grupo mais recente por received_at.
+                mais_recente = max(
+                    matched,
+                    key=lambda k: all_latest[k].received_at
+                    or datetime.min.replace(tzinfo=timezone.utc),
+                )
+                matched = [k for k in matched if k != mais_recente]
+            for key in matched:
+                del all_latest[key]
+            collapsed_cpfs.add(cpf)
 
         rows = []
         q = (filters.get("q") or "").strip().lower()
@@ -955,7 +979,16 @@ class AdminMetricsService:
             # sem isso, 2 assinaturas de uma mesma pessoa com CPFs diferentes mas o
             # mesmo e-mail (ex.: reassinatura com CPF trocado) caem no filtro por
             # e-mail e mostram o total pago das DUAS combinado em cada linha.
-            if ev.subscription_id:
+            if ev.customer_cpf and ev.customer_cpf in collapsed_cpfs:
+                # De-dup de upgrade colapsou os grupos desse CPF numa única
+                # linha (Finding 2, task 3b) — o total pago exibido tem que
+                # somar as cobranças das DUAS subscription_id (antiga e
+                # atual), senão o que a cliente pagou sob a assinatura
+                # superada some do total/CSV/ficha. Só entra aqui quando o
+                # de-dup realmente mesclou o CPF — não muda nada pra quem não
+                # foi afetado.
+                sub_filter = SubscriptionEvent.customer_cpf == ev.customer_cpf
+            elif ev.subscription_id:
                 sub_filter = SubscriptionEvent.subscription_id == ev.subscription_id
             elif ev.customer_cpf:
                 sub_filter = SubscriptionEvent.customer_cpf == ev.customer_cpf
