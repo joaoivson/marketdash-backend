@@ -327,6 +327,22 @@ def _client_display_status(ev: SubscriptionEvent, is_active: bool) -> str:
     return "inativo"
 
 
+def _status_permitido(status: str, filtro: Optional[str], busca: Optional[str]) -> bool:
+    """O status do cliente passa pelo filtro da lista?
+
+    Rodada 6, item 10. `filtro` aceita vários status separados por vírgula — a
+    lista abre em "Ativo + Atrasado + Cancelado c/ acesso". E busca vence filtro:
+    digitar o nome de uma inativa tem que encontrá-la, senão parece que ela sumiu
+    do sistema.
+    """
+    if busca:
+        return True
+    if not filtro:
+        return True
+    permitidos = {s.strip() for s in filtro.split(",") if s.strip()}
+    return not permitidos or status in permitidos
+
+
 def _uso_links_paginas_30d(db: Session, user_id: int) -> Dict[str, int]:
     """Bloco Links/Páginas da ficha individual — mesma regra da aba Uso, 30 dias."""
     from app.services.platform_usage_service import PlatformUsageService
@@ -940,7 +956,7 @@ class AdminMetricsService:
             }
 
             # filters
-            if filters.get("status") and filters["status"] != status:
+            if not _status_permitido(status, filters.get("status"), q):
                 continue
             if filters.get("plan") and filters["plan"] != item["plan"]:
                 continue

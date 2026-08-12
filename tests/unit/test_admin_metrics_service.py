@@ -422,3 +422,16 @@ def test_serie_novas_x_canceladas_cobre_12_meses_ate_o_atual():
     assert len(serie) == 12
     assert serie[-1] == {"month": "2026-08", "novas": 14, "canceladas": 4}
     assert serie[0]["month"] == "2025-09"
+
+
+def test_status_filter_aceita_lista_e_busca_ignora_filtro():
+    """Rodada 6 item 10: padrão sem Inativo, mas buscar "Débora" acha a inativa."""
+    from app.services.admin_metrics_service import _status_permitido
+
+    padrao = "ativo,atrasado,cancelado_com_acesso"
+    assert _status_permitido("ativo", padrao, busca=None) is True
+    assert _status_permitido("inativo", padrao, busca=None) is False
+    # com busca ativa, o filtro de status não elimina ninguém
+    assert _status_permitido("inativo", padrao, busca="debora") is True
+    # sem filtro, tudo passa
+    assert _status_permitido("inativo", None, busca=None) is True
