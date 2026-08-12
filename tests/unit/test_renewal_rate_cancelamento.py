@@ -61,3 +61,66 @@ def test_sem_vencimento_no_mes_retorna_none():
     ]
     svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
     assert svc.renewal_rate(2026, 8) is None
+
+
+def _cancelamento(cpf, quando, motivo="não quis mais continuar"):
+    return SimpleNamespace(
+        id=abs(hash(f"cancel:{cpf}:{quando.isoformat()}")) % 100000,
+        event_type="subscription_canceled",
+        order_id=None,
+        order_ref=None,
+        dedupe_key=f"import:cancel:{cpf}:{quando.isoformat()}",
+        subscription_id=None,
+        customer_cpf=cpf,
+        customer_email=f"{cpf}@example.com",
+        received_at=quando,
+        approved_date=None,
+        amount_net_cents=0,
+        amount_gross_cents=0,
+        fee_cents=0,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        canceled_at=quando,
+        cancel_reason=motivo,
+        is_plan_change=False,
+        subscription_status="canceled",
+        has_access=False,
+        access_until=None,
+        next_payment=None,
+        charges_completed=None,
+        raw_payload={},
+    )
+
+
+def test_pagamento_seguido_de_cancelamento_real_nao_conta_como_renovacao():
+    """Girlene (fictícia 2) — pagou perto do vencimento, mas cancelou de
+    verdade horas depois, no mesmo ciclo. Um pagamento desfeito por um
+    cancelamento real no mesmo ciclo não é renovação no sentido de negócio:
+    a assinante não está continuando.
+
+    Camila: pagou 05/07 (vence 05/08) e pagou de novo 06/08 → renovou de
+    verdade, sem cancelamento.
+    Patricia: pagou 06/07 (vence 06/08), pagou de novo 06/08 (dentro da
+    tolerância) mas cancelou de verdade horas depois, no mesmo dia → não
+    conta como renovação.
+    """
+    camila_jul = _cobranca("C-JUL", "333", datetime(2026, 7, 5, tzinfo=timezone.utc))
+    camila_ago = _cobranca("C-AGO", "333", datetime(2026, 8, 6, tzinfo=timezone.utc))
+    patricia_jul = _cobranca("P-JUL", "444", datetime(2026, 7, 6, tzinfo=timezone.utc))
+    patricia_ago = _cobranca(
+        "P-AGO", "444", datetime(2026, 8, 6, 8, 0, tzinfo=timezone.utc)
+    )
+    patricia_cancel = _cancelamento("444", datetime(2026, 8, 6, 14, 0, tzinfo=timezone.utc))
+
+    svc = AdminMetricsService(MagicMock())
+    svc._all_events = lambda: [
+        camila_jul,
+        camila_ago,
+        patricia_jul,
+        patricia_ago,
+        patricia_cancel,
+    ]
+    svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
+
+    assert svc.renewal_rate(2026, 8) == 0.5

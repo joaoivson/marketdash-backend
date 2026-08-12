@@ -555,6 +555,7 @@ class AdminMetricsService:
 
         eventos = self._all_events()
         periodos = build_coverage_periods(eventos)
+        cancelamentos = cancel_instants(eventos)
 
         cobrancas_por_assinante: Dict[str, List[datetime]] = defaultdict(list)
         por_assinante: Dict[str, List] = defaultdict(list)
@@ -583,7 +584,15 @@ class AdminMetricsService:
                 (venceu_em - tolerancia) <= quando <= end
                 for quando in cobrancas_por_assinante.get(chave, [])
             )
-            if pagou:
+            # Uma cobrança perto do vencimento que é desfeita por um
+            # cancelamento REAL (cancel_instants já exclui troca de plano e
+            # ajuste do produtor) no mesmo ciclo não é renovação de verdade —
+            # a assinante não está continuando.
+            cancelou_no_ciclo = any(
+                (venceu_em - tolerancia) <= quando <= end
+                for quando in cancelamentos.get(chave, [])
+            )
+            if pagou and not cancelou_no_ciclo:
                 renovaram += 1
 
         if denominador == 0:
