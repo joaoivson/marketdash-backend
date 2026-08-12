@@ -502,45 +502,64 @@ class AdminMetricsService:
         n = len(keys)
         return {"count": n, "rate": round(n / start_count, 4), "start_actives": len(start_actives)}
 
+    def _agora(self) -> datetime:
+        """Ponto de corte do mês corrente — sobrescrito nos testes."""
+        return datetime.now(timezone.utc)
+
     def renewal_rate(self, year: int, month: int) -> Optional[float]:
+        """De quem venceu no período: renovou = pagou. Cancelou = não renovou.
+
+        Rodada 6, item 4. O denominador vem do FIM das vigências pagas
+        (build_coverage_periods), não de `next_payment`: o import histórico
+        carimbou `next_payment = access_until` em todos os eventos do CPF, então
+        quem cancelou ficava com vencimento no futuro e sumia do denominador —
+        era por isso que o painel marcava 100%.
+        """
         start, end = _month_bounds(year, month)
-        # Vencimento que ainda não chegou não é renovação falha. No mês corrente
-        # o denominador vai só até hoje — senão agosto nasce 0% porque ninguém
-        # "renovou" um vencimento que é dia 25.
-        agora = datetime.now(timezone.utc)
+        # Vencimento que ainda não chegou não é renovação falha: no mês corrente
+        # o denominador vai só até agora.
+        agora = self._agora()
         if end > agora:
             end = agora
         if end < start:
             return None  # mês futuro
-        due = (
-            self.db.query(SubscriptionEvent)
-            .filter(
-                SubscriptionEvent.next_payment >= start,
-                SubscriptionEvent.next_payment <= end,
+
+        eventos = self._all_events()
+        periodos = build_coverage_periods(eventos)
+
+        cobrancas_por_assinante: Dict[str, List[datetime]] = defaultdict(list)
+        por_assinante: Dict[str, List] = defaultdict(list)
+        for ev in eventos:
+            por_assinante[_subscriber_key(ev)].append(ev)
+        for chave, evs in por_assinante.items():
+            for c in extract_paid_charges(evs):
+                quando = _utc(c.get("paid_at"))
+                if quando:
+                    cobrancas_por_assinante[chave].append(quando)
+
+        # Tolerância: a cobrança de renovação cai em cima do vencimento, mas a
+        # Kiwify pode processar com algumas horas de diferença (e o fim da
+        # vigência é calculado por soma de meses, não pelo relógio deles).
+        tolerancia = timedelta(days=3)
+
+        denominador = 0
+        renovaram = 0
+        for chave, lista in periodos.items():
+            vencimentos = [p["fim"] for p in lista if start <= p["fim"] <= end]
+            if not vencimentos:
+                continue
+            venceu_em = max(vencimentos)
+            denominador += 1
+            pagou = any(
+                (venceu_em - tolerancia) <= quando <= end
+                for quando in cobrancas_por_assinante.get(chave, [])
             )
-            .all()
-        )
-        # latest per sub with next_payment in month
-        latest = _latest_by_subscriber(due)
-        if not latest:
+            if pagou:
+                renovaram += 1
+
+        if denominador == 0:
             return None
-        renewed = 0
-        for key, ev in latest.items():
-            paid = (
-                self.db.query(SubscriptionEvent)
-                .filter(
-                    SubscriptionEvent.event_type.in_(PAID_EVENTS),
-                    SubscriptionEvent.received_at >= start,
-                    SubscriptionEvent.received_at <= end,
-                )
-            )
-            if ev.subscription_id:
-                paid = paid.filter(SubscriptionEvent.subscription_id == ev.subscription_id)
-            elif ev.customer_email:
-                paid = paid.filter(SubscriptionEvent.customer_email == ev.customer_email)
-            if paid.first():
-                renewed += 1
-        return round(renewed / len(latest), 4)
+        return round(renovaram / denominador, 4)
 
     def ltv_estimate_cents(self, mrr_net: int, actives_count: int) -> Optional[int]:
         if actives_count <= 0 or mrr_net <= 0:
