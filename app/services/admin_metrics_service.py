@@ -280,6 +280,35 @@ def _is_active_now(ev: SubscriptionEvent, today: date) -> bool:
     return False
 
 
+def _is_canceled(ev) -> bool:
+    """Assinatura cancelada — por tipo de evento ou por status da assinatura."""
+    if (getattr(ev, "event_type", None) or "").lower() == "subscription_canceled":
+        return True
+    return (getattr(ev, "subscription_status", None) or "").lower() in ("canceled", "cancelled")
+
+
+def cancel_instants(events) -> Dict[str, List[datetime]]:
+    """Instantes de cancelamento REAL por assinante.
+
+    Rodada 6, item 2. Base pro MRR histórico: uma assinatura só conta no mês M
+    se cobria o fim de M E não estava cancelada até lá. Upgrade/downgrade
+    (`is_plan_change`) e ajuste do produtor não são saída de cliente.
+    """
+    por_assinante: Dict[str, List[datetime]] = defaultdict(list)
+    for ev in events:
+        if (ev.event_type or "").lower() not in CANCEL_EVENTS:
+            continue
+        if getattr(ev, "is_plan_change", False):
+            continue
+        motivo = (getattr(ev, "cancel_reason", None) or "").strip().lower()
+        if motivo in PRODUTOR_ADJUSTMENT_REASONS:
+            continue
+        quando = _utc(getattr(ev, "canceled_at", None) or ev.received_at)
+        if quando:
+            por_assinante[_subscriber_key(ev)].append(quando)
+    return dict(por_assinante)
+
+
 def _client_display_status(ev: SubscriptionEvent, is_active: bool) -> str:
     """Status de exibição na lista/ficha — late ≠ churn; late com acesso pode ser ativo no count."""
     etype = (ev.event_type or "").lower()
@@ -319,8 +348,18 @@ class AdminMetricsService:
         latest = _latest_by_subscriber(self._all_events())
         return [ev for ev in latest.values() if _is_active_now(ev, today)]
 
+    def renewing_subscribers(self, as_of: Optional[date] = None) -> List[SubscriptionEvent]:
+        """Quem VAI RENOVAR: acesso vigente e não cancelada.
+
+        Rodada 6, item 2. É a base do MRR e do card "Assinantes ativos". Quem
+        cancelou mas ainda tem acesso continua em `active_subscribers()` —
+        segue usando o produto e segue no denominador da aba Uso, mas não é
+        mais receita recorrente esperada.
+        """
+        return [ev for ev in self.active_subscribers(as_of) if not _is_canceled(ev)]
+
     def mrr_cents(self, actives: Optional[List[SubscriptionEvent]] = None) -> Dict[str, int]:
-        actives = actives if actives is not None else self.active_subscribers()
+        actives = actives if actives is not None else self.renewing_subscribers()
         # Precisão cheia por assinante, arredonda só no total — dividir em inteiro
         # (`// div`) por assinante perde centavos a cada um antes de somar.
         net_frac = 0.0
@@ -339,22 +378,35 @@ class AdminMetricsService:
         self,
         momento: datetime,
         periodos: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        cancelamentos: Optional[Dict[str, List[datetime]]] = None,
     ) -> Dict[str, int]:
-        """MRR num instante: soma das assinaturas cuja vigência paga cobre `momento`."""
+        """MRR num instante: vigência paga cobrindo `momento`, descontando cancelamentos.
+
+        Um cancelamento só derruba o período em que ele caiu (ou um anterior) —
+        cancelou em maio e reassinou em julho não afeta o MRR de julho.
+        """
         if periodos is None:
             periodos = build_coverage_periods(self._all_events())
+        if cancelamentos is None:
+            cancelamentos = cancel_instants(self._all_events())
         # Mesmo cuidado de mrr_cents: precisão cheia por assinante, arredonda só no total.
         net_frac = gross_frac = 0.0
-        for lista in periodos.values():
+        for chave, lista in periodos.items():
             # o período mais recente que cobre o instante (renovação sobrepõe a anterior)
             cobrindo = None
             for p in lista:
                 if p["inicio"] <= momento < p["fim"]:
                     if cobrindo is None or p["inicio"] > cobrindo["inicio"]:
                         cobrindo = p
-            if cobrindo:
-                net_frac += cobrindo["net_cents"] / cobrindo["divisor"]
-                gross_frac += cobrindo["gross_cents"] / cobrindo["divisor"]
+            if not cobrindo:
+                continue
+            cancelada = any(
+                cobrindo["inicio"] <= c <= momento for c in cancelamentos.get(chave, [])
+            )
+            if cancelada:
+                continue
+            net_frac += cobrindo["net_cents"] / cobrindo["divisor"]
+            gross_frac += cobrindo["gross_cents"] / cobrindo["divisor"]
         return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
 
     def _last_paid_for(self, ev: SubscriptionEvent) -> Optional[SubscriptionEvent]:
@@ -605,6 +657,7 @@ class AdminMetricsService:
         # repetido pra trás. Se um webhook antigo entrar depois, o passado fica
         # mais correto — recalcular é o comportamento desejado aqui.
         periodos = build_coverage_periods(all_events)
+        cancelamentos = cancel_instants(all_events)
         agora = datetime.now(timezone.utc)
         primeira_cobranca = min(
             (p["inicio"] for lista in periodos.values() for p in lista), default=None
@@ -620,7 +673,7 @@ class AdminMetricsService:
                 y, m, monthrange(y, m)[1], 23, 59, 59, tzinfo=timezone.utc
             )
             momento = agora if (y, m) == (today.year, today.month) else fim_do_mes
-            mrr = self.mrr_at(momento, periodos)
+            mrr = self.mrr_at(momento, periodos, cancelamentos)
             mrr_series.append({
                 "month": f"{y:04d}-{m:02d}",
                 "net": mrr["net"],
@@ -646,7 +699,7 @@ class AdminMetricsService:
         return {"mrr": mrr_series, "revenue": rev_series}
 
     def plan_frequency_distribution(self) -> List[Dict[str, Any]]:
-        actives = self.active_subscribers()
+        actives = self.renewing_subscribers()
         buckets: Dict[Tuple[str, str], Dict[str, int]] = defaultdict(lambda: {"count": 0, "revenue_net": 0})
         for ev in actives:
             plan = _normalize_plan_label(ev.plan_name, ev.plan_id)
@@ -674,7 +727,7 @@ class AdminMetricsService:
         return out
 
     def dashboard(self, year: int, month: int) -> Dict[str, Any]:
-        actives = self.active_subscribers()
+        actives = self.renewing_subscribers()
         mrr = self.mrr_cents(actives)
         rev = self.revenue_for_month(year, month)
         churn = self.churn_for_month(year, month)

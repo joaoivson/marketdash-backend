@@ -149,7 +149,12 @@ def _mrr(momento_iso, eventos=None):
 
     svc = AdminMetricsService.__new__(AdminMetricsService)  # sem DB
     periodos = build_coverage_periods(eventos if eventos is not None else EVENTOS)
-    return svc.mrr_at(datetime.fromisoformat(momento_iso), periodos)["net"]
+    # Este arquivo testa a reconstrução de vigência (build_coverage_periods),
+    # não a semântica de cancelamento — isso é test_mrr_cancelado_sai.py
+    # (Rodada 6, item 2). cancelamentos={} mantém este arquivo isolado disso;
+    # sem passar explicitamente, mrr_at cairia em cancel_instants(self._all_events()),
+    # que exige `self.db` — indisponível neste helper "sem DB".
+    return svc.mrr_at(datetime.fromisoformat(momento_iso), periodos, {})["net"]
 
 
 def fim_do_mes(ano, mes, ultimo_dia):

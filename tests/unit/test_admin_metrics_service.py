@@ -295,9 +295,10 @@ def test_mrr_series_includes_current_month_when_first_event_is_now(monkeypatch):
         svc, "revenue_for_month", lambda y, m: {"net": 100, "gross": 110, "refund_net": 0}
     )
     # Rodada 4: a série usa mrr_at (reconstrução por cobrança), não mais
-    # active_subscribers/mrr_cents.
+    # active_subscribers/mrr_cents. Rodada 6 item 2: mrr_at ganhou o parâmetro
+    # `cancelamentos` (série passa periodos e cancelamentos posicionalmente).
     monkeypatch.setattr(
-        svc, "mrr_at", lambda momento, periodos=None: {"net": 50, "gross": 55}
+        svc, "mrr_at", lambda momento, periodos=None, cancelamentos=None: {"net": 50, "gross": 55}
     )
 
     series = svc.series_12m()
