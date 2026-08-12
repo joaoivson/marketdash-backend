@@ -318,16 +318,16 @@ def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
 
     monkeypatch.setattr("app.services.admin_metrics_service.datetime", _FixedDateTime)
 
+    # Rodada 6 item 1: a cobrança backfillada vem do próprio evento
+    # (order_ref/amount_net_cents/approved_date no topo), não mais do array
+    # charges_completed — webhook recebido em julho, mas approved_date de abril
+    # (cobrança de fato aprovada antes, só registrada depois).
     ev = _ev(
         received_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
-        charges_completed=[
-            {
-                "order_id": "backfill-1",
-                "status": "paid",
-                "approved_date": "2026-04-28T12:00:00Z",
-                "Commissions": {"my_commission": 10000, "charge_amount": 11000},
-            }
-        ],
+        order_ref="backfill-1",
+        amount_net_cents=10000,
+        amount_gross_cents=11000,
+        approved_date=datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc),
     )
 
     db = MagicMock()
@@ -354,6 +354,34 @@ def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
     # começa no mês da cobrança retroativa junto com o faturamento — antes ela
     # começava no primeiro received_at e o passado ficava sem MRR.
     assert mrr_months == ["2026-04", "2026-05", "2026-06", "2026-07"]
+
+
+def test_faturamento_do_mes_nao_dobra_com_import_e_webhook():
+    """Rodada 6 item 1: mesma cobrança vinda do import e do webhook conta uma vez."""
+    from app.services.admin_metrics_service import revenue_from_charges_for_month
+
+    importado = SimpleNamespace(
+        id=1,
+        event_type="order_approved",
+        order_id="QTqDAVh",
+        order_ref="QTqDAVh",
+        dedupe_key="import:cobranca:QTqDAVh",
+        amount_net_cents=18150,
+        amount_gross_cents=19700,
+        fee_cents=1550,
+        approved_date=datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc),
+        received_at=datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc),
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        charges_completed=None,
+        raw_payload={},
+    )
+    webhook = SimpleNamespace(
+        **{**importado.__dict__, "id": 2, "order_id": "uuid", "dedupe_key": "wh:2"}
+    )
+    rev = revenue_from_charges_for_month([importado, webhook], 2026, 8)
+    assert rev["net"] == 18150
 
 
 def test_mrr_cents_nao_perde_centavos_com_divisao_por_assinante():

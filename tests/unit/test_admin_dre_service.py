@@ -96,17 +96,13 @@ def test_dre_does_not_double_count_same_charge_across_webhook_types():
 
 
 def test_dre_revenue_uses_charges_completed_by_charge_date():
-    """Cobrança de abril só vista num webhook de julho entra no DRE de abril."""
-    charge = {
-        "order_id": "bruna1",
-        "status": "paid",
-        "approved_date": "2026-04-28T12:00:00Z",
-        "Commissions": {"my_commission": 13570, "charge_amount": 14700},
-    }
+    """Cobrança aprovada em abril, webhook recebido em julho, entra no DRE de abril
+    (Rodada 6 item 1: approved_date vem do próprio evento, não mais do array)."""
     events = [
         _ev(
             event_type="order_approved",
             order_id="bruna1",
+            order_ref="bruna1",
             plan_name="Pro",
             plan_id="pro",
             plan_frequency="trimestral",
@@ -114,7 +110,7 @@ def test_dre_revenue_uses_charges_completed_by_charge_date():
             amount_net_cents=13570,
             fee_cents=1130,
             received_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
-            charges_completed=[charge],
+            approved_date=datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc),
             id=1,
         )
     ]
@@ -132,17 +128,12 @@ def test_dre_revenue_uses_charges_completed_by_charge_date():
 
 
 def test_dre_april_bruna_table_gross():
-    """DRE abril: Pro trimestral com só amount líquido → bruta 14700, taxa 1130, líquida 13570."""
-    charge = {
-        "order_id": "apr1",
-        "status": "paid",
-        "approved_date": "2026-04-28T12:00:00Z",
-        "amount": 135.70,
-    }
+    """DRE abril: Pro trimestral aprovado em abril, webhook de julho → bruta 14700, taxa 1130, líquida 13570."""
     events = [
         _ev(
             event_type="order_approved",
             order_id="apr1",
+            order_ref="apr1",
             plan_name="Pro",
             plan_id="pro",
             plan_frequency="trimestral",
@@ -150,7 +141,7 @@ def test_dre_april_bruna_table_gross():
             amount_net_cents=13570,
             fee_cents=1130,
             received_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
-            charges_completed=[charge],
+            approved_date=datetime(2026, 4, 28, 12, 0, tzinfo=timezone.utc),
             id=1,
         )
     ]

@@ -14,9 +14,7 @@ from app.services.admin_metrics_service import (
     REFUND_EVENTS,
     _dedupe_by_charge,
     _fees_from_charges_for_month,
-    _legacy_paid_in_month,
     _month_bounds,
-    _subscribers_with_charges_completed,
     revenue_from_charges_for_month,
 )
 
@@ -36,14 +34,12 @@ class AdminDreService:
         start, end = _month_bounds(year, month)
         if all_events is None:
             all_events = self._load_all_events()
+        # Sem caminho legado: toda cobrança é um evento pago com order_ref
+        # (ver admin_metrics_service.revenue_for_month, mesma mudança).
         charges_rev = revenue_from_charges_for_month(all_events, year, month)
-        skip = _subscribers_with_charges_completed(all_events)
-        legacy = _legacy_paid_in_month(all_events, year, month, skip)
-        gross = charges_rev["gross"] + sum((e.amount_gross_cents or 0) for e in legacy)
-        net = charges_rev["net"] + sum((e.amount_net_cents or 0) for e in legacy)
-        fees = _fees_from_charges_for_month(all_events, year, month) + sum(
-            (e.fee_cents or 0) for e in legacy
-        )
+        gross = charges_rev["gross"]
+        net = charges_rev["net"]
+        fees = _fees_from_charges_for_month(all_events, year, month)
 
         refunds = (
             self.db.query(SubscriptionEvent)

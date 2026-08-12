@@ -18,7 +18,7 @@ from app.models.user import User
 from app.models.user_login import UserLogin
 from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
-from app.core.plans import list_price_cents
+from app.services.charges import extract_paid_charges, total_paid_net
 
 PAID_EVENTS = {
     "order_approved",
@@ -113,7 +113,7 @@ def build_coverage_periods(events: List["SubscriptionEvent"]) -> Dict[str, List[
     resultado: Dict[str, List[Dict[str, Any]]] = {}
     for chave, evs in por_assinante.items():
         periodos: List[Dict[str, Any]] = []
-        for c in extract_paid_charges_union(evs):
+        for c in extract_paid_charges(evs):
             inicio = _utc(c.get("paid_at"))
             if not inicio:
                 continue
@@ -174,10 +174,7 @@ def _subscriber_key(ev: SubscriptionEvent) -> str:
 
 
 def _dedupe_by_charge(events: List[SubscriptionEvent]) -> List[SubscriptionEvent]:
-    """A Kiwify manda mais de um webhook (order_approved + subscription_renewed) pra
-    MESMA cobrança — mesmo order_id, mesmo charge_amount. Somar por evento dobra o
-    faturamento. Aqui cada cobrança real (order_id) conta uma vez só. Eventos sem
-    order_id (raro pra PAID_EVENTS) contam individualmente — não há como colidir."""
+    """Um evento por cobrança (usado só por estornos, que não passam por charges.py)."""
     seen: set = set()
     result: List[SubscriptionEvent] = []
     for ev in events:
@@ -189,119 +186,13 @@ def _dedupe_by_charge(events: List[SubscriptionEvent]) -> List[SubscriptionEvent
     return result
 
 
-def _charge_as_cents(value) -> int:
-    if value is None:
-        return 0
-    if isinstance(value, int):
-        return value
-    # float reais → cents; ints já em cents (ou strings numéricas grandes) passam direto
-    try:
-        f = float(value)
-        return int(round(f * 100)) if abs(f) < 10000 else int(round(f))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _parse_charge_dt(ch: dict):
-    from app.services.subscription_event_recorder import _parse_dt
-
-    raw = ch.get("approved_date") or ch.get("created_at") or ch.get("date")
-    return _parse_dt(raw)
-
-
-def _charges_completed_for_event(ev) -> list:
-    completed = getattr(ev, "charges_completed", None)
-    if isinstance(completed, list) and completed:
-        return completed
-    raw = getattr(ev, "raw_payload", None)
-    if not isinstance(raw, dict):
-        return []
-    for key in ("Subscription", "subscription"):
-        sub = raw.get(key)
-        if not isinstance(sub, dict):
-            continue
-        charges = sub.get("charges")
-        if not isinstance(charges, dict):
-            continue
-        completed = charges.get("completed")
-        if isinstance(completed, list):
-            return completed
-    return []
-
-
-def extract_paid_charges_union(events) -> list[dict]:
-    """Une charges.completed de vários webhooks; dedupe por order_id; só status paid.
-
-    O array `charges.completed` é cumulativo: um webhook de renovação cita
-    cobranças antigas da mesma assinatura, às vezes sem o bloco `Commissions`
-    completo (só `amount`). Se um evento posterior processasse por cima com
-    esse `amount` fraco, uma fonte com `my_commission` correto (líquido já
-    pós-afiliado) seria substituída por um valor pré-afiliado — inflando o
-    faturamento exatamente pelo valor da comissão do afiliado. Por isso: uma
-    fonte "forte" (com `Commissions.my_commission` explícito) nunca é
-    sobrescrita por uma fonte "fraca" (só `amount`) do mesmo order_id.
-    """
-    by_id: dict[str, dict] = {}
-    fonte_forte: dict[str, bool] = {}
-    for ev in events:
-        for ch in _charges_completed_for_event(ev):
-            if not isinstance(ch, dict):
-                continue
-            if (ch.get("status") or "").lower() != "paid":
-                continue
-            oid = ch.get("order_id")
-            if not oid:
-                continue
-            oid = str(oid)
-            commissions = ch.get("Commissions") or ch.get("commissions") or {}
-            forte = commissions.get("my_commission") is not None or ch.get("my_commission") is not None
-            if oid in by_id and fonte_forte.get(oid) and not forte:
-                continue
-            net = _charge_as_cents(
-                commissions.get("my_commission")
-                or ch.get("my_commission")
-                or ch.get("amount")
-            )
-            plan = _normalize_plan_label(getattr(ev, "plan_name", None), getattr(ev, "plan_id", None))
-            freq = getattr(ev, "plan_frequency", None) or "monthly"
-            table = list_price_cents(plan, freq)
-
-            raw_gross = _charge_as_cents(
-                commissions.get("charge_amount") or ch.get("charge_amount")
-            )
-            raw_fee = _charge_as_cents(
-                commissions.get("kiwify_fee") or ch.get("kiwify_fee") or ch.get("fee")
-            )
-
-            if table is not None:
-                gross = table
-            elif raw_gross and raw_fee:
-                gross = raw_gross
-            else:
-                gross = net or raw_gross
-
-            fee = raw_fee if raw_fee else max(gross - net, 0)
-
-            by_id[oid] = {
-                "order_id": oid,
-                "net_cents": net,
-                "gross_cents": gross,
-                "fee_cents": fee,
-                "paid_at": _parse_charge_dt(ch),
-                "plan": plan,
-                "frequency": freq,
-            }
-            fonte_forte[oid] = forte
-    return list(by_id.values())
-
-
 def total_paid_net_from_charges(events) -> int:
-    return sum(c["net_cents"] for c in extract_paid_charges_union(events))
+    return total_paid_net(events)
 
 
 def revenue_from_charges_for_month(events, year: int, month: int) -> dict:
     net = gross = 0
-    for c in extract_paid_charges_union(events):
+    for c in extract_paid_charges(events):
         dt = c.get("paid_at")
         if not dt:
             continue
@@ -314,51 +205,21 @@ def revenue_from_charges_for_month(events, year: int, month: int) -> dict:
     return {"net": net, "gross": gross}
 
 
-def _subscribers_with_charges_completed(events) -> set:
-    """Assinantes com ≥1 cobrança paid na união — array só com waiting_payment NÃO conta."""
-    return {
-        _subscriber_key(ev)
-        for ev in events
-        if extract_paid_charges_union([ev])
-    }
-
-
 def _paid_total_for_events(events, paid_events=None) -> int:
-    """Total pago líquido: união de charges paid se houver; senão PAID_EVENTS dedupe."""
-    if paid_events is None:
-        paid_events = PAID_EVENTS
-    if extract_paid_charges_union(events):
-        return total_paid_net_from_charges(events)
-    paid = [e for e in events if (e.event_type or "").lower() in paid_events]
-    return sum((e.amount_net_cents or 0) for e in _dedupe_by_charge(paid))
+    """Total pago líquido do assinante — cobranças distintas por order_ref."""
+    return total_paid_net(events)
 
 
 def _fees_from_charges_for_month(events, year: int, month: int) -> int:
     fees = 0
-    for c in extract_paid_charges_union(events):
+    for c in extract_paid_charges(events):
         dt = c.get("paid_at")
         if not dt:
             continue
         d = _brt_date(dt) if isinstance(dt, datetime) else dt
         if d.year == year and d.month == month:
-            fees += c.get("fee_cents") if c.get("fee_cents") is not None else max(
-                (c["gross_cents"] or 0) - (c["net_cents"] or 0), 0
-            )
+            fees += c.get("fee_cents") or 0
     return fees
-
-
-def _legacy_paid_in_month(events, year: int, month: int, skip_keys: set) -> List[SubscriptionEvent]:
-    """PAID_EVENTS por received_at — só assinantes sem cobrança paid na união (legado)."""
-    start, end = _month_bounds(year, month)
-    paid = [
-        e
-        for e in events
-        if (e.event_type or "").lower() in PAID_EVENTS
-        and e.received_at is not None
-        and start <= e.received_at <= end
-        and _subscriber_key(e) not in skip_keys
-    ]
-    return _dedupe_by_charge(paid)
 
 
 # Pra campos de ESTADO da assinatura (next_payment, access_until, status) — não pra
@@ -509,11 +370,10 @@ class AdminMetricsService:
     def revenue_for_month(self, year: int, month: int) -> Dict[str, int]:
         start, end = _month_bounds(year, month)
         all_events = self._all_events()
+        # Sem caminho legado: toda cobrança é um evento pago com order_ref.
         charges_rev = revenue_from_charges_for_month(all_events, year, month)
-        skip = _subscribers_with_charges_completed(all_events)
-        legacy = _legacy_paid_in_month(all_events, year, month, skip)
-        gross = charges_rev["gross"] + sum((e.amount_gross_cents or 0) for e in legacy)
-        net = charges_rev["net"] + sum((e.amount_net_cents or 0) for e in legacy)
+        gross = charges_rev["gross"]
+        net = charges_rev["net"]
 
         refunds = (
             self.db.query(SubscriptionEvent)
@@ -733,7 +593,7 @@ class AdminMetricsService:
         rev_y, rev_m = first.year, first.month
 
         all_events = self.db.query(SubscriptionEvent).all()
-        for c in extract_paid_charges_union(all_events):
+        for c in extract_paid_charges(all_events):
             dt = c.get("paid_at")
             if not dt:
                 continue
