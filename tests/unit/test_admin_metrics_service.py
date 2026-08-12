@@ -251,6 +251,7 @@ def test_mrr_series_starts_at_first_event_month(monkeypatch):
     )
     monkeypatch.setattr(svc, "active_subscribers", lambda as_of=None: [])
     monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
+    monkeypatch.setattr(svc, "new_vs_canceled_series", lambda: [])
 
     series = svc.series_12m()
     mrr_months = [p["month"] for p in series["mrr"]]
@@ -269,7 +270,7 @@ def test_mrr_series_empty_when_no_events(monkeypatch):
     db.query.return_value = min_q
 
     series = AdminMetricsService(db).series_12m()
-    assert series == {"mrr": [], "revenue": []}
+    assert series == {"mrr": [], "revenue": [], "new_vs_canceled": []}
 
 
 def test_mrr_series_includes_current_month_when_first_event_is_now(monkeypatch):
@@ -300,6 +301,7 @@ def test_mrr_series_includes_current_month_when_first_event_is_now(monkeypatch):
     monkeypatch.setattr(
         svc, "mrr_at", lambda momento, periodos=None, cancelamentos=None: {"net": 50, "gross": 55}
     )
+    monkeypatch.setattr(svc, "new_vs_canceled_series", lambda: [])
 
     series = svc.series_12m()
     assert series["mrr"][0]["month"] == "2026-07"
@@ -344,6 +346,7 @@ def test_revenue_series_starts_at_earliest_charge_month(monkeypatch):
     )
     monkeypatch.setattr(svc, "active_subscribers", lambda as_of=None: [])
     monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
+    monkeypatch.setattr(svc, "new_vs_canceled_series", lambda: [])
 
     series = svc.series_12m()
     rev_months = [p["month"] for p in series["revenue"]]
@@ -400,3 +403,22 @@ def test_mrr_cents_nao_perde_centavos_com_divisao_por_assinante():
     result = svc.mrr_cents(actives)
     assert result["net"] == 100  # não 99 (3 × (100 // 3))
     assert result["gross"] == 100
+
+
+def test_serie_novas_x_canceladas_cobre_12_meses_ate_o_atual():
+    """Rodada 6 item 11: barras pareadas por mês, últimos 12 meses."""
+    from datetime import datetime as dt
+
+    svc = AdminMetricsService(MagicMock())
+    svc._agora = lambda: dt(2026, 8, 11, tzinfo=timezone.utc)
+    svc.new_subscriptions = lambda y, m: 14 if (y, m) == (2026, 8) else 0
+    svc.churn_for_month = lambda y, m: {
+        "count": 4 if (y, m) == (2026, 8) else 0,
+        "rate": 0.0,
+        "start_actives": 0,
+    }
+
+    serie = svc.new_vs_canceled_series()
+    assert len(serie) == 12
+    assert serie[-1] == {"month": "2026-08", "novas": 14, "canceladas": 4}
+    assert serie[0]["month"] == "2025-09"

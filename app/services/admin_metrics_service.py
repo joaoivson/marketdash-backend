@@ -658,7 +658,7 @@ class AdminMetricsService:
         today = datetime.now(timezone.utc).date()
         first = self.db.query(func.min(SubscriptionEvent.received_at)).scalar()
         if not first:
-            return {"mrr": [], "revenue": []}
+            return {"mrr": [], "revenue": [], "new_vs_canceled": []}
 
         mrr_y, mrr_m = first.year, first.month
         rev_y, rev_m = first.year, first.month
@@ -715,7 +715,35 @@ class AdminMetricsService:
             if m > 12:
                 m, y = 1, y + 1
 
-        return {"mrr": mrr_series, "revenue": rev_series}
+        return {
+            "mrr": mrr_series,
+            "revenue": rev_series,
+            "new_vs_canceled": self.new_vs_canceled_series(),
+        }
+
+    def new_vs_canceled_series(self) -> List[Dict[str, Any]]:
+        """Novas × canceladas nos últimos 12 meses — saldo líquido que move o MRR.
+
+        Rodada 6, item 11. Reaproveita new_subscriptions/churn_for_month, então
+        herda as mesmas regras: upgrade não conta dos dois lados (is_plan_change)
+        e "Cancelado pelo produtor" não conta churn.
+        """
+        hoje = self._agora().date()
+        serie: List[Dict[str, Any]] = []
+        y, m = hoje.year, hoje.month - 11
+        while m <= 0:
+            m += 12
+            y -= 1
+        while (y, m) <= (hoje.year, hoje.month):
+            serie.append({
+                "month": f"{y:04d}-{m:02d}",
+                "novas": self.new_subscriptions(y, m),
+                "canceladas": self.churn_for_month(y, m)["count"],
+            })
+            m += 1
+            if m > 12:
+                m, y = 1, y + 1
+        return serie
 
     def plan_frequency_distribution(self) -> List[Dict[str, Any]]:
         actives = self.renewing_subscribers()
