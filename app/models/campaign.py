@@ -38,6 +38,11 @@ class Campaign(Base):
     status = Column(String(32), nullable=True)
     effective_status = Column(String(64), nullable=True)
 
+    # Reprovação de anúncio (moderação da Meta) — a campanha continua ACTIVE
+    # no nível de status, mas o anúncio nunca entrega. NULL = sem problema
+    # reportado. Vem de `issues_info` na Graph API (ver facebook_marketing_client.py).
+    ad_review_issue = Column(String(255), nullable=True)
+
     # Orçamento em BRL (convertido dos "centavos" da API do Facebook).
     daily_budget = Column(Float, nullable=True)
     lifetime_budget = Column(Float, nullable=True)

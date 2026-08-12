@@ -205,6 +205,7 @@ class CampaignService:
             name=campaign.name,
             status=campaign.status,
             effective_status=campaign.effective_status,
+            ad_review_issue=campaign.ad_review_issue,
             objective=campaign.objective,
             daily_budget=campaign.daily_budget,
             sub_id=campaign.sub_id,
@@ -234,7 +235,12 @@ class CampaignService:
         # Retrato do agora para o card "Orçamento/dia": TODAS as campanhas ativas do
         # usuário, calculado ANTES de search/status_filter/has_movement — o card não
         # muda com nenhum filtro da tela (só o resto da lista muda).
-        active_now = [c for c in campaigns if _is_active(c)]
+        # Exclui campanha com anúncio reprovado (ad_review_issue) — a Meta não rebaixa
+        # o status da CAMPANHA quando é o anúncio que é reprovado, então ela fica
+        # ACTIVE pra sempre sem nunca entregar nada, inflando a contagem e o orçamento
+        # somado (caso real: campanha "recentemente rejeitada" no Gerenciador, zero
+        # gasto/clique/impressão em 30 dias, contando como ativa igual às outras).
+        active_now = [c for c in campaigns if _is_active(c) and not c.ad_review_issue]
         budget_now = round(sum(c.daily_budget or 0.0 for c in active_now), 2)
         active_count_now = len(active_now)
 
@@ -421,6 +427,7 @@ class CampaignService:
             name=campaign.name,
             status=campaign.status,
             effective_status=campaign.effective_status,
+            ad_review_issue=campaign.ad_review_issue,
             objective=campaign.objective,
             daily_budget=campaign.daily_budget,
             sub_id=campaign.sub_id,

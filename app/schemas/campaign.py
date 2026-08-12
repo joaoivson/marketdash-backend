@@ -53,6 +53,7 @@ class CampaignResponse(BaseModel):
     name: str
     status: Optional[str] = None
     effective_status: Optional[str] = None
+    ad_review_issue: Optional[str] = None
     objective: Optional[str] = None
     daily_budget: Optional[float] = None
     sub_id: Optional[str] = None

@@ -42,6 +42,31 @@ def _to_int(v) -> int:
         return 0
 
 
+def extract_ad_review_issue(campaign_payload: dict) -> Optional[str]:
+    """Resumo curto do problema de moderação, se houver, a partir de `issues_info`.
+
+    Reprovação de anúncio não muda o status da CAMPANHA (ela continua ACTIVE),
+    só aparece aqui — é o sinal que falta pra não contar uma campanha
+    reprovada (zero entrega, pra sempre) como "ativa" no card Orçamento/dia.
+    `issues_info` pode vir ausente, vazio, ou com chaves variando por versão
+    da API — degrada pra None em vez de quebrar o sync.
+    """
+    issues = campaign_payload.get("issues_info")
+    if not isinstance(issues, list) or not issues:
+        return None
+    primeiro = issues[0]
+    if not isinstance(primeiro, dict):
+        return None
+    resumo = (
+        primeiro.get("error_summary")
+        or primeiro.get("error_message")
+        or primeiro.get("error_type")
+    )
+    if not resumo:
+        return None
+    return str(resumo)[:255]
+
+
 def _budget_to_brl(raw) -> Optional[float]:
     """daily_budget/lifetime_budget vêm em centavos (string) na Graph API."""
     if raw is None or raw == "":
@@ -393,6 +418,7 @@ class FacebookIntegrationService:
                             "objective": c.get("objective"),
                             "status": c.get("status"),
                             "effective_status": c.get("effective_status"),
+                            "ad_review_issue": extract_ad_review_issue(c),
                             "daily_budget": _budget_to_brl(c.get("daily_budget")),
                             "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
                         },

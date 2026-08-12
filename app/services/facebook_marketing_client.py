@@ -191,9 +191,18 @@ async def list_ad_accounts(access_token: str) -> list[dict]:
 
 
 async def list_campaigns(access_token: str, ad_account_id: str) -> list[dict]:
-    """Lista campanhas de uma ad account (formato 'act_123')."""
+    """Lista campanhas de uma ad account (formato 'act_123').
+
+    `issues_info`: reprovação de anúncio (moderação da Meta) não rebaixa o
+    status da CAMPANHA — ela continua ACTIVE mesmo com o anúncio reprovado
+    e zero entrega. É o único jeito de detectar isso sem uma chamada extra
+    por anúncio (ver extract_ad_review_issue em facebook_integration_service.py).
+    """
     params = {
-        "fields": "id,name,status,effective_status,objective,daily_budget,lifetime_budget",
+        "fields": (
+            "id,name,status,effective_status,objective,daily_budget,lifetime_budget,"
+            "issues_info"
+        ),
         "access_token": access_token,
         "limit": 200,
     }
