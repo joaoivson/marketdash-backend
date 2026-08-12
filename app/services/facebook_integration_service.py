@@ -42,29 +42,27 @@ def _to_int(v) -> int:
         return 0
 
 
-def extract_ad_review_issue(campaign_payload: dict) -> Optional[str]:
-    """Resumo curto do problema de moderação, se houver, a partir de `issues_info`.
+def derive_ad_review_issue(effective_status: Optional[str], ads: list[dict]) -> Optional[str]:
+    """Campanha ACTIVE sem nenhum anúncio ACTIVE = não está entregando de verdade.
 
-    Reprovação de anúncio não muda o status da CAMPANHA (ela continua ACTIVE),
-    só aparece aqui — é o sinal que falta pra não contar uma campanha
-    reprovada (zero entrega, pra sempre) como "ativa" no card Orçamento/dia.
-    `issues_info` pode vir ausente, vazio, ou com chaves variando por versão
-    da API — degrada pra None em vez de quebrar o sync.
+    Reprovação de anúncio (moderação da Meta) não rebaixa o `effective_status`
+    da CAMPANHA — ela continua ACTIVE pra sempre, mesmo com o anúncio reprovado
+    e zero entrega. `issues_info` no nível da campanha também vem vazio nesse
+    caso (testado contra a API real) — o status real só existe no ANÚNCIO
+    (`DISAPPROVED`, `PENDING_REVIEW`, etc., ver Ad.effective_status).
+
+    Campanha sem nenhum anúncio criado ainda (lista vazia) não conta como
+    problema — pode só estar em configuração, não necessariamente reprovada.
     """
-    issues = campaign_payload.get("issues_info")
-    if not isinstance(issues, list) or not issues:
+    if (effective_status or "").upper() != "ACTIVE":
         return None
-    primeiro = issues[0]
-    if not isinstance(primeiro, dict):
+    if not ads:
         return None
-    resumo = (
-        primeiro.get("error_summary")
-        or primeiro.get("error_message")
-        or primeiro.get("error_type")
-    )
-    if not resumo:
+    tem_ad_ativo = any((ad.get("effective_status") or "").upper() == "ACTIVE" for ad in ads)
+    if tem_ad_ativo:
         return None
-    return str(resumo)[:255]
+    status_dos_ads = sorted({(ad.get("effective_status") or "DESCONHECIDO").upper() for ad in ads})
+    return ", ".join(status_dos_ads)[:255]
 
 
 def _budget_to_brl(raw) -> Optional[float]:
@@ -404,24 +402,51 @@ class FacebookIntegrationService:
                     )
                     continue
 
+                # Uma chamada por CONTA (não por campanha) — evita N+1. O status real de
+                # moderação só existe no anúncio (ver derive_ad_review_issue).
+                ads_by_campaign: dict[str, list[dict]] = {}
+                ads_fetch_ok = True
+                try:
+                    ads = await fb.list_ads(token, ad_account_id)
+                    for ad in ads:
+                        cid = str(ad.get("campaign_id") or "")
+                        if cid:
+                            ads_by_campaign.setdefault(cid, []).append(ad)
+                except HTTPException as exc:
+                    ads_fetch_ok = False
+                    logger.warning(
+                        "Facebook list_ads falhou user_id=%s conta=%s: %s — "
+                        "ad_review_issue não será atualizado nesta rodada",
+                        user_id, ad_account_id, exc.detail,
+                    )
+
                 for c in campaigns:
                     fb_campaign_id = str(c.get("id") or "")
                     if not fb_campaign_id:
                         continue
 
+                    campaign_fields = {
+                        "ad_account_id": ad_account_id,
+                        "name": c.get("name") or "(sem nome)",
+                        "objective": c.get("objective"),
+                        "status": c.get("status"),
+                        "effective_status": c.get("effective_status"),
+                        "daily_budget": _budget_to_brl(c.get("daily_budget")),
+                        "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
+                    }
+                    # Só atualiza ad_review_issue quando a busca de anúncios funcionou —
+                    # senão uma falha transiente nessa chamada apagaria um problema real
+                    # já detectado num sync anterior (upsert sobrescreve incondicionalmente).
+                    if ads_fetch_ok:
+                        campaign_fields["ad_review_issue"] = derive_ad_review_issue(
+                            c.get("effective_status"),
+                            ads_by_campaign.get(fb_campaign_id, []),
+                        )
+
                     campaign = camp_repo.upsert_campaign(
                         user_id=user_id,
                         fb_campaign_id=fb_campaign_id,
-                        fields={
-                            "ad_account_id": ad_account_id,
-                            "name": c.get("name") or "(sem nome)",
-                            "objective": c.get("objective"),
-                            "status": c.get("status"),
-                            "effective_status": c.get("effective_status"),
-                            "ad_review_issue": extract_ad_review_issue(c),
-                            "daily_budget": _budget_to_brl(c.get("daily_budget")),
-                            "lifetime_budget": _budget_to_brl(c.get("lifetime_budget")),
-                        },
+                        fields=campaign_fields,
                     )
 
                     # Insights diários: UPSERT da janela (preserva histórico, atualiza valores).

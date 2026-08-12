@@ -191,22 +191,31 @@ async def list_ad_accounts(access_token: str) -> list[dict]:
 
 
 async def list_campaigns(access_token: str, ad_account_id: str) -> list[dict]:
-    """Lista campanhas de uma ad account (formato 'act_123').
-
-    `issues_info`: reprovação de anúncio (moderação da Meta) não rebaixa o
-    status da CAMPANHA — ela continua ACTIVE mesmo com o anúncio reprovado
-    e zero entrega. É o único jeito de detectar isso sem uma chamada extra
-    por anúncio (ver extract_ad_review_issue em facebook_integration_service.py).
-    """
+    """Lista campanhas de uma ad account (formato 'act_123')."""
     params = {
-        "fields": (
-            "id,name,status,effective_status,objective,daily_budget,lifetime_budget,"
-            "issues_info"
-        ),
+        "fields": "id,name,status,effective_status,objective,daily_budget,lifetime_budget",
         "access_token": access_token,
         "limit": 200,
     }
     return await _get_paginated(_graph_url(f"{ad_account_id}/campaigns"), params)
+
+
+async def list_ads(access_token: str, ad_account_id: str) -> list[dict]:
+    """Lista TODOS os anúncios de uma ad account com o `effective_status` real.
+
+    Reprovação de anúncio (moderação da Meta) NÃO rebaixa o `effective_status`
+    da CAMPANHA — ela continua ACTIVE pra sempre, mesmo com o anúncio reprovado
+    e zero entrega (`issues_info` no nível da campanha também vem vazio nesse
+    caso — testado contra a API real). O status real só existe no ANÚNCIO
+    (`DISAPPROVED`, `PENDING_REVIEW`, etc.). Uma chamada por conta (não por
+    campanha) evita N+1 — o resultado é agrupado por `campaign_id` no sync.
+    """
+    params = {
+        "fields": "id,campaign_id,effective_status",
+        "access_token": access_token,
+        "limit": 500,
+    }
+    return await _get_paginated(_graph_url(f"{ad_account_id}/ads"), params)
 
 
 async def get_campaign_insights(

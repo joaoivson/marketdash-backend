@@ -8,6 +8,10 @@ Caso real: campanha "Publicação do Instagram: Comente 'CADEIRA' para..."
 (orçamento R$12) aparecia como "Recentemente rejeitada" no Gerenciador de
 Anúncios (zero gasto/clique/impressão em 30 dias), mas MarketDash contava
 como uma das 23 campanhas ativas — o Facebook só reportava 22.
+
+`issues_info` no nível da CAMPANHA veio vazio pra esse caso real (testado
+contra a API real da Meta) — o sinal correto é o `effective_status` do
+ANÚNCIO (`derive_ad_review_issue`), não um campo direto da campanha.
 """
 import json
 from datetime import date
@@ -21,7 +25,7 @@ from app.models.facebook_integration import FacebookIntegration
 from app.models.user_settings import UserSettings
 from app.repositories.campaign_repository import CampaignRepository
 from app.services.campaign_service import CampaignService
-from app.services.facebook_integration_service import extract_ad_review_issue
+from app.services.facebook_integration_service import derive_ad_review_issue
 
 USUARIA = 1
 CONTA = "act_111"
@@ -65,7 +69,7 @@ def test_campanha_com_anuncio_reprovado_nao_conta_como_ativa(db):
     # ACTIVE no nível da campanha, mas o anúncio foi reprovado — nunca entregou.
     _campanha(
         db, fb_campaign_id="rejeitada", daily_budget=12.0,
-        ad_review_issue="Personal attributes",
+        ad_review_issue="DISAPPROVED",
     )
     _integracao(db, [CONTA])
     db.commit()
@@ -91,7 +95,7 @@ def test_campanha_reprovada_ainda_aparece_na_lista_mas_fora_da_contagem(db):
     """A campanha continua visível na lista (não é escondida) — só sai do card."""
     reprovada = _campanha(
         db, fb_campaign_id="rejeitada", daily_budget=12.0,
-        ad_review_issue="Personal attributes",
+        ad_review_issue="DISAPPROVED",
     )
     _integracao(db, [CONTA])
     # has_movement exige gasto/clique/impressão/pedido — sem isso a campanha
@@ -109,53 +113,52 @@ def test_campanha_reprovada_ainda_aparece_na_lista_mas_fora_da_contagem(db):
     assert resp.kpis.active_campaigns_count == 0
     assert resp.kpis.total_daily_budget == 0.0
     assert len(resp.campaigns) == 1
-    assert resp.campaigns[0].ad_review_issue == "Personal attributes"
+    assert resp.campaigns[0].ad_review_issue == "DISAPPROVED"
 
 
 # --------------------------------------------------------------------------- #
-# extract_ad_review_issue — extração pura do payload da Graph API
+# derive_ad_review_issue — decisão pura a partir de effective_status + anúncios
 # --------------------------------------------------------------------------- #
 
 
-def test_extract_sem_issues_info():
-    assert extract_ad_review_issue({}) is None
+def test_campanha_pausada_nunca_tem_issue_mesmo_sem_ad_ativo():
+    """Só campanhas ACTIVE são candidatas — pausada de propósito não é 'reprovada'."""
+    ads = [{"id": "ad1", "effective_status": "DISAPPROVED"}]
+    assert derive_ad_review_issue("PAUSED", ads) is None
 
 
-def test_extract_issues_info_vazio():
-    assert extract_ad_review_issue({"issues_info": []}) is None
+def test_campanha_active_sem_nenhum_anuncio_nao_e_flagada():
+    """Campanha nova, ainda sem anúncio criado — não é reprovação, é 'em configuração'."""
+    assert derive_ad_review_issue("ACTIVE", []) is None
 
 
-def test_extract_issues_info_nao_e_lista():
-    assert extract_ad_review_issue({"issues_info": "algo"}) is None
+def test_campanha_active_com_ad_ativo_nao_e_flagada():
+    ads = [
+        {"id": "ad1", "effective_status": "PAUSED"},
+        {"id": "ad2", "effective_status": "ACTIVE"},
+    ]
+    assert derive_ad_review_issue("ACTIVE", ads) is None
 
 
-def test_extract_prefere_error_summary():
-    payload = {
-        "issues_info": [
-            {
-                "error_summary": "Personal attributes",
-                "error_message": "Ad was disapproved",
-                "error_type": "AD_STATUS_ISSUES_AD_DISAPPROVED",
-            }
-        ]
-    }
-    assert extract_ad_review_issue(payload) == "Personal attributes"
+def test_campanha_active_sem_nenhum_ad_ativo_e_flagada_com_o_status_real():
+    """Caso real: campanha CADEIRA — ACTIVE, 1 anúncio DISAPPROVED, zero entrega."""
+    ads = [{"id": "ad1", "effective_status": "DISAPPROVED"}]
+    assert derive_ad_review_issue("ACTIVE", ads) == "DISAPPROVED"
 
 
-def test_extract_cai_pra_error_message_sem_summary():
-    payload = {"issues_info": [{"error_message": "Ad was disapproved"}]}
-    assert extract_ad_review_issue(payload) == "Ad was disapproved"
+def test_varios_ads_reprovados_juntam_os_status_distintos():
+    ads = [
+        {"id": "ad1", "effective_status": "DISAPPROVED"},
+        {"id": "ad2", "effective_status": "PENDING_REVIEW"},
+    ]
+    assert derive_ad_review_issue("ACTIVE", ads) == "DISAPPROVED, PENDING_REVIEW"
 
 
-def test_extract_cai_pra_error_type_sem_summary_nem_message():
-    payload = {"issues_info": [{"error_type": "AD_STATUS_ISSUES_AD_DISAPPROVED"}]}
-    assert extract_ad_review_issue(payload) == "AD_STATUS_ISSUES_AD_DISAPPROVED"
+def test_ad_sem_effective_status_nao_quebra():
+    ads = [{"id": "ad1"}]
+    assert derive_ad_review_issue("ACTIVE", ads) == "DESCONHECIDO"
 
 
-def test_extract_entrada_sem_chaves_uteis_retorna_none():
-    payload = {"issues_info": [{"level": "AD"}]}
-    assert extract_ad_review_issue(payload) is None
-
-
-def test_extract_entrada_nao_e_dict_retorna_none():
-    assert extract_ad_review_issue({"issues_info": ["string solta"]}) is None
+def test_effective_status_case_insensitive():
+    ads = [{"id": "ad1", "effective_status": "active"}]
+    assert derive_ad_review_issue("active", ads) is None
