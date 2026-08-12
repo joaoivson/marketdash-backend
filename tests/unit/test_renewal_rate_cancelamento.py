@@ -195,8 +195,8 @@ def test_upgrade_com_vencimento_no_mes_conta_como_renovada():
         "888", datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc), is_plan_change=True
     )
     essencial_cancel_upgrade.subscription_id = "sub-ess-1"
-    # Pago sob a chave NOVA (sub-pro-1) — 1h antes do vencimento da Essencial
-    # (08/08 = 07/07 + 1 mês), dentro da tolerância de 3 dias.
+    # Pago sob a chave NOVA (sub-pro-1) — 9h depois do vencimento da Essencial
+    # (06/08 = 06/07 + 1 mês), dentro da tolerância de 3 dias.
     pro_pago_upgrade = _cobranca(
         "PRO-AGO", "888", datetime(2026, 8, 6, 9, 0, tzinfo=timezone.utc), net=6050
     )
@@ -212,6 +212,51 @@ def test_upgrade_com_vencimento_no_mes_conta_como_renovada():
     svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
 
     assert svc.renewal_rate(2026, 8) == 1.0
+
+
+def test_cancelamento_real_da_chave_nova_do_upgrade_desfaz_renovacao():
+    """Achado (revisão final, rodada 6): o broadening de `pagou` pra chave
+    NOVA do upgrade (teste acima) não tinha o espelho em `cancelou_no_ciclo`
+    — um cancelamento real da chave NOVA ficava invisível pro check, porque
+    ele só olhava `cancelamentos.get(chave_devida, [])` (a chave ANTIGA).
+
+    Denise: assinatura Essencial (sub:s-d-old) vence em 06/08. O upgrade pra
+    Pro (sub:s-d-new, is_plan_change=True) paga dentro da tolerância — isso
+    por si só já contaria como renovação (regra do teste acima). Mas horas
+    depois, no mesmo dia, ela cancela de verdade a Pro (is_plan_change=False)
+    — mesma regra da Patricia/Girlene (pagamento desfeito por cancelamento
+    real no mesmo ciclo não é renovação), só que a cobrança E o cancelamento
+    estão os dois na chave nova. `cancelou_no_ciclo` precisa olhar pra essa
+    chave também, não só pra `sub:s-d-old`.
+    """
+    denise_essencial_jul = _cobranca(
+        "D-ESS-JUL", "999", datetime(2026, 7, 6, tzinfo=timezone.utc), net=4235
+    )
+    denise_essencial_jul.subscription_id = "s-d-old"
+    denise_cancel_upgrade = _cancelamento(
+        "999", datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc), is_plan_change=True
+    )
+    denise_cancel_upgrade.subscription_id = "s-d-old"
+    denise_pro_pago_upgrade = _cobranca(
+        "D-PRO-AGO", "999", datetime(2026, 8, 6, 9, 0, tzinfo=timezone.utc), net=6050
+    )
+    denise_pro_pago_upgrade.subscription_id = "s-d-new"
+    denise_pro_pago_upgrade.is_plan_change = True
+    denise_cancel_real = _cancelamento(
+        "999", datetime(2026, 8, 6, 18, 0, tzinfo=timezone.utc), is_plan_change=False
+    )
+    denise_cancel_real.subscription_id = "s-d-new"
+
+    svc = AdminMetricsService(MagicMock())
+    svc._all_events = lambda: [
+        denise_essencial_jul,
+        denise_cancel_upgrade,
+        denise_pro_pago_upgrade,
+        denise_cancel_real,
+    ]
+    svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
+
+    assert svc.renewal_rate(2026, 8) == 0.0
 
 
 def test_cancelamento_ajuste_produtor_no_ciclo_nao_desfaz_renovacao():

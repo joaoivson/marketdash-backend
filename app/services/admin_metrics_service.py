@@ -608,13 +608,24 @@ class AdminMetricsService:
                 continue
             venceu_em = max(vencimentos)
             denominador += 1
-            candidatos_pagamento = list(cobrancas_por_assinante.get(chave, []))
+            # Chaves ligadas ao upgrade/downgrade dessa cliente (mesma lógica
+            # do broadening de `pagou`, Rodada 6/revisão final): quando a
+            # chave devida é o lado superado de uma troca de plano, a chave
+            # NOVA do mesmo CPF também conta — tanto pro pagamento quanto,
+            # simetricamente, pro cancelamento real (Finding, revisão final
+            # rodada 6): sem isso, um cancelamento real que caiu na chave nova
+            # ficava invisível pro check e a cliente contava como renovada
+            # mesmo tendo saído de verdade logo depois do upgrade.
+            chaves_ligadas = [chave]
             if chave in chaves_superadas_por_troca:
                 cpf = cpf_por_chave.get(chave)
                 for outra in chaves_lado_troca_por_cpf.get(cpf, []) if cpf else []:
                     if outra == chave:
                         continue
-                    candidatos_pagamento.extend(cobrancas_por_assinante.get(outra, []))
+                    chaves_ligadas.append(outra)
+            candidatos_pagamento = [
+                quando for c in chaves_ligadas for quando in cobrancas_por_assinante.get(c, [])
+            ]
             pagou = any(
                 (venceu_em - tolerancia) <= quando <= end
                 for quando in candidatos_pagamento
@@ -627,9 +638,12 @@ class AdminMetricsService:
             # pode retroagir e desfazer uma renovação genuína — ela já conta
             # como churn no mês em que realmente cancelou (churn_for_month).
             fim_ciclo = min(end, venceu_em + tolerancia)
+            candidatos_cancelamento = [
+                quando for c in chaves_ligadas for quando in cancelamentos.get(c, [])
+            ]
             cancelou_no_ciclo = any(
                 (venceu_em - tolerancia) <= quando <= fim_ciclo
-                for quando in cancelamentos.get(chave, [])
+                for quando in candidatos_cancelamento
             )
             if pagou and not cancelou_no_ciclo:
                 renovaram += 1
