@@ -276,3 +276,33 @@ def test_backfill_nao_afeta_cpf_diferente(db):
     db.expire_all()
     intocado = db.query(SubscriptionEvent).filter(SubscriptionEvent.id == outro_id).first()
     assert intocado.subscription_id is None
+
+
+def test_array_com_cobranca_desconhecida_alerta_e_nao_insere(caplog):
+    """Rodada 6 item 1: o array não insere cobrança — só denuncia webhook perdido."""
+    import logging
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from app.services.subscription_event_recorder import alertar_cobrancas_desconhecidas
+
+    ev = SimpleNamespace(
+        subscription_id="sub-1",
+        customer_cpf=None,
+        customer_email="a@b.com",
+        charges_completed=[
+            {"order_id": "conhecida", "status": "paid", "amount": 100},
+            {"order_id": "fantasma", "status": "paid", "amount": 999},
+        ],
+        raw_payload={},
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [
+        ("conhecida", "REF1"),
+    ]
+    with caplog.at_level(logging.WARNING):
+        desconhecidas = alertar_cobrancas_desconhecidas(db, ev)
+
+    assert desconhecidas == ["fantasma"]
+    assert "possível webhook perdido" in caplog.text
+    db.add.assert_not_called()

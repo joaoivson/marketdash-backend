@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.subscription_event import SubscriptionEvent
 from app.models.user import User
+from app.services.charges import unknown_array_charges
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +201,46 @@ def _mark_plan_change_if_needed(
     return False
 
 
+def alertar_cobrancas_desconhecidas(db: Session, ev) -> list:
+    """O array `charges.completed` não insere nada — só denuncia buraco no histórico.
+
+    Rodada 6, item 1. Antes, cada entrada do array virava cobrança, o que
+    duplicava tudo que também veio pelo import. Agora, se o array cita uma
+    cobrança que não temos como evento, é sinal de webhook perdido — alguém
+    precisa olhar, mas nada entra automático.
+    """
+    subscription_id = getattr(ev, "subscription_id", None)
+    email = getattr(ev, "customer_email", None)
+    if subscription_id:
+        filtro = SubscriptionEvent.subscription_id == subscription_id
+    elif email:
+        filtro = SubscriptionEvent.customer_email == email
+    else:
+        return []
+
+    conhecidos = set()
+    for order_id, order_ref in (
+        db.query(SubscriptionEvent.order_id, SubscriptionEvent.order_ref)
+        .filter(filtro)
+        .all()
+    ):
+        if order_id:
+            conhecidos.add(str(order_id))
+        if order_ref:
+            conhecidos.add(str(order_ref))
+
+    desconhecidas = unknown_array_charges([ev], conhecidos)
+    for ch in desconhecidas:
+        logger.warning(
+            "possível webhook perdido: cobrança %s (assinatura %s / %s) aparece no "
+            "array charges.completed mas não existe como evento — verificar na Kiwify",
+            ch.get("order_id"),
+            subscription_id,
+            email,
+        )
+    return [str(ch.get("order_id")) for ch in desconhecidas]
+
+
 def record_subscription_event(
     db: Session,
     payload: Dict[str, Any],
@@ -273,6 +314,9 @@ def record_subscription_event(
         )
         db.add(row)
         db.flush()
+
+        # Verificação (não inserção): o array cita cobranças que não conhecemos?
+        alertar_cobrancas_desconhecidas(db, row)
 
         # Backfill: assim que a Kiwify manda um subscription_id real pra um CPF
         # que já tinha histórico órfão (ex.: importado sem subscription_id, ou
