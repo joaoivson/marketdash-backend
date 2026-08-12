@@ -587,9 +587,13 @@ class AdminMetricsService:
             # Uma cobrança perto do vencimento que é desfeita por um
             # cancelamento REAL (cancel_instants já exclui troca de plano e
             # ajuste do produtor) no mesmo ciclo não é renovação de verdade —
-            # a assinante não está continuando.
+            # a assinante não está continuando. Janela do próprio ciclo, não do
+            # mês: um cancelamento semanas depois (ainda dentro do mês) não
+            # pode retroagir e desfazer uma renovação genuína — ela já conta
+            # como churn no mês em que realmente cancelou (churn_for_month).
+            fim_ciclo = min(end, venceu_em + tolerancia)
             cancelou_no_ciclo = any(
-                (venceu_em - tolerancia) <= quando <= end
+                (venceu_em - tolerancia) <= quando <= fim_ciclo
                 for quando in cancelamentos.get(chave, [])
             )
             if pagou and not cancelou_no_ciclo:

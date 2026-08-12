@@ -63,7 +63,7 @@ def test_sem_vencimento_no_mes_retorna_none():
     assert svc.renewal_rate(2026, 8) is None
 
 
-def _cancelamento(cpf, quando, motivo="não quis mais continuar"):
+def _cancelamento(cpf, quando, motivo="não quis mais continuar", is_plan_change=False):
     return SimpleNamespace(
         id=abs(hash(f"cancel:{cpf}:{quando.isoformat()}")) % 100000,
         event_type="subscription_canceled",
@@ -83,7 +83,7 @@ def _cancelamento(cpf, quando, motivo="não quis mais continuar"):
         plan_frequency="monthly",
         canceled_at=quando,
         cancel_reason=motivo,
-        is_plan_change=False,
+        is_plan_change=is_plan_change,
         subscription_status="canceled",
         has_access=False,
         access_until=None,
@@ -124,3 +124,72 @@ def test_pagamento_seguido_de_cancelamento_real_nao_conta_como_renovacao():
     svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
 
     assert svc.renewal_rate(2026, 8) == 0.5
+
+
+def test_cancelamento_semanas_depois_no_mesmo_mes_nao_desfaz_renovacao():
+    """Finding 1: a janela do check de cancelamento precisa ficar restrita ao
+    CICLO da assinante (venceu_em + tolerância), não ao mês inteiro.
+
+    Fabiana: período vence 02/08, paga no mesmo dia (renovação genuína, nova
+    vigência até 02/09). Cancela de verdade só em 28/08 — semanas depois, sem
+    relação com a renovação de 02/08. Isso é churn do ciclo/mês em que ela
+    de fato cancelou (via churn_for_month), não uma reversão da renovação de
+    02/08. Com a janela antiga (upper bound = fim do mês/agora), esse
+    cancelamento de 28/08 seria capturado erroneamente e derrubaria a
+    renovação para "não renovou". Com a janela corrigida
+    (min(end, venceu_em + tolerância) = 05/08), o cancelamento de 28/08 fica
+    de fora e ela continua contando como renovada.
+    """
+    fabiana_jul = _cobranca("F-JUL", "555", datetime(2026, 7, 2, tzinfo=timezone.utc))
+    fabiana_ago = _cobranca("F-AGO", "555", datetime(2026, 8, 2, tzinfo=timezone.utc))
+    fabiana_cancel = _cancelamento("555", datetime(2026, 8, 28, 10, 0, tzinfo=timezone.utc))
+
+    svc = AdminMetricsService(MagicMock())
+    svc._all_events = lambda: [fabiana_jul, fabiana_ago, fabiana_cancel]
+    # Mês de agosto já fechado (agora em setembro) — sem isso, `end` nem
+    # chegaria perto de 28/08 e o teste não exerceria o bug.
+    svc._agora = lambda: datetime(2026, 9, 5, 0, 0, tzinfo=timezone.utc)
+
+    assert svc.renewal_rate(2026, 8) == 1.0
+
+
+def test_cancelamento_troca_de_plano_no_ciclo_nao_desfaz_renovacao():
+    """Finding 2a: cancelamento de troca de plano (is_plan_change=True) dentro
+    da janela do ciclo não pode contar como cancelamento real — cancel_instants()
+    já exclui esse caso, e renewal_rate() precisa reaproveitar essa exclusão
+    (não reimplementar um check inline que ignore is_plan_change)."""
+    isabela_jul = _cobranca("I-JUL", "666", datetime(2026, 7, 6, tzinfo=timezone.utc))
+    isabela_ago = _cobranca(
+        "I-AGO", "666", datetime(2026, 8, 6, 8, 0, tzinfo=timezone.utc)
+    )
+    isabela_cancel_upgrade = _cancelamento(
+        "666", datetime(2026, 8, 6, 14, 0, tzinfo=timezone.utc), is_plan_change=True
+    )
+
+    svc = AdminMetricsService(MagicMock())
+    svc._all_events = lambda: [isabela_jul, isabela_ago, isabela_cancel_upgrade]
+    svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
+
+    assert svc.renewal_rate(2026, 8) == 1.0
+
+
+def test_cancelamento_ajuste_produtor_no_ciclo_nao_desfaz_renovacao():
+    """Finding 2b: cancelamento com cancel_reason="cancelado pelo produtor"
+    dentro da janela do ciclo não é churn real (ajuste administrativo) —
+    cancel_instants() já exclui esse motivo, e renewal_rate() precisa
+    reaproveitar essa exclusão."""
+    monica_jul = _cobranca("M-JUL", "777", datetime(2026, 7, 6, tzinfo=timezone.utc))
+    monica_ago = _cobranca(
+        "M-AGO", "777", datetime(2026, 8, 6, 8, 0, tzinfo=timezone.utc)
+    )
+    monica_cancel_produtor = _cancelamento(
+        "777",
+        datetime(2026, 8, 6, 14, 0, tzinfo=timezone.utc),
+        motivo="cancelado pelo produtor",
+    )
+
+    svc = AdminMetricsService(MagicMock())
+    svc._all_events = lambda: [monica_jul, monica_ago, monica_cancel_produtor]
+    svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
+
+    assert svc.renewal_rate(2026, 8) == 1.0
