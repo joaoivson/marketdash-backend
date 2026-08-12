@@ -306,3 +306,24 @@ def test_array_com_cobranca_desconhecida_alerta_e_nao_insere(caplog):
     assert desconhecidas == ["fantasma"]
     assert "possível webhook perdido" in caplog.text
     db.add.assert_not_called()
+
+
+def test_falha_no_alerta_nao_impede_registro_do_evento(db, monkeypatch):
+    """Fix de review: alertar_cobrancas_desconhecidas é só uma verificação e
+    nunca pode derrubar o registro do evento. Antes do fix, uma exceção aqui
+    caía no `except Exception` externo (que não faz rollback nem re-flush) e
+    fazia record_subscription_event retornar None — mesmo com a linha já
+    persistida — o que deixava user_id NULL pra sempre (link/backfill pulados)."""
+    import app.services.subscription_event_recorder as recorder_module
+
+    def _explode(db, ev):
+        raise RuntimeError("SELECT transitório falhou")
+
+    monkeypatch.setattr(recorder_module, "alertar_cobrancas_desconhecidas", _explode)
+
+    resultado = record_subscription_event(
+        db, _payload("order-alerta-explode", "12345678900", "explode@example.com"), "order_approved"
+    )
+
+    assert resultado is not None
+    assert resultado.order_id == "order-alerta-explode"

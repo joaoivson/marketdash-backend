@@ -316,7 +316,19 @@ def record_subscription_event(
         db.flush()
 
         # Verificação (não inserção): o array cita cobranças que não conhecemos?
-        alertar_cobrancas_desconhecidas(db, row)
+        # Try/except próprio: essa checagem é só um alerta, nunca pode derrubar
+        # o registro do evento (que já foi flushado acima). Se falhar aqui, o
+        # `except Exception` externo não faz db.rollback() e o webhook ainda
+        # commita a linha — mas retornar None faria _link_event_to_user e o
+        # backfill de CPF serem pulados, deixando user_id NULL pra sempre.
+        try:
+            alertar_cobrancas_desconhecidas(db, row)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "alertar_cobrancas_desconhecidas falhou (ignorado) type=%s order=%s",
+                event_type,
+                fields.get("order_id"),
+            )
 
         # Backfill: assim que a Kiwify manda um subscription_id real pra um CPF
         # que já tinha histórico órfão (ex.: importado sem subscription_id, ou
