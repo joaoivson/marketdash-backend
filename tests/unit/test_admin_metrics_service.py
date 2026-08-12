@@ -584,7 +584,19 @@ def _mock_db_for_list_clients_com_cobrancas(por_subscription_id=None, por_cpf=No
                     valor = condicao.right.value
                 except AttributeError:
                     coluna, valor = None, None
-                if coluna == "subscription_id" and valor in por_subscription_id:
+                if coluna == "subscription_id" and isinstance(valor, list):
+                    # `.in_([...])` — o fix do merge escopado (task 3b) usa isso
+                    # pra somar só os subscription_id absorvidos por ESTE
+                    # sobrevivente, não o CPF inteiro.
+                    combinados = []
+                    vistos = set()
+                    for sid in valor:
+                        for ev in por_subscription_id.get(sid, []):
+                            if id(ev) not in vistos:
+                                vistos.add(id(ev))
+                                combinados.append(ev)
+                    resultado.all.return_value = combinados
+                elif coluna == "subscription_id" and valor in por_subscription_id:
                     resultado.all.return_value = por_subscription_id[valor]
                 elif coluna == "customer_cpf" and valor in por_cpf:
                     resultado.all.return_value = por_cpf[valor]
@@ -745,6 +757,127 @@ def test_list_clients_total_pago_soma_as_duas_assinaturas_no_upgrade():
     assert len(cpf_rows) == 1
     # 5000 (assinatura antiga) + 3000 (assinatura nova) — não só os 3000 da sobrevivente
     assert cpf_rows[0]["total_paid_net_cents"] == 8000
+
+
+def test_list_clients_merge_de_upgrade_nao_contamina_assinatura_independente_do_mesmo_cpf():
+    """Finding (task 3b, reproduzido pelo revisor): `collapsed_cpfs` sabia
+    QUAL CPF teve merge, mas não QUAL sobrevivente absorveu qual grupo
+    apagado. Com 3 grupos no mesmo CPF — uma assinatura antiga e
+    genuinamente independente (`sub-antiga`, is_plan_change=False, já
+    encerrada em 2024) e um par de upgrade em 2026 (`sub-old` superada,
+    `sub-new` sobrevivente) — o filtro largo por `customer_cpf ==` aplicava
+    a soma combinada às DUAS linhas sobreviventes, inflando o total da
+    assinatura antiga com dinheiro de uma assinatura que ela nunca teve.
+    O fix escopa a soma só ao par que de fato se fundiu."""
+    cpf = "555.555.555-55"
+    t_antiga = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    t_old = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    t_new = datetime(2026, 6, 5, tzinfo=timezone.utc)
+
+    antiga_churn = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-antiga",
+        customer_cpf=cpf,
+        customer_email="tres.grupos@example.com",
+        customer_name="Tres Grupos",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=False,
+        received_at=t_antiga,
+    )
+    old_superado = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-old",
+        customer_cpf=cpf,
+        customer_email="tres.grupos@example.com",
+        customer_name="Tres Grupos",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=True,
+        received_at=t_old,
+    )
+    novo_atual = _ev(
+        event_type="order_approved",
+        subscription_id="sub-new",
+        customer_cpf=cpf,
+        customer_email="tres.grupos@example.com",
+        customer_name="Tres Grupos",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="active",
+        has_access=True,
+        is_plan_change=True,
+        received_at=t_new,
+    )
+
+    cobranca_antiga = _ev(
+        event_type="order_approved",
+        order_id="order-antiga",
+        subscription_id="sub-antiga",
+        customer_cpf=cpf,
+        amount_net_cents=9000,
+        received_at=t_antiga,
+    )
+    cobranca_old = _ev(
+        event_type="order_approved",
+        order_id="order-old",
+        subscription_id="sub-old",
+        customer_cpf=cpf,
+        amount_net_cents=5000,
+        received_at=t_old,
+    )
+    cobranca_new = _ev(
+        event_type="order_approved",
+        order_id="order-new",
+        subscription_id="sub-new",
+        customer_cpf=cpf,
+        amount_net_cents=3000,
+        received_at=t_new,
+    )
+
+    db = _mock_db_for_list_clients_com_cobrancas(
+        por_subscription_id={
+            "sub-antiga": [cobranca_antiga],
+            "sub-old": [cobranca_old],
+            "sub-new": [cobranca_new],
+        },
+        por_cpf={
+            cpf: [cobranca_antiga, cobranca_old, cobranca_new],
+        },
+    )
+
+    svc = AdminMetricsService(db)
+    svc._all_events = lambda: [antiga_churn, old_superado, novo_atual]
+    svc._semaphore = lambda uid: "red"
+
+    rows = svc.list_clients({})
+    cpf_rows = {r["subscription_id"]: r for r in rows if r["cpf"] == cpf}
+
+    # sub-old foi absorvida pelo upgrade — só sub-antiga e sub-new sobram.
+    assert set(cpf_rows.keys()) == {"sub-antiga", "sub-new"}
+
+    # sub-new soma só o que foi fundido nela: sub-old (5000) + sub-new (3000).
+    assert cpf_rows["sub-new"]["total_paid_net_cents"] == 8000
+
+    # sub-antiga é uma assinatura independente — não pode ganhar o dinheiro
+    # do upgrade de outro grupo só por compartilhar o CPF.
+    assert cpf_rows["sub-antiga"]["total_paid_net_cents"] == 9000
 
 
 def test_status_filter_aceita_lista_e_busca_ignora_filtro():

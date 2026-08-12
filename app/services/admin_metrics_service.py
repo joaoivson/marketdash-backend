@@ -906,10 +906,16 @@ class AdminMetricsService:
             cpf = getattr(ev, "customer_cpf", None)
             if cpf:
                 by_cpf[cpf].append(key)
-        # CPFs que tiveram algum grupo removido por esse de-dup — o total pago
-        # exibido (mais abaixo) precisa saber disso pra somar as duas
-        # subscription_id em vez de só a que sobreviveu (Finding 2, task 3b).
-        collapsed_cpfs: set = set()
+        # Chave sobrevivente -> subscription_id dos grupos apagados que foram
+        # fundidos NELA especificamente. Só sabe "qual CPF teve merge" não
+        # bastava (Finding, task 3b, reproduzido pelo revisor): um CPF pode ter
+        # 3+ grupos, com só um par sendo upgrade e outro sendo uma assinatura
+        # antiga genuinamente independente — filtrar o total pago por
+        # customer_cpf inteiro contaminava a linha independente com o dinheiro
+        # do upgrade alheio. O total pago (mais abaixo) soma só o(s)
+        # subscription_id listados aqui pra cada sobrevivente, nunca o CPF
+        # inteiro.
+        merged_into: Dict[str, List[str]] = defaultdict(list)
         for cpf, keys in by_cpf.items():
             if len(keys) <= 1:
                 continue
@@ -936,9 +942,41 @@ class AdminMetricsService:
                     or datetime.min.replace(tzinfo=timezone.utc),
                 )
                 matched = [k for k in matched if k != mais_recente]
+            # Candidatos a absorver o dinheiro dos grupos apagados: só
+            # sobreviventes que também têm is_plan_change=True — sinal de que
+            # ELES TAMBÉM são lado de uma troca de plano (o lado pago do
+            # upgrade), não uma assinatura independente que só coincide de
+            # compartilhar o CPF (ex.: sub-antiga, is_plan_change=False).
+            candidatos = [
+                key
+                for key in keys
+                if key not in matched and getattr(all_latest[key], "is_plan_change", False)
+            ]
             for key in matched:
+                ev_removido = all_latest[key]
+                if candidatos:
+                    # Mais de um candidato só acontece com múltiplos pares de
+                    # upgrade sob o mesmo CPF — pareia pelo mais próximo no
+                    # tempo do grupo apagado, mesma lógica de proximidade do
+                    # pareador em subscription_event_recorder.py.
+                    quando_removido = ev_removido.received_at or datetime.min.replace(
+                        tzinfo=timezone.utc
+                    )
+                    alvo = min(
+                        candidatos,
+                        key=lambda k: abs(
+                            (
+                                (
+                                    all_latest[k].received_at
+                                    or datetime.min.replace(tzinfo=timezone.utc)
+                                )
+                                - quando_removido
+                            ).total_seconds()
+                        ),
+                    )
+                    if ev_removido.subscription_id:
+                        merged_into[alvo].append(ev_removido.subscription_id)
                 del all_latest[key]
-            collapsed_cpfs.add(cpf)
 
         rows = []
         q = (filters.get("q") or "").strip().lower()
@@ -979,15 +1017,15 @@ class AdminMetricsService:
             # sem isso, 2 assinaturas de uma mesma pessoa com CPFs diferentes mas o
             # mesmo e-mail (ex.: reassinatura com CPF trocado) caem no filtro por
             # e-mail e mostram o total pago das DUAS combinado em cada linha.
-            if ev.customer_cpf and ev.customer_cpf in collapsed_cpfs:
-                # De-dup de upgrade colapsou os grupos desse CPF numa única
-                # linha (Finding 2, task 3b) — o total pago exibido tem que
-                # somar as cobranças das DUAS subscription_id (antiga e
-                # atual), senão o que a cliente pagou sob a assinatura
-                # superada some do total/CSV/ficha. Só entra aqui quando o
-                # de-dup realmente mesclou o CPF — não muda nada pra quem não
-                # foi afetado.
-                sub_filter = SubscriptionEvent.customer_cpf == ev.customer_cpf
+            if key in merged_into and ev.subscription_id:
+                # Este sobrevivente absorveu grupo(s) apagados pelo de-dup de
+                # upgrade (Finding 2, task 3b) — soma as cobranças da(s)
+                # subscription_id fundida(s) NELE especificamente, nunca do
+                # CPF inteiro (isso contaminaria outra assinatura independente
+                # do mesmo CPF — Finding, task 3b, reproduzido pelo revisor).
+                sub_filter = SubscriptionEvent.subscription_id.in_(
+                    [ev.subscription_id, *merged_into[key]]
+                )
             elif ev.subscription_id:
                 sub_filter = SubscriptionEvent.subscription_id == ev.subscription_id
             elif ev.customer_cpf:
