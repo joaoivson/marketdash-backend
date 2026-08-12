@@ -327,6 +327,19 @@ def _client_display_status(ev: SubscriptionEvent, is_active: bool) -> str:
     return "inativo"
 
 
+def _uso_links_paginas_30d(db: Session, user_id: int) -> Dict[str, int]:
+    """Bloco Links/Páginas da ficha individual — mesma regra da aba Uso, 30 dias."""
+    from app.services.platform_usage_service import PlatformUsageService
+
+    uso = PlatformUsageService(db).uso_de_links_e_paginas("30d", [user_id])
+    return uso.get(user_id, {
+        "links_em_uso": 0,
+        "links_criados": 0,
+        "paginas_em_uso": 0,
+        "paginas_criadas": 0,
+    })
+
+
 class AdminMetricsService:
     def __init__(self, db: Session):
         self.db = db
@@ -1046,6 +1059,7 @@ class AdminMetricsService:
                 "campaigns_count": int(camps),
                 "commission_30d": float(commission or 0),
                 "spend_30d": float(spend or 0),
+                **_uso_links_paginas_30d(self.db, user_id),
             },
             "contact": {
                 "email": user.email,

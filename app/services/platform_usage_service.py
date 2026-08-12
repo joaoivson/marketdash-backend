@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import Date, cast, func
 from sqlalchemy.orm import Session
 
+from app.models.capture_site import CaptureSite
+from app.models.custom_link import CustomLink
+from app.models.custom_link_event import CustomLinkEvent
+from app.models.page_event import PageEvent
 from app.models.page_view import PageView
 from app.models.user import User
 from app.models.user_login import UserLogin
@@ -150,7 +154,6 @@ class PlatformUsageService:
             "acessos": acessos,
             "usuarias_ativas": usuarias_ativas,
             "base_ativa": len(base_ativa),
-            "contas_no_total": self._contas_no_total(),
             "taxa_uso": (
                 round(usuarias_ativas / len(base_ativa), 4) if base_ativa else None
             ),
@@ -174,26 +177,95 @@ class PlatformUsageService:
         actives = AdminMetricsService(self.db).active_subscribers()
         return [ev.user_id for ev in actives if ev.user_id and ev.user_id not in excluidos]
 
-    def _contas_no_total(self) -> int:
-        """Todas as contas já criadas na história (exclui admin/demo) — contexto
-        secundário do card, não mais o denominador principal (ver _base_ativa)."""
-        return self.db.query(func.count(User.id)).filter(
-            User.is_admin.is_(False), User.is_demo.is_(False)
-        ).scalar() or 0
-
     def usuarias_por_dia(self, periodo: str) -> List[Dict[str, Any]]:
-        """Pessoas DISTINTAS por dia — hits inflam, distintas mostram adoção."""
+        """Acessos (hits) e pessoas distintas por dia.
+
+        `acessos` é a série principal do gráfico (barras); `usuarias` é a linha
+        de adoção. Sem as duas, o gráfico da aba Uso fica só com a linha —
+        exatamente o que faltou na rodada 5.
+        """
         linhas = (
             self._logins_do_periodo(periodo)
             .with_entities(
-                cast(UserLogin.logged_at, Date).label("d"),
-                func.count(func.distinct(UserLogin.user_id)),
+                func.date(UserLogin.logged_at).label("d"),
+                func.count().label("acessos"),
+                func.count(func.distinct(UserLogin.user_id)).label("usuarias"),
             )
             .group_by("d")
             .order_by("d")
             .all()
         )
-        return [{"date": str(d), "usuarias": n} for d, n in linhas]
+        return [
+            {"date": str(d), "acessos": acessos, "usuarias": usuarias}
+            for d, acessos, usuarias in linhas
+        ]
+
+    def uso_de_links_e_paginas(
+        self, periodo: str, user_ids: List[int]
+    ) -> Dict[int, Dict[str, int]]:
+        """Links e páginas por usuária, no formato `em uso / criados`.
+
+        "Em uso" = ativo (toggle ligado) E com movimento no período — clique pro
+        link, visualização pra página. Só criar não conta: o que mede operação é
+        estar rodando. LEITURA APENAS nas tabelas do produto.
+        """
+        vazio = {
+            "links_em_uso": 0,
+            "links_criados": 0,
+            "paginas_em_uso": 0,
+            "paginas_criadas": 0,
+        }
+        if not user_ids:
+            return {}
+        saida: Dict[int, Dict[str, int]] = {uid: dict(vazio) for uid in user_ids}
+        inicio = self._inicio(periodo)
+
+        for uid, total in (
+            self.db.query(CustomLink.user_id, func.count(CustomLink.id))
+            .filter(CustomLink.user_id.in_(user_ids))
+            .group_by(CustomLink.user_id)
+            .all()
+        ):
+            saida.setdefault(uid, dict(vazio))["links_criados"] = total
+
+        links_com_clique = (
+            self.db.query(CustomLink.user_id, func.count(func.distinct(CustomLink.id)))
+            .join(CustomLinkEvent, CustomLinkEvent.custom_link_id == CustomLink.id)
+            .filter(
+                CustomLink.user_id.in_(user_ids),
+                CustomLink.is_active.is_(True),
+                CustomLinkEvent.created_at >= inicio,
+            )
+            .group_by(CustomLink.user_id)
+            .all()
+        )
+        for uid, total in links_com_clique:
+            saida.setdefault(uid, dict(vazio))["links_em_uso"] = total
+
+        for uid, total in (
+            self.db.query(CaptureSite.user_id, func.count(CaptureSite.id))
+            .filter(CaptureSite.user_id.in_(user_ids))
+            .group_by(CaptureSite.user_id)
+            .all()
+        ):
+            saida.setdefault(uid, dict(vazio))["paginas_criadas"] = total
+
+        paginas_vistas = (
+            self.db.query(CaptureSite.user_id, func.count(func.distinct(CaptureSite.id)))
+            .join(PageEvent, PageEvent.site_id == CaptureSite.id)
+            .filter(
+                CaptureSite.user_id.in_(user_ids),
+                CaptureSite.is_active.is_(True),
+                PageEvent.event_type == "page_view",
+                PageEvent.created_at >= inicio,
+            )
+            .group_by(CaptureSite.user_id)
+            .all()
+        )
+        for uid, total in paginas_vistas:
+            saida.setdefault(uid, dict(vazio))["paginas_em_uso"] = total
+
+        return saida
 
     def atividade_por_usuaria(self, periodo: str) -> List[Dict[str, Any]]:
         linhas = (
@@ -220,6 +292,8 @@ class PlatformUsageService:
                 User.id.in_([l[0] for l in linhas])
             )
         )
+        ids = [l[0] for l in linhas]
+        uso = self.uso_de_links_e_paginas(periodo, ids)
         return [
             {
                 "user_id": uid,
@@ -228,6 +302,12 @@ class PlatformUsageService:
                 "acessos": acessos,
                 "dias_ativos": dias,
                 "ultimo_acesso": ultimo.isoformat() if ultimo else None,
+                **uso.get(uid, {
+                    "links_em_uso": 0,
+                    "links_criados": 0,
+                    "paginas_em_uso": 0,
+                    "paginas_criadas": 0,
+                }),
             }
             for uid, acessos, dias, ultimo in linhas
         ]

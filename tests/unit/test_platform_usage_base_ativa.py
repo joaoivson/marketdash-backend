@@ -113,13 +113,3 @@ def test_evento_sem_user_id_nao_conta_no_denominador():
     assert base == []
     db.close()
     db._remover_listener()
-
-
-def test_contas_no_total_exclui_admin_e_demo(db):
-    _user(db, email="real1@example.com")
-    _user(db, email="real2@example.com")
-    _user(db, email="admin@example.com", is_admin=True)
-    _user(db, email="demo@example.com", is_demo=True)
-    db.commit()
-
-    assert PlatformUsageService(db)._contas_no_total() == 2
