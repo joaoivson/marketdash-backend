@@ -891,6 +891,31 @@ class AdminMetricsService:
         actives_map = {_subscriber_key(e): e for e in self.active_subscribers()}
         # also include inactive with latest event
         all_latest = _latest_by_subscriber(self._all_events())
+
+        # Kiwify atribui um subscription_id NOVO quando o cliente faz upgrade/
+        # downgrade de plano (não reaproveita o antigo) — então a mesma pessoa
+        # gera duas subscriber_keys: uma pro plano antigo (cancelado, superado
+        # pela troca) e outra pro plano novo (atual). Sem isso ela aparece
+        # duas vezes na lista. Só remove quando o evento mais recente do grupo
+        # é EXATAMENTE cancelamento + is_plan_change — um cancelamento
+        # genuíno (não ligado a troca de plano) continua com sua própria
+        # linha, e o lado novo (pago, is_plan_change também True mas não é
+        # cancelamento) nunca é removido por essa regra.
+        by_cpf: Dict[str, List[str]] = defaultdict(list)
+        for key, ev in all_latest.items():
+            cpf = getattr(ev, "customer_cpf", None)
+            if cpf:
+                by_cpf[cpf].append(key)
+        for cpf, keys in by_cpf.items():
+            if len(keys) <= 1:
+                continue
+            for key in keys:
+                ev = all_latest[key]
+                if (ev.event_type or "").lower() == "subscription_canceled" and getattr(
+                    ev, "is_plan_change", False
+                ):
+                    del all_latest[key]
+
         rows = []
         q = (filters.get("q") or "").strip().lower()
         for key, ev in all_latest.items():

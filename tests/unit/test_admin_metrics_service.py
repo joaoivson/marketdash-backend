@@ -424,6 +424,139 @@ def test_serie_novas_x_canceladas_cobre_12_meses_ate_o_atual():
     assert serie[0]["month"] == "2025-09"
 
 
+def _mock_db_for_list_clients():
+    """DB genérico pra list_clients: toda query encadeada (filter/order_by)
+    retorna vazio/None — só os eventos passados via `_all_events` monkeypatch
+    importam pro teste."""
+    db = MagicMock()
+
+    def query_side_effect(model):
+        q = MagicMock()
+        q.filter.return_value = q
+        q.filter_by.return_value = q
+        q.order_by.return_value = q
+        q.first.return_value = None
+        q.all.return_value = []
+        q.scalar.return_value = None
+        return q
+
+    db.query.side_effect = query_side_effect
+    return db
+
+
+def test_list_clients_colapsa_upgrade_de_plano_numa_unica_linha():
+    """Task 3b: upgrade de plano gera um subscription_id NOVO na Kiwify — o
+    mesmo CPF aparece com duas subscriber_keys (plano antigo cancelado +
+    plano novo ativo). list_clients() deve mostrar só a linha ATUAL (Pro,
+    ativa), não a superada (Essencial, cancelada por troca de plano)."""
+    cpf = "111.111.111-11"
+    t1 = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    t2 = datetime(2026, 6, 5, tzinfo=timezone.utc)
+
+    superseded = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-old-1",
+        customer_cpf=cpf,
+        customer_email="cliente.ficticio@example.com",
+        customer_name="Cliente Ficticio",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=True,
+        received_at=t1,
+    )
+    current = _ev(
+        event_type="order_approved",
+        subscription_id="sub-new-1",
+        customer_cpf=cpf,
+        customer_email="cliente.ficticio@example.com",
+        customer_name="Cliente Ficticio",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="active",
+        has_access=True,
+        is_plan_change=True,
+        received_at=t2,
+    )
+
+    svc = AdminMetricsService(_mock_db_for_list_clients())
+    svc._all_events = lambda: [superseded, current]
+    svc._semaphore = lambda uid: "red"
+
+    rows = svc.list_clients({})
+    cpf_rows = [r for r in rows if r["cpf"] == cpf]
+
+    assert len(cpf_rows) == 1
+    row = cpf_rows[0]
+    assert row["plan"] == "pro"
+    assert row["status"] == "ativo"
+    assert row["subscription_id"] == "sub-new-1"
+
+
+def test_list_clients_nao_colapsa_cancelamento_genuino_nao_ligado_a_troca():
+    """Regressão: um CPF com histórico de cancelamento REAL (is_plan_change=False)
+    seguido de nova assinatura independente meses depois continua mostrando
+    as DUAS linhas — esse caso não pode ser colapsado pela regra de upgrade."""
+    cpf = "222.222.222-22"
+    t1 = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    t2 = datetime(2026, 6, 5, tzinfo=timezone.utc)
+
+    churn_antigo = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-antigo-1",
+        customer_cpf=cpf,
+        customer_email="outra.ficticia@example.com",
+        customer_name="Outra Ficticia",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=False,
+        received_at=t1,
+    )
+    reassinatura_nova = _ev(
+        event_type="order_approved",
+        subscription_id="sub-nova-2",
+        customer_cpf=cpf,
+        customer_email="outra.ficticia@example.com",
+        customer_name="Outra Ficticia",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="active",
+        has_access=True,
+        is_plan_change=False,
+        received_at=t2,
+    )
+
+    svc = AdminMetricsService(_mock_db_for_list_clients())
+    svc._all_events = lambda: [churn_antigo, reassinatura_nova]
+    svc._semaphore = lambda uid: "red"
+
+    rows = svc.list_clients({})
+    cpf_rows = [r for r in rows if r["cpf"] == cpf]
+
+    assert len(cpf_rows) == 2
+    statuses = {r["status"] for r in cpf_rows}
+    assert statuses == {"inativo", "ativo"}
+
+
 def test_status_filter_aceita_lista_e_busca_ignora_filtro():
     """Rodada 6 item 10: padrão sem Inativo, mas buscar "Débora" acha a inativa."""
     from app.services.admin_metrics_service import _status_permitido
