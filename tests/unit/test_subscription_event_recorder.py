@@ -286,6 +286,35 @@ def test_cancelamento_depois_de_pagamento_mesmo_plano_nao_e_continuacao(db):
     assert par is None
 
 
+def test_pagamento_chegando_primeiro_nao_forma_par_com_cancelamento_posterior_mesmo_plano(db):
+    """Espelho do teste acima, mas na direção que o backfill realmente encontra
+    primeiro: `scripts/backfill_plan_changes.py` processa em ordem cronológica
+    ascendente, então no padrão real de produção (paga/renova de manhã, cancela
+    a MESMA assinatura à tarde do mesmo dia) o PAGAMENTO é o evento que está
+    CHEGANDO (`fields`) e o CANCELAMENTO já está no banco, acontecendo DEPOIS —
+    o inverso de `test_cancelamento_chegando_encontra_pagamento_anterior_sessao_real`
+    e de `test_cancelamento_depois_de_pagamento_mesmo_plano_nao_e_continuacao`.
+
+    Renovação normal seguida de cancelamento de verdade horas depois não pode
+    virar 'continuação' só porque é o mesmo plano e caiu dentro de ≤1 dia —
+    esse teste tranca a direção payment-incoming da guarda direcional, que
+    hoje só tinha cobertura na direção cancellation-incoming.
+    """
+    cpf = "32164987000"  # CPF sintético, não corresponde a pessoa real
+    cancelamento_em = datetime(2026, 8, 5, 18, 19, tzinfo=timezone.utc)
+    _cancel(db, cpf, cancelamento_em, plan_name="Pro", plan_frequency="monthly")
+
+    pagamento_em = datetime(2026, 8, 5, 4, 46, tzinfo=timezone.utc)  # ~13h33 antes
+    fields = {
+        "event_type": "order_approved",
+        "customer_cpf": cpf,
+        "plan_name": "Pro",
+        "plan_frequency": "monthly",
+    }
+    par = encontrar_par_de_plan_change(db, fields, reference_time=pagamento_em)
+    assert par is None
+
+
 def test_cancelamento_chegando_sem_pagamento_nao_forma_par_com_outro_cancelamento(db):
     """Guarda de regressão: se `procurado` for trocado por engano para
     ['subscription_canceled'] (em vez de PAID_LIKE_EVENTS) no ramo reverso, esse
