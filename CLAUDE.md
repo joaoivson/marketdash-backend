@@ -71,6 +71,19 @@ KPIs are calculated from `DatasetRow.raw_data` JSONB (original CSV fields):
 - **Supabase client**: ONLY for auth validation. All data via SQLAlchemy
 - **Database**: PostgreSQL via Supabase, connection in `DATABASE_URL` env var
 - **Migrations**: SQL scripts in `migrations/`. Key indices: `user_id`, `date`, `product` (composite)
+- **Cobranças Kiwify**: uma cobrança = um evento pago, chaveado por `order_ref`
+  (`app/services/charges.py`). O array `Subscription.charges.completed` NÃO é
+  fonte de cobrança — só verificação de webhook perdido
+  (`unknown_array_charges`). Reintroduzir o array como fonte volta a
+  duplicar tudo que veio pelo import histórico (ver CHANGELOG, Rodada 6).
+- **MRR ≠ acesso**: `renewing_subscribers()` (não cancelada, acesso vigente)
+  é a base de MRR/ARPU/plan breakdown; `active_subscribers()` (tem acesso,
+  mesmo cancelada) é a base da aba Uso, alertas e da lista de Clientes.
+- **`list_clients()` de-dup por upgrade** (`admin_metrics_service.py`) é
+  frágil por natureza: qualquer mudança na lógica de `is_plan_change`
+  precisa reconferir os 4 achados da Rodada 6 (zero-rows, contaminação de
+  total por CPF, candidatura efêmera) — todos com teste de regressão
+  sintético em `test_admin_metrics_service.py`.
 
 ## Conventions
 
