@@ -187,7 +187,7 @@ class PlatformUsageService:
         linhas = (
             self._logins_do_periodo(periodo)
             .with_entities(
-                func.date(UserLogin.logged_at).label("d"),
+                cast(UserLogin.logged_at, Date).label("d"),
                 func.count().label("acessos"),
                 func.count(func.distinct(UserLogin.user_id)).label("usuarias"),
             )

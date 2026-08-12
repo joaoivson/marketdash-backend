@@ -11,8 +11,10 @@ import inspect
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import Date, create_engine, event
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql.elements import Cast
 
 from app.models.capture_site import CaptureSite
 from app.models.custom_link import CustomLink
@@ -23,6 +25,20 @@ from app.models.user_login import UserLogin
 from app.services.platform_usage_service import PlatformUsageService
 
 AGORA = datetime.now(timezone.utc)
+
+
+@compiles(Cast, "sqlite")
+def _cast_date_as_sqlite_date_function(element, compiler, **kw):
+    """SQLite's `CAST(x AS DATE)` has numeric-affinity truncation quirks that
+    break date-grouping (unlike PostgreSQL, where it's a clean date cast).
+    `usuarias_por_dia()` uses `cast(logged_at, Date)` — this shim makes that
+    same production code group correctly on the SQLite test fixture, mirroring
+    `@compiles(JSONB, "sqlite")` in test_platform_usage_base_ativa.py. Only
+    Date casts are intercepted; anything else falls back to the default
+    compilation so this stays narrow to this test file's needs."""
+    if isinstance(element.type, Date):
+        return "DATE(%s)" % compiler.process(element.clause, **kw)
+    return compiler.visit_cast(element, **kw)
 
 
 @pytest.fixture
