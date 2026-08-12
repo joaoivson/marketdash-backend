@@ -143,62 +143,67 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
     }
 
 
-def _mark_plan_change_if_needed(
+PAID_LIKE_EVENTS = ("order_approved", "subscription_renewed", "compra_aprovada")
+
+
+def encontrar_par_de_plan_change(
     db: Session, fields: Dict[str, Any], reference_time: Optional[datetime] = None
-) -> bool:
-    """Anti-churn falso: mesmo CPF cancela e reassina em janela curta.
+):
+    """Par de upgrade/continuação do evento que está chegando — em QUALQUER ordem.
 
-    Duas regras, mesmo mecanismo (`is_plan_change=True` nos dois eventos
-    envolvidos, filtrado tanto em churn_for_month quanto em new_subscriptions):
-    - Continuação: cancela e reassina o MESMO plano em ≤1 dia (troca de forma
-      de pagamento, não saiu de verdade — ex.: mesma pessoa, mesmo instante).
-    - Upgrade/downgrade: cancela e reassina plano DIFERENTE em ≤30 dias.
+    Rodada 6, item 3. A regra antiga só olhava "cancelou antes, assinou depois".
+    Ana Ariel assinou a Pro 8 minutos ANTES da Essencial ser cancelada, e o par
+    nunca era detectado: ela contava como nova assinatura E como churn no mesmo
+    mês. Agora a janela é de ±30 dias e vale nos dois sentidos.
 
-    `reference_time` (default None → datetime.now()) existe pra permitir
-    processar eventos HISTÓRICOS com a janela ancorada na data do próprio
-    evento, não em "agora" — sem isso, importar uma linha de abril nunca
-    dispara a regra, porque abril já estaria fora da janela de 30 dias
-    contados da data de execução do import.
+    - Mesmo plano em ≤1 dia = continuação (trocou forma de pagamento).
+    - Plano diferente em ≤30 dias = upgrade/downgrade.
+
+    `reference_time` (default `now()`) permite processar eventos HISTÓRICOS com a
+    janela ancorada na data do próprio evento.
     """
-    cpf = fields.get("customer_cpf")
-    event = fields.get("event_type") or ""
-    if not cpf:
-        return False
-
     from datetime import timedelta
 
+    cpf = fields.get("customer_cpf")
+    if not cpf:
+        return None
+
+    evento = (fields.get("event_type") or "").lower()
+    if evento in PAID_LIKE_EVENTS:
+        procurado = ["subscription_canceled"]
+    elif evento == "subscription_canceled":
+        procurado = list(PAID_LIKE_EVENTS)
+    else:
+        return None
+
     agora = reference_time or datetime.now(timezone.utc)
-    cutoff = agora - timedelta(days=30)
-    recent = (
+    janela = timedelta(days=30)
+    candidatos = (
         db.query(SubscriptionEvent)
         .filter(
             SubscriptionEvent.customer_cpf == cpf,
-            SubscriptionEvent.received_at >= cutoff,
-            SubscriptionEvent.received_at <= agora,
-            SubscriptionEvent.event_type == "subscription_canceled",
+            SubscriptionEvent.received_at >= agora - janela,
+            SubscriptionEvent.received_at <= agora + janela,
+            SubscriptionEvent.event_type.in_(procurado),
         )
         .order_by(SubscriptionEvent.received_at.desc())
         .limit(20)
         .all()
     )
 
-    paid_like = event in ("order_approved", "subscription_renewed", "compra_aprovada")
-    if not paid_like:
-        return False
-
-    for ev in recent:
+    for ev in candidatos:
         recebido = ev.received_at
         if recebido is not None and recebido.tzinfo is None:
             recebido = recebido.replace(tzinfo=timezone.utc)
-        gap = agora - (recebido or agora)
+        gap = abs(agora - (recebido or agora))
         mesmo_plano = (ev.plan_name or "") == (fields.get("plan_name") or "") and (
             ev.plan_frequency or ""
         ) == (fields.get("plan_frequency") or "")
         if mesmo_plano and gap <= timedelta(days=1):
-            return True  # continuação
-        if not mesmo_plano and gap <= timedelta(days=30):
-            return True  # upgrade/downgrade
-    return False
+            return ev
+        if not mesmo_plano and gap <= janela:
+            return ev
+    return None
 
 
 def alertar_cobrancas_desconhecidas(db: Session, ev) -> list:
@@ -264,20 +269,10 @@ def record_subscription_event(
             if user:
                 user_id = user.id
 
-        is_plan_change = _mark_plan_change_if_needed(db, fields)
-        if is_plan_change and fields.get("customer_cpf"):
-            recent_cancel = (
-                db.query(SubscriptionEvent)
-                .filter(
-                    SubscriptionEvent.customer_cpf == fields["customer_cpf"],
-                    SubscriptionEvent.event_type == "subscription_canceled",
-                    SubscriptionEvent.is_plan_change.is_(False),
-                )
-                .order_by(SubscriptionEvent.received_at.desc())
-                .first()
-            )
-            if recent_cancel:
-                recent_cancel.is_plan_change = True
+        par = encontrar_par_de_plan_change(db, fields)
+        is_plan_change = par is not None
+        if par is not None and not par.is_plan_change:
+            par.is_plan_change = True
 
         row = SubscriptionEvent(
             event_type=fields["event_type"],

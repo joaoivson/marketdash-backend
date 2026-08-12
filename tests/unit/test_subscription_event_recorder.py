@@ -14,7 +14,7 @@ from app.services.subscription_event_recorder import (
     extract_event_fields,
     record_subscription_event,
     _as_cents,
-    _mark_plan_change_if_needed,
+    encontrar_par_de_plan_change,
 )
 
 
@@ -111,7 +111,7 @@ def test_extract_card_rejection_reason_top_level():
     assert fields["card_rejection_reason"] == "insufficient_funds"
 
 
-# --- _mark_plan_change_if_needed (continuação/upgrade, item 12 / Parte B.2) ------
+# --- encontrar_par_de_plan_change (continuação/upgrade, item 12 / Parte B.2) ------
 
 
 @pytest.fixture
@@ -161,7 +161,9 @@ def test_continuacao_mesmo_plano_ate_1_dia(db):
         "plan_name": "Pro", "plan_frequency": "monthly",
     }
     novo_pagamento = cancel_em  # instante exato
-    assert _mark_plan_change_if_needed(db, fields, reference_time=novo_pagamento) is True
+    par = encontrar_par_de_plan_change(db, fields, reference_time=novo_pagamento)
+    assert par is not None
+    assert par.customer_cpf == "111"
 
 
 def test_upgrade_plano_diferente_ate_30_dias(db):
@@ -173,7 +175,9 @@ def test_upgrade_plano_diferente_ate_30_dias(db):
         "plan_name": "Pro", "plan_frequency": "quarterly",
     }
     novo_pagamento = datetime(2026, 5, 31, 0, 0, tzinfo=timezone.utc)  # 9 dias depois
-    assert _mark_plan_change_if_needed(db, fields, reference_time=novo_pagamento) is True
+    par = encontrar_par_de_plan_change(db, fields, reference_time=novo_pagamento)
+    assert par is not None
+    assert par.customer_cpf == "222"
 
 
 def test_mesmo_plano_mas_gap_maior_que_1_dia_nao_conta(db):
@@ -185,7 +189,7 @@ def test_mesmo_plano_mas_gap_maior_que_1_dia_nao_conta(db):
         "plan_name": "Pro", "plan_frequency": "monthly",
     }
     novo_pagamento = datetime(2026, 4, 12, 12, 7, tzinfo=timezone.utc)  # ~41h depois
-    assert _mark_plan_change_if_needed(db, fields, reference_time=novo_pagamento) is False
+    assert encontrar_par_de_plan_change(db, fields, reference_time=novo_pagamento) is None
 
 
 def test_reference_time_ancora_a_janela_no_evento_historico_nao_em_agora(db):
@@ -200,9 +204,11 @@ def test_reference_time_ancora_a_janela_no_evento_historico_nao_em_agora(db):
     }
     novo_pagamento = datetime(2026, 4, 9, 0, 0, tzinfo=timezone.utc)
     # Sem reference_time (usa datetime.now() real, muito distante de abril/2026) — não dispara.
-    assert _mark_plan_change_if_needed(db, fields) is False
+    assert encontrar_par_de_plan_change(db, fields) is None
     # Com reference_time ancorado no evento histórico — dispara (upgrade, plano diferente, <30d).
-    assert _mark_plan_change_if_needed(db, fields, reference_time=novo_pagamento) is True
+    par = encontrar_par_de_plan_change(db, fields, reference_time=novo_pagamento)
+    assert par is not None
+    assert par.customer_cpf == "444"
 
 
 def test_cancel_sem_par_nao_dispara(db):
@@ -210,7 +216,7 @@ def test_cancel_sem_par_nao_dispara(db):
         "event_type": "order_approved", "customer_cpf": "555",
         "plan_name": "Pro", "plan_frequency": "monthly",
     }
-    assert _mark_plan_change_if_needed(db, fields, reference_time=datetime.now(timezone.utc)) is False
+    assert encontrar_par_de_plan_change(db, fields, reference_time=datetime.now(timezone.utc)) is None
 
 
 # --- backfill de subscription_id (Parte B.5 — reconciliação futura do import) ---
