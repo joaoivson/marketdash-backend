@@ -88,8 +88,10 @@ def extract_event_fields(payload: Dict[str, Any], event_type: str) -> Dict[str, 
     if not isinstance(charges, dict):
         charges = {}
     # Array cumulativo de cobranças já pagas dessa assinatura — cada entrada tem seu
-    # próprio order_id (diferente do order_id do webhook em si). Fonte de verdade
-    # pra "cobrança distinta" — ver migration 038.
+    # próprio order_id (diferente do order_id do webhook em si). NÃO é fonte de
+    # cobrança (Rodada 6, item 1: gerava faturamento duplicado com o import
+    # histórico) — só verificação de webhook perdido, ver
+    # `unknown_array_charges`/`alertar_cobrancas_desconhecidas` em charges.py.
     charges_completed = charges.get("completed")
     if not isinstance(charges_completed, list):
         charges_completed = None

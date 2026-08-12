@@ -69,6 +69,21 @@ def test_valor_do_webhook_prevalece_sobre_o_do_import():
     assert total_paid_net([importado, webhook]) == 6050
 
 
+def test_webhook_sem_net_nao_apaga_valor_forte_do_import():
+    """Finding 2 (revisão final): _better() não pode deixar origem (import vs
+    webhook) vencer ANTES de checar se o vencedor tem líquido — um webhook
+    cujo payload não trouxe Commissions.my_commission (net=None) não pode
+    apagar um import com dado completo. Sem isso, net vira 0 e, como
+    `_as_charge` cai pro preço de tabela quando bruto está ausente,
+    fee_cents = max(gross - net, 0) vira o preço de tabela INTEIRO — uma
+    linha de taxa absorve uma assinatura inteira, silenciosamente."""
+    importado = _ev(
+        id=1, order_ref="R2", dedupe_key="import:cobranca:R2", amount_net_cents=18150
+    )
+    webhook_sem_net = _ev(id=2, order_ref="R2", dedupe_key="wh:3", amount_net_cents=None)
+    assert total_paid_net([importado, webhook_sem_net]) == 18150
+
+
 def test_array_charges_completed_nao_gera_cobranca():
     """Bruna Cabral: import 42,35 + array 60,50 = 102,85 no painel. Só 42,35 é real."""
     importado = _ev(

@@ -173,6 +173,47 @@ def test_cancelamento_troca_de_plano_no_ciclo_nao_desfaz_renovacao():
     assert svc.renewal_rate(2026, 8) == 1.0
 
 
+def test_upgrade_com_vencimento_no_mes_conta_como_renovada():
+    """Finding 1 (revisão final): a cliente que fez upgrade tem duas
+    subscriber_keys (a Kiwify atribui um subscription_id NOVO no upgrade) —
+    Essencial (sub-ess-1) e Pro (sub-pro-1), mesmo CPF.
+
+    A vigência Essencial vence dentro do mês medido. O cancelamento da
+    Essencial é o lado superado do upgrade (is_plan_change=True) — já
+    corretamente excluído de cancel_instants(), então `cancelou_no_ciclo`
+    dá False. Mas o PAGAMENTO da renovação-por-upgrade caiu sob a chave NOVA
+    (sub-pro-1), pago ANTES do vencimento da Essencial e dentro da janela de
+    tolerância — sem olhar pra essa outra chave, `pagou` também dá False e
+    ela é contada como renovação FALHA, quando na verdade é uma cliente
+    contínua e pagante que só trocou de plano.
+    """
+    essencial_jul = _cobranca(
+        "E-JUL", "888", datetime(2026, 7, 6, tzinfo=timezone.utc), net=4235
+    )
+    essencial_jul.subscription_id = "sub-ess-1"
+    essencial_cancel_upgrade = _cancelamento(
+        "888", datetime(2026, 8, 6, 10, 0, tzinfo=timezone.utc), is_plan_change=True
+    )
+    essencial_cancel_upgrade.subscription_id = "sub-ess-1"
+    # Pago sob a chave NOVA (sub-pro-1) — 1h antes do vencimento da Essencial
+    # (08/08 = 07/07 + 1 mês), dentro da tolerância de 3 dias.
+    pro_pago_upgrade = _cobranca(
+        "PRO-AGO", "888", datetime(2026, 8, 6, 9, 0, tzinfo=timezone.utc), net=6050
+    )
+    pro_pago_upgrade.subscription_id = "sub-pro-1"
+    pro_pago_upgrade.is_plan_change = True
+
+    svc = AdminMetricsService(MagicMock())
+    svc._all_events = lambda: [
+        essencial_jul,
+        essencial_cancel_upgrade,
+        pro_pago_upgrade,
+    ]
+    svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
+
+    assert svc.renewal_rate(2026, 8) == 1.0
+
+
 def test_cancelamento_ajuste_produtor_no_ciclo_nao_desfaz_renovacao():
     """Finding 2b: cancelamento com cancel_reason="cancelado pelo produtor"
     dentro da janela do ciclo não é churn real (ajuste administrativo) —

@@ -567,6 +567,34 @@ class AdminMetricsService:
                 if quando:
                     cobrancas_por_assinante[chave].append(quando)
 
+        # Upgrade/downgrade (Rodada 6, item 3) atribui um subscription_id NOVO —
+        # a cliente vira duas subscriber_keys pro mesmo CPF: a antiga (superada,
+        # cancelada com is_plan_change=True) e a nova (o pagamento do upgrade).
+        # Quando o vencimento da chave antiga cai dentro do mês medido, o
+        # pagamento que a "renova" está sob a chave NOVA, não a dela mesma —
+        # sem isso, a cobrança some do `pagou` e ela conta como renovação
+        # falha quando é uma cliente contínua e pagante (Finding, revisão
+        # final). `cancel_instants()` já exclui esse cancelamento de
+        # `cancelamentos`, então só falta ensinar `pagou` a olhar pro CPF.
+        chaves_superadas_por_troca: set = set()
+        chaves_lado_troca_por_cpf: Dict[str, List[str]] = defaultdict(list)
+        cpf_por_chave: Dict[str, str] = {}
+        for chave, evs in por_assinante.items():
+            cpf = next(
+                (getattr(e, "customer_cpf", None) for e in evs if getattr(e, "customer_cpf", None)),
+                None,
+            )
+            if cpf:
+                cpf_por_chave[chave] = cpf
+                if any(getattr(e, "is_plan_change", False) for e in evs):
+                    chaves_lado_troca_por_cpf[cpf].append(chave)
+            if any(
+                (getattr(e, "event_type", None) or "").lower() == "subscription_canceled"
+                and getattr(e, "is_plan_change", False)
+                for e in evs
+            ):
+                chaves_superadas_por_troca.add(chave)
+
         # Tolerância: a cobrança de renovação cai em cima do vencimento, mas a
         # Kiwify pode processar com algumas horas de diferença (e o fim da
         # vigência é calculado por soma de meses, não pelo relógio deles).
@@ -580,9 +608,16 @@ class AdminMetricsService:
                 continue
             venceu_em = max(vencimentos)
             denominador += 1
+            candidatos_pagamento = list(cobrancas_por_assinante.get(chave, []))
+            if chave in chaves_superadas_por_troca:
+                cpf = cpf_por_chave.get(chave)
+                for outra in chaves_lado_troca_por_cpf.get(cpf, []) if cpf else []:
+                    if outra == chave:
+                        continue
+                    candidatos_pagamento.extend(cobrancas_por_assinante.get(outra, []))
             pagou = any(
                 (venceu_em - tolerancia) <= quando <= end
-                for quando in cobrancas_por_assinante.get(chave, [])
+                for quando in candidatos_pagamento
             )
             # Uma cobrança perto do vencimento que é desfeita por um
             # cancelamento REAL (cancel_instants já exclui troca de plano e
@@ -1048,8 +1083,9 @@ class AdminMetricsService:
             else:
                 sub_filter = SubscriptionEvent.customer_email == ev.customer_email
             sub_events = self.db.query(SubscriptionEvent).filter(sub_filter).all()
-            # Preferir união de charges paid; fallback legado se união vazia
-            # (sem array OU só waiting_payment / não-paid).
+            # Total pago líquido = soma das cobranças distintas por order_ref
+            # (charges.py) — sem caminho legado, `_paid_total_for_events` é só
+            # um passthrough pra `total_paid_net`.
             paid_total_net = _paid_total_for_events(sub_events)
 
             name = ev.customer_name or (user.name if user else None) or ""

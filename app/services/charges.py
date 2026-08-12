@@ -59,17 +59,23 @@ def _normalize_plan_label(name: Optional[str], plan_id: Optional[str] = None) ->
 def _better(candidato, atual) -> bool:
     """Qual dos dois eventos representa melhor a mesma cobrança.
 
-    Ordem: webhook ganha do import (o `my_commission` do webhook é a fonte
-    autoritativa do líquido); depois quem tem líquido preenchido; depois o mais
-    antigo por `received_at`, só para o resultado ser estável entre queries.
+    Ordem: quem tem líquido preenchido SEMPRE ganha de quem não tem — um
+    evento sem `amount_net_cents` nunca pode apagar um valor real, seja qual
+    for a origem (achado da revisão final: um webhook sem Commissions.
+    my_commission zerava o net de um import completo e `fee_cents` virava o
+    preço de tabela inteiro). Só quando os dois estão empatados em
+    "completude" (ambos com líquido, ou ambos sem) é que a origem decide:
+    webhook ganha do import (o `my_commission` do webhook é a fonte
+    autoritativa do líquido). Por fim, o mais antigo por `received_at`, só
+    para o resultado ser estável entre queries.
     """
-    if is_import_event(candidato) != is_import_event(atual):
-        return is_import_event(atual)  # atual é import, candidato não → troca
-
     tem_net_cand = getattr(candidato, "amount_net_cents", None) is not None
     tem_net_atual = getattr(atual, "amount_net_cents", None) is not None
     if tem_net_cand != tem_net_atual:
         return tem_net_cand
+
+    if is_import_event(candidato) != is_import_event(atual):
+        return is_import_event(atual)  # atual é import, candidato não → troca
 
     r_cand = getattr(candidato, "received_at", None)
     r_atual = getattr(atual, "received_at", None)
