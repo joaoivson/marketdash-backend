@@ -156,8 +156,12 @@ def encontrar_par_de_plan_change(
     nunca era detectado: ela contava como nova assinatura E como churn no mesmo
     mês. Agora a janela é de ±30 dias e vale nos dois sentidos.
 
-    - Mesmo plano em ≤1 dia = continuação (trocou forma de pagamento).
-    - Plano diferente em ≤30 dias = upgrade/downgrade.
+    - Mesmo plano em ≤1 dia = continuação (trocou forma de pagamento). Direcional:
+      só conta quando o CANCELAMENTO aconteceu ANTES (ou no mesmo instante) do
+      PAGAMENTO — nunca o contrário. Renovação seguida de cancelamento de verdade
+      horas depois (caso Girlene/Dayana) não é "continuação", é churn de verdade;
+      só a bidirecionalidade do ramo de plano DIFERENTE (upgrade) foi pedida.
+    - Plano diferente em ≤30 dias = upgrade/downgrade (bidirecional, qualquer ordem).
 
     `reference_time` (default `now()`) permite processar eventos HISTÓRICOS com a
     janela ancorada na data do próprio evento.
@@ -200,7 +204,18 @@ def encontrar_par_de_plan_change(
             ev.plan_frequency or ""
         ) == (fields.get("plan_frequency") or "")
         if mesmo_plano and gap <= timedelta(days=1):
-            return ev
+            # Direcional: cancelamento tem que ter acontecido ANTES (ou junto)
+            # do pagamento — nunca depois. `evento` é o tipo do evento que está
+            # chegando (`agora`); `ev` é o candidato (`recebido`). Um dos dois é
+            # o cancelamento e o outro é o pago — descobre qual é qual pra
+            # comparar os timestamps reais, não a ordem de chegada/processamento.
+            if evento == "subscription_canceled":
+                cancelado_em, pago_em = agora, recebido
+            else:
+                cancelado_em, pago_em = recebido, agora
+            if cancelado_em is not None and pago_em is not None and cancelado_em <= pago_em:
+                return ev
+            continue
         if not mesmo_plano and gap <= janela:
             return ev
     return None

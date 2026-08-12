@@ -261,6 +261,31 @@ def test_cancelamento_chegando_encontra_pagamento_anterior_sessao_real(db):
     assert par.customer_cpf == cpf
 
 
+def test_cancelamento_depois_de_pagamento_mesmo_plano_nao_e_continuacao(db):
+    """Fix do item 5b: renovação normal seguida de cancelamento de verdade não
+    pode virar 'continuação' só porque caiu dentro de ≤1 dia e é o mesmo plano.
+
+    Caso real (nomes trocados por dados sintéticos): cliente fictícia renova o
+    plano Pro às 04:46 e cancela a MESMA assinatura às 18:19 do mesmo dia — um
+    cancelamento genuíno horas depois da renovação, não uma troca de forma de
+    pagamento. A branch de mesmo-plano só pode formar par quando o CANCELAMENTO
+    aconteceu ANTES (ou no mesmo instante) do PAGAMENTO — nunca o contrário.
+    """
+    cpf = "10920930455"  # CPF sintético, não corresponde a pessoa real
+    pagamento_em = datetime(2026, 8, 5, 4, 46, tzinfo=timezone.utc)
+    _paid(db, cpf, pagamento_em, plan_name="Pro", plan_frequency="monthly")
+
+    cancelamento_em = datetime(2026, 8, 5, 18, 19, tzinfo=timezone.utc)  # ~13h33 depois
+    fields = {
+        "event_type": "subscription_canceled",
+        "customer_cpf": cpf,
+        "plan_name": "Pro",
+        "plan_frequency": "monthly",
+    }
+    par = encontrar_par_de_plan_change(db, fields, reference_time=cancelamento_em)
+    assert par is None
+
+
 def test_cancelamento_chegando_sem_pagamento_nao_forma_par_com_outro_cancelamento(db):
     """Guarda de regressão: se `procurado` for trocado por engano para
     ['subscription_canceled'] (em vez de PAID_LIKE_EVENTS) no ramo reverso, esse
