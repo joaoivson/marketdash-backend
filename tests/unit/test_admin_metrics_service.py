@@ -880,6 +880,130 @@ def test_list_clients_merge_de_upgrade_nao_contamina_assinatura_independente_do_
     assert cpf_rows["sub-antiga"]["total_paid_net_cents"] == 9000
 
 
+def test_list_clients_candidatura_a_sobrevivente_usa_sinal_duravel_nao_evento_mais_recente():
+    """Finding (Important, task 3b, reproduzido pelo revisor): a candidatura a
+    sobrevivente do merge lia `is_plan_change` do evento mais recente do grupo
+    (`all_latest[key]`) — um sinal EFÊMERO. Logo após o upgrade, o evento mais
+    recente da sobrevivente É o próprio pagamento do upgrade (is_plan_change=
+    True), então ela qualifica. Mas assim que a sobrevivente tem uma renovação
+    NORMAL (subscription_renewed comum, is_plan_change=False — não é ela
+    própria lado de nenhuma troca de plano), essa renovação vira o novo
+    "evento mais recente" da chave (prioridade 2 > 1 de order_approved,
+    `_SUBSCRIBER_STATE_PRIORITY`), e a checagem de candidatura passa a ler
+    is_plan_change=False. A sobrevivente deixa de qualificar como candidata,
+    o grupo antigo apagado fica sem absorvedor e o dinheiro dele (e a própria
+    linha) somem do painel. O fix usa um sinal DURÁVEL: a chave tem, no
+    histórico INTEIRO de eventos, algum evento com is_plan_change=True?"""
+    cpf = "666.666.666-66"
+    t1 = datetime(2026, 6, 1, tzinfo=timezone.utc)  # upgrade Essencial -> Pro
+    t2 = datetime(2026, 6, 5, tzinfo=timezone.utc)  # pagamento inicial da Pro (upgrade)
+    t3 = datetime(2026, 7, 5, tzinfo=timezone.utc)  # renovação normal da Pro, um mês depois
+
+    old_superado = _ev(
+        event_type="subscription_canceled",
+        subscription_id="sub-old-3",
+        customer_cpf=cpf,
+        customer_email="renovacao.depois.upgrade@example.com",
+        customer_name="Renovacao Depois Upgrade",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Essencial",
+        plan_id="essencial",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="canceled",
+        has_access=False,
+        is_plan_change=True,
+        received_at=t1,
+    )
+    novo_upgrade = _ev(
+        event_type="order_approved",
+        subscription_id="sub-new-3",
+        customer_cpf=cpf,
+        customer_email="renovacao.depois.upgrade@example.com",
+        customer_name="Renovacao Depois Upgrade",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="active",
+        has_access=True,
+        is_plan_change=True,
+        received_at=t2,
+    )
+    renovacao_normal = _ev(
+        event_type="subscription_renewed",
+        subscription_id="sub-new-3",
+        customer_cpf=cpf,
+        customer_email="renovacao.depois.upgrade@example.com",
+        customer_name="Renovacao Depois Upgrade",
+        user_id=None,
+        customer_phone=None,
+        plan_name="Pro",
+        plan_id="pro",
+        plan_frequency="monthly",
+        subscription_start=None,
+        subscription_status="active",
+        has_access=True,
+        is_plan_change=False,  # renovação comum — não é ela própria lado de troca
+        received_at=t3,
+    )
+
+    cobranca_antiga = _ev(
+        event_type="order_approved",
+        order_id="order-antiga-3",
+        subscription_id="sub-old-3",
+        customer_cpf=cpf,
+        amount_net_cents=5000,
+        received_at=t1,
+    )
+    cobranca_upgrade = _ev(
+        event_type="order_approved",
+        order_id="order-upgrade-3",
+        subscription_id="sub-new-3",
+        customer_cpf=cpf,
+        amount_net_cents=2000,
+        received_at=t2,
+    )
+    cobranca_renovacao = _ev(
+        event_type="subscription_renewed",
+        order_id="order-renovacao-3",
+        subscription_id="sub-new-3",
+        customer_cpf=cpf,
+        amount_net_cents=3000,
+        received_at=t3,
+    )
+
+    db = _mock_db_for_list_clients_com_cobrancas(
+        por_subscription_id={
+            "sub-old-3": [cobranca_antiga],
+            "sub-new-3": [cobranca_upgrade, cobranca_renovacao],
+        },
+        por_cpf={
+            cpf: [cobranca_antiga, cobranca_upgrade, cobranca_renovacao],
+        },
+    )
+
+    svc = AdminMetricsService(db)
+    svc._all_events = lambda: [old_superado, novo_upgrade, renovacao_normal]
+    svc._semaphore = lambda uid: "red"
+
+    rows = svc.list_clients({})
+    cpf_rows = [r for r in rows if r["cpf"] == cpf]
+
+    # A renovação normal vira o "latest" da sobrevivente, mas a chave nunca
+    # deixa de ter sido lado de upgrade no histórico — a linha antiga
+    # (sub-old-3) não pode sumir sem deixar rastro.
+    assert len(cpf_rows) == 1
+    assert cpf_rows[0]["subscription_id"] == "sub-new-3"
+    # 5000 (assinatura antiga) + 2000 (pagamento do upgrade) + 3000 (renovação
+    # normal posterior) — as três cobranças, não só as da subscription_id
+    # sobrevivente.
+    assert cpf_rows[0]["total_paid_net_cents"] == 10000
+
+
 def test_status_filter_aceita_lista_e_busca_ignora_filtro():
     """Rodada 6 item 10: padrão sem Inativo, mas buscar "Débora" acha a inativa."""
     from app.services.admin_metrics_service import _status_permitido

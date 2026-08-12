@@ -890,7 +890,21 @@ class AdminMetricsService:
     def list_clients(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         actives_map = {_subscriber_key(e): e for e in self.active_subscribers()}
         # also include inactive with latest event
-        all_latest = _latest_by_subscriber(self._all_events())
+        eventos = self._all_events()
+        all_latest = _latest_by_subscriber(eventos)
+        # Sinal DURÁVEL de "esta chave já foi lado de uma troca de plano
+        # alguma vez" — usado pela candidatura a sobrevivente do merge logo
+        # abaixo. `all_latest[key].is_plan_change` sozinho é EFÊMERO: logo
+        # após um upgrade o evento mais recente da sobrevivente é o próprio
+        # pagamento do upgrade (is_plan_change=True), mas assim que ela tem
+        # uma renovação normal (is_plan_change=False, não é ela própria lado
+        # de troca) essa renovação vira o novo "latest" da chave e a
+        # sobrevivente deixava de qualificar como candidata — o grupo antigo
+        # apagado ficava sem absorvedor e sumia do painel (Finding, task 3b,
+        # reproduzido pelo revisor).
+        keys_com_plan_change = {
+            _subscriber_key(e) for e in eventos if getattr(e, "is_plan_change", False)
+        }
 
         # Kiwify atribui um subscription_id NOVO quando o cliente faz upgrade/
         # downgrade de plano (não reaproveita o antigo) — então a mesma pessoa
@@ -943,14 +957,15 @@ class AdminMetricsService:
                 )
                 matched = [k for k in matched if k != mais_recente]
             # Candidatos a absorver o dinheiro dos grupos apagados: só
-            # sobreviventes que também têm is_plan_change=True — sinal de que
-            # ELES TAMBÉM são lado de uma troca de plano (o lado pago do
+            # sobreviventes que TÊM (em algum momento do histórico, sinal
+            # durável — keys_com_plan_change) is_plan_change=True — sinal de
+            # que ELES TAMBÉM são lado de uma troca de plano (o lado pago do
             # upgrade), não uma assinatura independente que só coincide de
             # compartilhar o CPF (ex.: sub-antiga, is_plan_change=False).
             candidatos = [
                 key
                 for key in keys
-                if key not in matched and getattr(all_latest[key], "is_plan_change", False)
+                if key not in matched and key in keys_com_plan_change
             ]
             for key in matched:
                 ev_removido = all_latest[key]
