@@ -1,5 +1,5 @@
 """Unit tests for subscription_event_recorder."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -217,6 +217,70 @@ def test_cancel_sem_par_nao_dispara(db):
         "plan_name": "Pro", "plan_frequency": "monthly",
     }
     assert encontrar_par_de_plan_change(db, fields, reference_time=datetime.now(timezone.utc)) is None
+
+
+def _paid(db, cpf, received_at, plan_name="Pro", plan_frequency="monthly", event_type="order_approved"):
+    ev = SubscriptionEvent(
+        event_type=event_type,
+        customer_cpf=cpf,
+        plan_name=plan_name,
+        plan_frequency=plan_frequency,
+        received_at=received_at,
+        raw_payload={},
+        dedupe_key=f"k-paid-{received_at.isoformat()}-{cpf}",
+    )
+    db.add(ev)
+    db.commit()
+    return ev
+
+
+def test_cancelamento_chegando_encontra_pagamento_anterior_sessao_real(db):
+    """Review do Task 5: as 5 tests DB-backed existentes só cobrem 'evento pago
+    chega, procura cancelamento'. Esse aqui cobre a direção que faltava — o caso
+    real da Ana Ariel: o CANCELAMENTO chega e precisa achar o PAGAMENTO anterior
+    (não o outro cancelamento) numa sessão SQLite de verdade, não em mock."""
+    cpf = "666"
+    pagamento_em = datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc)
+    pago = _paid(db, cpf, pagamento_em, plan_name="Pro", plan_frequency="monthly")
+
+    fields = {
+        "event_type": "subscription_canceled",
+        "customer_cpf": cpf,
+        "plan_name": "Essencial",
+        "plan_frequency": "monthly",
+    }
+    # Cancelamento da Essencial chega 8 minutos DEPOIS do pagamento da Pro —
+    # o timeline exato da Ana Ariel.
+    par = encontrar_par_de_plan_change(
+        db, fields, reference_time=pagamento_em + timedelta(minutes=8)
+    )
+    assert par is not None
+    assert par.id == pago.id
+    assert par.event_type == "order_approved"
+    assert par.plan_name == "Pro"
+    assert par.customer_cpf == cpf
+
+
+def test_cancelamento_chegando_sem_pagamento_nao_forma_par_com_outro_cancelamento(db):
+    """Guarda de regressão: se `procurado` for trocado por engano para
+    ['subscription_canceled'] (em vez de PAID_LIKE_EVENTS) no ramo reverso, esse
+    teste falha — só existe um OUTRO evento subscription_canceled no banco (sem
+    nenhum evento pago), e a função não pode confundir esse cancelamento com o
+    par que está procurando."""
+    cpf = "777"
+    outro_cancelamento_em = datetime(2026, 7, 10, 10, 0, tzinfo=timezone.utc)
+    _cancel(db, cpf, outro_cancelamento_em, plan_name="Pro", plan_frequency="monthly")
+
+    fields = {
+        "event_type": "subscription_canceled",
+        "customer_cpf": cpf,
+        "plan_name": "Essencial",
+        "plan_frequency": "monthly",
+    }
+    par = encontrar_par_de_plan_change(
+        db, fields, reference_time=outro_cancelamento_em + timedelta(minutes=8)
+    )
+    assert par is None
 
 
 # --- backfill de subscription_id (Parte B.5 — reconciliação futura do import) ---
