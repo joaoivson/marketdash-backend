@@ -1166,6 +1166,12 @@ class AdminMetricsService:
                 if (datetime.now(timezone.utc) - lf.received_at).days > 14:
                     continue
             if filters.get("no_login_10d"):
+                if uid is None:
+                    # Sem user_id vinculado (import histórico sem conta
+                    # criada na plataforma) — não existe "acesso" a medir,
+                    # não é "sem acesso". Mesma regra de _base_ativa() em
+                    # platform_usage_service.py, pra card e lista baterem.
+                    continue
                 today = datetime.now(timezone.utc).date()
                 if last_login:
                     try:
