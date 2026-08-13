@@ -323,11 +323,20 @@ class PlatformUsageService:
         )
         ids = [l[0] for l in linhas]
         uso = self.uso_de_links_e_paginas(periodo, ids)
+
+        from app.services.admin_metrics_service import AdminMetricsService, _normalize_plan_label
+
+        planos = {
+            ev.user_id: _normalize_plan_label(ev.plan_name, ev.plan_id)
+            for ev in AdminMetricsService(self.db).active_subscribers()
+            if ev.user_id in set(ids)
+        }
         return [
             {
                 "user_id": uid,
                 "nome": capitalizar_nome(nomes.get(uid)) or emails.get(uid) or f"#{uid}",
                 "email": emails.get(uid),
+                "plan": planos.get(uid),
                 "acessos": acessos,
                 "dias_ativos": dias,
                 "ultimo_acesso": ultimo.isoformat() if ultimo else None,
