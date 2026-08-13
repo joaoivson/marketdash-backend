@@ -36,15 +36,21 @@ def test_bruto_usa_preco_de_tabela_nao_ultima_cobranca():
     assert resultado["net"] == 4000
 
 
-def test_bruto_cai_no_valor_real_quando_plano_fora_do_catalogo():
+def test_bruto_cai_no_valor_real_quando_plano_fora_do_catalogo(monkeypatch):
+    import app.services.admin_metrics_service as ams
+
+    monkeypatch.setattr(ams, "list_price_cents", lambda plan, frequency: None)
+
     svc = AdminMetricsService(MagicMock())
-    assinante = _ev(plan_name="Plano Descontinuado", plan_id="legado", amount_gross_cents=5000, amount_net_cents=4500)
+    assinante = _ev(amount_gross_cents=5000, amount_net_cents=4500)
     svc._last_paid_for = lambda ev: assinante
 
     resultado = svc.mrr_cents(actives=[assinante])
 
-    # _normalize_plan_label("Plano Descontinuado", "legado") cai em "essencial"
-    # por default — mas se não houver frequência reconhecida ou preço no
-    # catálogo, list_price_cents pode retornar None; nesse caso o fallback é
-    # o valor real pago (comportamento anterior), não zero.
-    assert resultado["gross"] > 0
+    # list_price_cents mockado pra simular plano fora do catálogo — bruto
+    # cai no valor real pago (5000), dividido pela frequência trimestral
+    # (5000 / 3 = 1666,67 -> 1667), não fica None/0. Na prática hoje
+    # list_price_cents nunca retorna None de verdade (_normalize_plan_label
+    # é exaustivo), mas o fallback é defensivo — este teste garante que ele
+    # continua funcionando se o catálogo mudar no futuro.
+    assert resultado["gross"] == round(5000 / 3)
