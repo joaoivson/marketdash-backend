@@ -113,3 +113,33 @@ def test_campanha_antiga_com_insight_recente_continua_ativa(db):
     resp = CampaignService(CampaignRepository(db)).list_campaigns(USUARIA)
 
     assert resp.kpis.active_campaigns_count == 1
+
+
+def test_campanha_antiga_pausada_e_reativada_ainda_sem_insight_conta_como_ativa(db):
+    """Campanha criada há semanas, ficou PAUSADA um tempo e o usuário acabou de
+    reativar (sync trouxe effective_status=ACTIVE de novo) — ainda não teve
+    tempo de acumular insight novo. `created_at` é de semanas atrás, então só
+    `status_active_since` (bumpado na transição PAUSED->ACTIVE pelo repositório)
+    evita que ela seja confundida com uma campanha zumbi."""
+    repo = CampaignRepository(db)
+    velha = datetime.now(timezone.utc) - timedelta(days=40)
+    campanha = Campaign(
+        user_id=USUARIA, fb_campaign_id="reativada", name="Campanha", ad_account_id=CONTA,
+        status="PAUSED", effective_status="PAUSED", daily_budget=10.0, created_at=velha,
+    )
+    db.add(campanha)
+    db.flush()
+    _insight(db, campanha, dias_atras=20, spend=8.0)  # última entrega antes de pausar
+
+    # Sync detecta a reativação: PAUSED -> ACTIVE.
+    repo.upsert_campaign(
+        USUARIA, "reativada",
+        {"ad_account_id": CONTA, "name": "Campanha", "status": "ACTIVE", "effective_status": "ACTIVE", "daily_budget": 10.0},
+    )
+    _integracao(db)
+    db.commit()
+
+    resp = CampaignService(repo).list_campaigns(USUARIA)
+
+    assert resp.kpis.active_campaigns_count == 1
+    assert resp.kpis.total_daily_budget == 10.0
