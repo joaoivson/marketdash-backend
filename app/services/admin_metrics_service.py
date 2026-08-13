@@ -19,6 +19,7 @@ from app.models.user_login import UserLogin
 from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
 from app.services.charges import extract_paid_charges, total_paid_net
+from app.core.plans import list_price_cents
 
 PAID_EVENTS = {
     "order_approved",
@@ -398,7 +399,13 @@ class AdminMetricsService:
             # última cobrança paga da assinatura
             paid = self._last_paid_for(ev)
             n = (paid.amount_net_cents if paid else ev.amount_net_cents) or 0
-            g = (paid.amount_gross_cents if paid else ev.amount_gross_cents) or 0
+            # Bruto (Rodada 7, item 3) = preço de TABELA vigente, não a última
+            # cobrança real — evita que desconto/cupom histórico distorça o
+            # "faturamento potencial" que o bruto representa. Sem preço
+            # cadastrado pro plano/frequência, cai no valor real pago.
+            plano = _normalize_plan_label(ev.plan_name, ev.plan_id)
+            tabela = list_price_cents(plano, ev.plan_frequency)
+            g = tabela if tabela is not None else ((paid.amount_gross_cents if paid else ev.amount_gross_cents) or 0)
             net_frac += n / div
             gross_frac += g / div
         return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}

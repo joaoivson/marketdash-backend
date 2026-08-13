@@ -391,18 +391,33 @@ def test_faturamento_do_mes_nao_dobra_com_import_e_webhook():
 def test_mrr_cents_nao_perde_centavos_com_divisao_por_assinante():
     """3 assinantes trimestrais com resto não-nulo cada (100/3 = 33,33...) — a
     divisão inteira por assinante (100 // 3 = 33) perderia 1 centavo em cada um,
-    3 no total. Precisão cheia + arredondar só a soma preserva o valor exato."""
+    3 no total. Precisão cheia + arredondar só a soma preserva o valor exato.
+
+    Rodada 7, item 3: `gross` passou a vir do preço de TABELA do plano/
+    frequência (não mais de `amount_gross_cents`), por isso os eventos
+    precisam de `plan_name`/`plan_id` — aqui "essencial" trimestral, cujo
+    preço de tabela (11700) é exato ao dividir por 3, então a checagem de
+    precisão do bruto passa a ser coberta pelo teste de
+    `test_bruto_usa_preco_de_tabela_nao_ultima_cobranca` (14700 / 3 = 4900).
+    `net` continua vindo de `amount_net_cents` e segue testando a precisão."""
     from app.services.admin_metrics_service import AdminMetricsService
 
     svc = AdminMetricsService.__new__(AdminMetricsService)  # sem DB
     svc._last_paid_for = lambda ev: None  # força usar amount_net_cents/gross direto
     actives = [
-        SimpleNamespace(plan_frequency="quarterly", amount_net_cents=100, amount_gross_cents=100)
+        SimpleNamespace(
+            plan_frequency="quarterly",
+            plan_name="Essencial",
+            plan_id="essencial",
+            amount_net_cents=100,
+            amount_gross_cents=100,
+        )
         for _ in range(3)
     ]
     result = svc.mrr_cents(actives)
     assert result["net"] == 100  # não 99 (3 × (100 // 3))
-    assert result["gross"] == 100
+    # Bruto = preço de tabela essencial/trimestral (11700), não amount_gross_cents.
+    assert result["gross"] == 11700
 
 
 def test_serie_novas_x_canceladas_cobre_12_meses_ate_o_atual():
