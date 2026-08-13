@@ -1,7 +1,7 @@
 import logging
 import re
 import unicodedata
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import HTTPException, status
@@ -31,6 +31,13 @@ ROAS_BREAKEVEN = 1.0
 
 # Filtros de status aceitos pela lista (situação real no Meta).
 STATUS_FILTERS = ("all", "active", "paused")
+
+# Campanha ACTIVE sem NENHUM gasto/clique/impressão nos últimos N dias entra como
+# "zumbi de orçamento esgotado" (ver _still_delivering) — a não ser que tenha sido
+# sincronizada pela 1ª vez há menos de NEW_CAMPAIGN_GRACE_DAYS (aí ainda não teve
+# tempo de acumular insight, e não é o mesmo problema).
+RECENT_ACTIVITY_WINDOW_DAYS = 7
+NEW_CAMPAIGN_GRACE_DAYS = 3
 
 # Parte textual de um sub_id (ex.: "legging500280526" -> "legging"), ignorando os números.
 _SUBID_WORD_RE = re.compile(r"[a-zA-Z]+")
@@ -120,6 +127,23 @@ def merge_sub_id_option_rows(
 def _is_active(campaign: Campaign) -> bool:
     eff = (campaign.effective_status or campaign.status or "").upper()
     return eff == "ACTIVE"
+
+
+def _still_delivering(campaign: Campaign, recent_activity_ids: set) -> bool:
+    """Campanha ACTIVE mas com orçamento VITALÍCIO já esgotado fica travada em
+    `effective_status=ACTIVE` na Meta pra sempre, mesmo há semanas sem entregar
+    nada — `ad_review_issue` não pega esse caso (olha status do anúncio, não
+    histórico de entrega). Dá benefício da dúvida a campanhas recém-sincronizadas
+    (ainda sem insight acumulado)."""
+    if campaign.id in recent_activity_ids:
+        return True
+    created = campaign.created_at
+    if created is None:
+        return True
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    grace_cutoff = datetime.now(timezone.utc) - timedelta(days=NEW_CAMPAIGN_GRACE_DAYS)
+    return created > grace_cutoff
 
 
 def _health(linked: bool, spend: float, roas: float) -> str:
@@ -240,7 +264,17 @@ class CampaignService:
         # ACTIVE pra sempre sem nunca entregar nada, inflando a contagem e o orçamento
         # somado (caso real: campanha "recentemente rejeitada" no Gerenciador, zero
         # gasto/clique/impressão em 30 dias, contando como ativa igual às outras).
-        active_now = [c for c in campaigns if _is_active(c) and not c.ad_review_issue]
+        # Exclui também campanha ACTIVE com orçamento vitalício esgotado (zero
+        # entrega há mais de RECENT_ACTIVITY_WINDOW_DAYS dias) — mesma classe de
+        # bug: o Gerenciador do Meta já não conta como ativa, o MarketDash contava.
+        recent_activity_ids = self.repo.campaign_ids_with_recent_activity(
+            user_id, since=date.today() - timedelta(days=RECENT_ACTIVITY_WINDOW_DAYS)
+        )
+        active_now = [
+            c
+            for c in campaigns
+            if _is_active(c) and not c.ad_review_issue and _still_delivering(c, recent_activity_ids)
+        ]
         budget_now = round(sum(c.daily_budget or 0.0 for c in active_now), 2)
         active_count_now = len(active_now)
 
