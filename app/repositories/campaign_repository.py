@@ -112,11 +112,23 @@ class CampaignRepository:
 
         IMPORTANTE: preserva `sub_id` (vínculo manual) entre syncs — só os
         campos vindos do Facebook são sobrescritos.
+
+        `status_active_since` é bumpado quando `effective_status` TRANSICIONA
+        pra "ACTIVE" (criação com status já ativo, ou reativação após pausa)
+        — usado como âncora do período de carência do card "campanhas ativas"
+        pra campanha recém-(re)ativada que ainda não acumulou insight. Sem
+        isso, uma campanha antiga PAUSADA e reativada hoje ficaria presa no
+        `created_at` de semanas atrás e cairia no mesmo balde da campanha
+        zumbi (ver campaign_service._still_delivering).
         """
+        new_effective = (fields.get("effective_status") or fields.get("status") or "").upper()
         existing = self.get_by_fb_id(user_id, fb_campaign_id)
         if existing:
+            old_effective = (existing.effective_status or existing.status or "").upper()
             for key, value in fields.items():
                 setattr(existing, key, value)
+            if new_effective == "ACTIVE" and old_effective != "ACTIVE":
+                existing.status_active_since = func.now()
             existing.last_synced_at = func.now()
             self.db.flush()
             return existing
@@ -125,6 +137,7 @@ class CampaignRepository:
             user_id=user_id,
             fb_campaign_id=fb_campaign_id,
             last_synced_at=func.now(),
+            status_active_since=func.now() if new_effective == "ACTIVE" else None,
             **fields,
         )
         self.db.add(campaign)

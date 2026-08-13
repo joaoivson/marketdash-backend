@@ -43,6 +43,12 @@ class Campaign(Base):
     # reportado. Vem de `issues_info` na Graph API (ver facebook_marketing_client.py).
     ad_review_issue = Column(String(255), nullable=True)
 
+    # Quando `effective_status` transicionou pra "ACTIVE" pela última vez (criação
+    # OU reativação após pausa) — âncora do período de carência do card "campanhas
+    # ativas" pra campanha recém-(re)ativada sem insight ainda (ver campaign_service.
+    # _still_delivering). NULL nas linhas antigas até a próxima transição de status.
+    status_active_since = Column(DateTime(timezone=True), nullable=True)
+
     # Orçamento em BRL (convertido dos "centavos" da API do Facebook).
     daily_budget = Column(Float, nullable=True)
     lifetime_budget = Column(Float, nullable=True)
