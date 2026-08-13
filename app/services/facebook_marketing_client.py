@@ -180,14 +180,66 @@ async def get_me(access_token: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+async def list_businesses(access_token: str) -> list[dict]:
+    """Lista os Business Manager aos quais o usuário tem acesso."""
+    params = {"fields": "id,name", "access_token": access_token, "limit": 200}
+    return await _get_paginated(_graph_url("me/businesses"), params)
+
+
+async def list_business_ad_accounts(access_token: str, business_id: str) -> list[dict]:
+    """Lista as contas de anúncio de um Business Manager (próprias + de clientes).
+
+    `/me/adaccounts` só retorna contas com acesso PESSOAL direto do usuário —
+    contas geridas via papel no Business Manager (funcionário/parceiro, sem ser
+    admin direto na conta) ficam de fora, mesmo com ads_read/ads_management
+    concedidos, e nunca aparecem no seletor de Configurações.
+    """
+    fields = "account_id,name,currency,account_status"
+    accounts: list[dict] = []
+    for edge in ("owned_ad_accounts", "client_ad_accounts"):
+        params = {"fields": fields, "access_token": access_token, "limit": 200}
+        try:
+            accounts.extend(await _get_paginated(_graph_url(f"{business_id}/{edge}"), params))
+        except HTTPException as exc:
+            logger.warning(
+                "Facebook %s/%s falhou (business_id=%s): %s", business_id, edge, business_id, exc.detail
+            )
+    return accounts
+
+
 async def list_ad_accounts(access_token: str) -> list[dict]:
-    """Lista as contas de anúncio às quais o token tem acesso."""
+    """Lista as contas de anúncio às quais o token tem acesso.
+
+    Combina `/me/adaccounts` (acesso pessoal direto) com as contas de cada
+    Business Manager do usuário — ver `list_business_ad_accounts`.
+    """
     params = {
         "fields": "account_id,name,currency,account_status",
         "access_token": access_token,
         "limit": 200,
     }
-    return await _get_paginated(_graph_url("me/adaccounts"), params)
+    accounts = await _get_paginated(_graph_url("me/adaccounts"), params)
+
+    try:
+        businesses = await list_businesses(access_token)
+    except HTTPException as exc:
+        logger.warning("Facebook me/businesses falhou: %s", exc.detail)
+        businesses = []
+
+    for business in businesses:
+        business_id = business.get("id")
+        if business_id:
+            accounts.extend(await list_business_ad_accounts(access_token, business_id))
+
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for acc in accounts:
+        acc_id = acc.get("account_id") or acc.get("id")
+        if not acc_id or acc_id in seen:
+            continue
+        seen.add(acc_id)
+        deduped.append(acc)
+    return deduped
 
 
 async def list_campaigns(access_token: str, ad_account_id: str) -> list[dict]:
