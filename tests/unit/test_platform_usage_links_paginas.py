@@ -11,10 +11,8 @@ import inspect
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import Date, create_engine, event
-from sqlalchemy.ext.compiler import compiles
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.sql.elements import Cast
 
 from app.models.capture_site import CaptureSite
 from app.models.custom_link import CustomLink
@@ -26,19 +24,14 @@ from app.services.platform_usage_service import PlatformUsageService
 
 AGORA = datetime.now(timezone.utc)
 
-
-@compiles(Cast, "sqlite")
-def _cast_date_as_sqlite_date_function(element, compiler, **kw):
-    """SQLite's `CAST(x AS DATE)` has numeric-affinity truncation quirks that
-    break date-grouping (unlike PostgreSQL, where it's a clean date cast).
-    `usuarias_por_dia()` uses `cast(logged_at, Date)` — this shim makes that
-    same production code group correctly on the SQLite test fixture, mirroring
-    `@compiles(JSONB, "sqlite")` in test_platform_usage_base_ativa.py. Only
-    Date casts are intercepted; anything else falls back to the default
-    compilation so this stays narrow to this test file's needs."""
-    if isinstance(element.type, Date):
-        return "DATE(%s)" % compiler.process(element.clause, **kw)
-    return compiler.visit_cast(element, **kw)
+# Rodada 7, item 5: `usuarias_por_dia()` deixou de agrupar via SQL
+# (`cast(logged_at, Date)`) e passou a fazer bucketing em Python por dia
+# civil BRT (`_brt_date`, ver platform_usage_service.py). O shim
+# `@compiles(Cast, "sqlite")` que existia aqui só cobria a query SQL antiga
+# — como o cast sumiu da produção, o shim ficou morto e foi removido. O
+# teste abaixo já assertava sobre o resultado de `usuarias_por_dia()` (a
+# lista de dicts), não sobre a forma da query, então continua válido sem
+# mudança de asserts.
 
 
 @pytest.fixture
@@ -183,7 +176,12 @@ def test_servico_nao_escreve_nas_tabelas_do_produto():
 
     Não dá para provar ausência de escrita por comportamento — este teste
     existe para que uma escrita introduzida no futuro quebre o build.
+
+    Os padrões são prefixados com `self.db.`/`db.` (não `.add(`/`.update(`
+    soltos): a Rodada 7 (item 5) trocou o bucketing por dia de SQL para
+    Python, que usa `set.add(...)` em variáveis locais — não é escrita no
+    banco, mas batia no grep ingênuo de antes e gerava falso positivo.
     """
     fonte = inspect.getsource(PlatformUsageService)
-    for proibido in (".add(", ".delete(", ".update(", "db.commit("):
+    for proibido in ("self.db.add(", "self.db.delete(", "self.db.update(", "db.commit("):
         assert proibido not in fonte, f"platform_usage_service não pode usar {proibido}"
