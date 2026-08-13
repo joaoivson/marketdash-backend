@@ -508,8 +508,10 @@ class AdminMetricsService:
 
     def churn_for_month(self, year: int, month: int) -> Dict[str, Any]:
         start, end = _month_bounds(year, month)
-        # ativos no início do mês
-        start_actives = self.active_subscribers(as_of=(start - timedelta(seconds=1)).date())
+        # renovando no início do mês — cancelado-com-acesso segue "ativo" pro
+        # produto (aba Uso), mas não é mais receita recorrente esperada, então
+        # não conta no denominador do churn.
+        start_actives = self.renewing_subscribers(as_of=(start - timedelta(seconds=1)).date())
         start_count = max(len(start_actives), 1)
         cancels = (
             self.db.query(SubscriptionEvent)
