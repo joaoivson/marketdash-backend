@@ -177,11 +177,23 @@ def test_servico_nao_escreve_nas_tabelas_do_produto():
     Não dá para provar ausência de escrita por comportamento — este teste
     existe para que uma escrita introduzida no futuro quebre o build.
 
-    Os padrões são prefixados com `self.db.`/`db.` (não `.add(`/`.update(`
-    soltos): a Rodada 7 (item 5) trocou o bucketing por dia de SQL para
-    Python, que usa `set.add(...)` em variáveis locais — não é escrita no
-    banco, mas batia no grep ingênuo de antes e gerava falso positivo.
+    Os padrões continuam soltos (`.add(`/`.delete(`/`.update(`, sem exigir
+    prefixo `self.db.`) porque uma versão anterior deste teste que exigia
+    `self.db.` deixava passar batido o idiom de bulk write do SQLAlchemy
+    `self.db.query(Model).filter(...).update({...})`/`.delete()` — escrita
+    real que não contém a substring `self.db.update(`/`self.db.delete(`
+    logo antes da chamada. As únicas exceções conhecidas e revisadas são os
+    dois `set.add(...)` locais do bucketing por dia (Rodada 7, item 5) —
+    excluídas abaixo por substring EXATA, não por um prefixo amplo que
+    reabriria a mesma lacuna.
     """
     fonte = inspect.getsource(PlatformUsageService)
-    for proibido in ("self.db.add(", "self.db.delete(", "self.db.update(", "db.commit("):
-        assert proibido not in fonte, f"platform_usage_service não pode usar {proibido}"
+    fonte_sem_excecoes_conhecidas = (
+        fonte
+        .replace('["usuarias"].add(user_id)', "")
+        .replace('["dias"].add(_brt_date(logged_at))', "")
+    )
+    for proibido in (".add(", ".delete(", ".update(", "db.commit("):
+        assert proibido not in fonte_sem_excecoes_conhecidas, (
+            f"platform_usage_service não pode usar {proibido}"
+        )
