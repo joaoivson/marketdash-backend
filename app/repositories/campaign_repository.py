@@ -55,6 +55,33 @@ class CampaignRepository:
 
     # ----------------------------- campaigns ----------------------------- #
 
+    def campaign_ids_with_recent_activity(self, user_id: int, since: date) -> set:
+        """IDs de campanha com gasto/clique/impressão em algum dia >= `since`.
+
+        Usado para tirar do card "campanhas ativas" campanhas com orçamento
+        VITALÍCIO esgotado: a Meta some com o `daily_budget` (fica None — só
+        existe `lifetime_budget`) e o `effective_status` da campanha continua
+        "ACTIVE" para sempre mesmo sem entregar nada há semanas (visto num
+        caso real: campanha parada desde 04/07, orçamento de R$12 todo
+        gasto, ainda contando como ativa em 13/08). `derive_ad_review_issue`
+        não pega esse caso porque olha status do ANÚNCIO, não histórico de
+        entrega.
+        """
+        rows = (
+            self.db.query(distinct(CampaignDailyInsight.campaign_id))
+            .filter(
+                CampaignDailyInsight.user_id == user_id,
+                CampaignDailyInsight.date >= since,
+            )
+            .filter(
+                (CampaignDailyInsight.spend > 0)
+                | (CampaignDailyInsight.clicks > 0)
+                | (CampaignDailyInsight.impressions > 0)
+            )
+            .all()
+        )
+        return {r[0] for r in rows}
+
     def list_by_user(self, user_id: int, ad_account_ids: Optional[List[str]] = None) -> List[Campaign]:
         """`ad_account_ids`, quando informado, restringe às contas atualmente
         selecionadas na integração — sem isso, campanha de uma conta que o
