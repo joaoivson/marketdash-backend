@@ -133,17 +133,21 @@ def _still_delivering(campaign: Campaign, recent_activity_ids: set) -> bool:
     """Campanha ACTIVE mas com orçamento VITALÍCIO já esgotado fica travada em
     `effective_status=ACTIVE` na Meta pra sempre, mesmo há semanas sem entregar
     nada — `ad_review_issue` não pega esse caso (olha status do anúncio, não
-    histórico de entrega). Dá benefício da dúvida a campanhas recém-sincronizadas
-    (ainda sem insight acumulado)."""
+    histórico de entrega). Dá benefício da dúvida a campanha recém-(re)ativada
+    ainda sem insight acumulado — usa `status_active_since` (quando ficou
+    ACTIVE pela última vez: criação OU reativação após pausa), NÃO
+    `created_at`: uma campanha antiga que estava pausada e acabou de ser
+    reativada tem `created_at` de semanas atrás e cairia no mesmo balde do
+    zumbi se usássemos só a data de criação."""
     if campaign.id in recent_activity_ids:
         return True
-    created = campaign.created_at
-    if created is None:
+    since = campaign.status_active_since or campaign.created_at
+    if since is None:
         return True
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
     grace_cutoff = datetime.now(timezone.utc) - timedelta(days=NEW_CAMPAIGN_GRACE_DAYS)
-    return created > grace_cutoff
+    return since > grace_cutoff
 
 
 def _health(linked: bool, spend: float, roas: float) -> str:
