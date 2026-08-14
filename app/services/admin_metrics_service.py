@@ -1166,11 +1166,14 @@ class AdminMetricsService:
                 if (datetime.now(timezone.utc) - lf.received_at).days > 14:
                     continue
             if filters.get("no_login_10d"):
-                if uid is None:
-                    # Sem user_id vinculado (import histórico sem conta
-                    # criada na plataforma) — não existe "acesso" a medir,
-                    # não é "sem acesso". Mesma regra de _base_ativa() em
-                    # platform_usage_service.py, pra card e lista baterem.
+                if ev.user_id is None:
+                    # Checa o campo BRUTO do evento, não `uid` (que pode
+                    # ter sido resolvido por fallback de e-mail acima) —
+                    # precisa ser exatamente o mesmo critério de
+                    # _base_ativa() em platform_usage_service.py
+                    # (`if ev.user_id`), senão um assinante sem user_id no
+                    # evento mas com e-mail batendo numa conta real volta
+                    # a aparecer na lista sem aparecer no card.
                     continue
                 today = datetime.now(timezone.utc).date()
                 if last_login:

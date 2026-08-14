@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from app.models.user import User
 from app.services.admin_metrics_service import AdminMetricsService
 
 
@@ -96,3 +97,46 @@ def test_no_login_10d_mantem_assinante_com_user_id_sem_login_ha_mais_de_10_dias(
 
     assert len(linhas) == 1
     assert linhas[0]["user_id"] == 42
+
+
+def test_no_login_10d_exclui_mesmo_com_uid_resolvido_por_fallback_de_email():
+    """Achado da revisão do fix original (commit c1a8290): o guard não
+    pode usar `uid` — ele pode ter sido REATRIBUÍDO pelo fallback de
+    busca por e-mail (linhas ~1058-1061 de list_clients()) quando
+    ev.user_id é None mas ev.customer_email bate com uma conta (User)
+    real existente na plataforma. Nesse caso `uid` deixa de ser None,
+    mas _base_ativa() (platform_usage_service.py) só olha o `ev.user_id`
+    BRUTO do evento — que continua None — e por isso exclui esse
+    assinante do card. Se o guard daqui usasse `uid` (resolvido), o
+    assinante voltaria a aparecer na lista sem aparecer no card,
+    reabrindo o descompasso que a Task 14b deveria fechar. O guard
+    correto usa `ev.user_id`, então também exclui aqui."""
+    db = _mock_db_for_list_clients()
+    conta_real = SimpleNamespace(id=99, name="Conta Real", email="importado@example.com")
+
+    def query_side_effect(model):
+        q = MagicMock()
+        q.filter.return_value = q
+        q.filter_by.return_value = q
+        q.order_by.return_value = q
+        q.all.return_value = []
+        q.scalar.return_value = None
+        # Só a busca de User por e-mail (fallback, disparada quando
+        # uid inicial é None) deve achar uma conta — qualquer outra
+        # query (UserLogin, ShopeeIntegration, etc.) continua vazia.
+        q.first.return_value = conta_real if model is User else None
+        return q
+
+    db.query.side_effect = query_side_effect
+
+    svc = AdminMetricsService(db)
+    # user_id=None no evento (import histórico), mas customer_email bate
+    # com uma conta real — dispara o fallback de e-mail em list_clients().
+    sem_user_id_email_bate_conta_real = _ev()
+    svc.active_subscribers = lambda as_of=None: [sem_user_id_email_bate_conta_real]
+    svc._all_events = lambda: [sem_user_id_email_bate_conta_real]
+    svc._semaphore = lambda uid: "red"
+
+    linhas = svc.list_clients({"no_login_10d": True})
+
+    assert linhas == []
