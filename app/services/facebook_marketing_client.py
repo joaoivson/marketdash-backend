@@ -10,6 +10,7 @@ na menor unidade da moeda da conta (centavos para BRL). Internamente o
 MarketDash trabalha em BRL, então convertemos dividindo/multiplicando por 100.
 """
 
+import json
 import logging
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -242,10 +243,28 @@ async def list_ad_accounts(access_token: str) -> list[dict]:
     return deduped
 
 
+# Sem filtro, a Graph API omite campanhas ARCHIVED/DELETED da resposta por
+# padrão ("A request with no filters returns only campaigns that were not
+# archived or deleted" — doc oficial da Meta). Isso fazia o sync nunca mais
+# tocar numa campanha depois de arquivada, deixando o último effective_status
+# conhecido (tipicamente ACTIVE) congelado pra sempre. Inclui ARCHIVED
+# explicitamente; DELETED fica de fora de propósito — campanha deletada não
+# é "arquivada", é removida de verdade.
+_CAMPAIGN_EFFECTIVE_STATUSES = [
+    "ACTIVE", "PAUSED", "ARCHIVED", "PENDING_REVIEW", "DISAPPROVED",
+    "PREAPPROVED", "PENDING_BILLING_INFO", "CAMPAIGN_PAUSED",
+    "ADSET_PAUSED", "IN_PROCESS", "WITH_ISSUES",
+]
+
+
 async def list_campaigns(access_token: str, ad_account_id: str) -> list[dict]:
     """Lista campanhas de uma ad account (formato 'act_123')."""
+    filtering = json.dumps([
+        {"field": "effective_status", "operator": "IN", "value": _CAMPAIGN_EFFECTIVE_STATUSES}
+    ])
     params = {
         "fields": "id,name,status,effective_status,objective,daily_budget,lifetime_budget",
+        "filtering": filtering,
         "access_token": access_token,
         "limit": 200,
     }
