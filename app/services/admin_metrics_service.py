@@ -19,6 +19,7 @@ from app.models.user_login import UserLogin
 from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
 from app.services.charges import extract_paid_charges, total_paid_net
+from app.core.plans import list_price_cents
 
 PAID_EVENTS = {
     "order_approved",
@@ -398,7 +399,13 @@ class AdminMetricsService:
             # última cobrança paga da assinatura
             paid = self._last_paid_for(ev)
             n = (paid.amount_net_cents if paid else ev.amount_net_cents) or 0
-            g = (paid.amount_gross_cents if paid else ev.amount_gross_cents) or 0
+            # Bruto (Rodada 7, item 3) = preço de TABELA vigente, não a última
+            # cobrança real — evita que desconto/cupom histórico distorça o
+            # "faturamento potencial" que o bruto representa. Sem preço
+            # cadastrado pro plano/frequência, cai no valor real pago.
+            plano = _normalize_plan_label(ev.plan_name, ev.plan_id)
+            tabela = list_price_cents(plano, ev.plan_frequency)
+            g = tabela if tabela is not None else ((paid.amount_gross_cents if paid else ev.amount_gross_cents) or 0)
             net_frac += n / div
             gross_frac += g / div
         return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
@@ -508,8 +515,10 @@ class AdminMetricsService:
 
     def churn_for_month(self, year: int, month: int) -> Dict[str, Any]:
         start, end = _month_bounds(year, month)
-        # ativos no início do mês
-        start_actives = self.active_subscribers(as_of=(start - timedelta(seconds=1)).date())
+        # renovando no início do mês — cancelado-com-acesso segue "ativo" pro
+        # produto (aba Uso), mas não é mais receita recorrente esperada, então
+        # não conta no denominador do churn.
+        start_actives = self.renewing_subscribers(as_of=(start - timedelta(seconds=1)).date())
         start_count = max(len(start_actives), 1)
         cancels = (
             self.db.query(SubscriptionEvent)
@@ -1157,6 +1166,15 @@ class AdminMetricsService:
                 if (datetime.now(timezone.utc) - lf.received_at).days > 14:
                     continue
             if filters.get("no_login_10d"):
+                if ev.user_id is None:
+                    # Checa o campo BRUTO do evento, não `uid` (que pode
+                    # ter sido resolvido por fallback de e-mail acima) —
+                    # precisa ser exatamente o mesmo critério de
+                    # _base_ativa() em platform_usage_service.py
+                    # (`if ev.user_id`), senão um assinante sem user_id no
+                    # evento mas com e-mail batendo numa conta real volta
+                    # a aparecer na lista sem aparecer no card.
+                    continue
                 today = datetime.now(timezone.utc).date()
                 if last_login:
                     try:

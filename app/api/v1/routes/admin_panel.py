@@ -126,10 +126,25 @@ def _csv_date_ddmmaaaa(iso_value: Optional[str]) -> str:
 
 @router.get("/clients/export.csv")
 def export_clients_csv(
+    q: Optional[str] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    plan: Optional[str] = None,
+    expiring_7d: bool = False,
+    payment_failed: bool = False,
+    never_connected: bool = False,
+    no_login_10d: bool = False,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    rows = AdminMetricsService(db).list_clients({})
+    rows = AdminMetricsService(db).list_clients({
+        "q": q,
+        "status": status_filter,
+        "plan": plan,
+        "expiring_7d": expiring_7d,
+        "payment_failed": payment_failed,
+        "never_connected": never_connected,
+        "no_login_10d": no_login_10d,
+    })
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([

@@ -84,6 +84,20 @@ KPIs are calculated from `DatasetRow.raw_data` JSONB (original CSV fields):
   precisa reconferir os 4 achados da Rodada 6 (zero-rows, contaminação de
   total por CPF, candidatura efêmera) — todos com teste de regressão
   sintético em `test_admin_metrics_service.py`.
+- **`cast(coluna_timestamptz, Date)` trunca no fuso da SESSÃO do Postgres
+  (não BRT).** Bucketing por dia civil (7d/30d/90d, "dias ativos", etc.)
+  precisa do padrão `_brt_date()`/`BRT` já em `admin_metrics_service.py`
+  — aplicado em Python sobre datetimes já buscados, não em SQL. Rodada 7,
+  item 5: `platform_usage_service.py` usava `cast(...,Date)` e uma janela
+  de "7 dias" espalhava por até 8 datas diferentes.
+- **Toda população derivada de assinante precisa concordar em quem tem
+  `user_id`.** `_base_ativa()` (`platform_usage_service.py`) já exclui
+  quem não tem `user_id` vinculado (import histórico sem conta criada);
+  qualquer outra função que filtre a mesma população (ex.: `list_clients()`
+  com `no_login_10d`) precisa checar o campo BRUTO do evento
+  (`ev.user_id`), não uma variável local que pode ter sido resolvida por
+  fallback de e-mail — senão o card e a lista voltam a divergir (Rodada 7,
+  achado fora do escopo original).
 
 ## Conventions
 

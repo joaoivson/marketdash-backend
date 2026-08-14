@@ -13,7 +13,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Date, cast, func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.capture_site import CaptureSite
@@ -101,11 +101,23 @@ class PlatformUsageService:
     # -- base ---------------------------------------------------------------
 
     def _inicio(self, periodo: str) -> datetime:
+        """Início da janela alinhado a dia civil BRT (Rodada 7, item 5).
+
+        7d = hoje (dia civil BRT) + 6 anteriores, do início do dia mais
+        antigo até agora — não um instante `agora - N dias` (que corta no
+        meio de um dia e espalha por N+1 datas quando agrupado por dia).
+        """
+        from app.services.admin_metrics_service import BRT
+
         dias = PERIODOS_VALIDOS.get(periodo, 7)
-        agora = datetime.now(timezone.utc)
+        agora_brt = datetime.now(timezone.utc).astimezone(BRT)
         if periodo == "hoje":
-            return agora.replace(hour=0, minute=0, second=0, microsecond=0)
-        return agora - timedelta(days=dias)
+            inicio_brt = agora_brt.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            inicio_brt = (agora_brt - timedelta(days=dias - 1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        return inicio_brt.astimezone(timezone.utc)
 
     def _ids_admin(self) -> List[int]:
         """Contas admin não contam — senão a taxa de uso nasce inflada por nós."""
@@ -178,26 +190,31 @@ class PlatformUsageService:
         return [ev.user_id for ev in actives if ev.user_id and ev.user_id not in excluidos]
 
     def usuarias_por_dia(self, periodo: str) -> List[Dict[str, Any]]:
-        """Acessos (hits) e pessoas distintas por dia.
+        """Acessos (hits) e pessoas distintas por dia civil BRT.
 
-        `acessos` é a série principal do gráfico (barras); `usuarias` é a linha
-        de adoção. Sem as duas, o gráfico da aba Uso fica só com a linha —
-        exatamente o que faltou na rodada 5.
+        `acessos` é a série principal do gráfico (barras); `usuarias` é a
+        linha de adoção. Bucketing em Python (Rodada 7, item 5) — `cast(...,
+        Date)` no Postgres trunca pelo fuso da SESSÃO, não BRT; mesmo padrão
+        de `_brt_date` já usado em admin_metrics_service.py.
         """
+        from app.services.admin_metrics_service import _brt_date
+
         linhas = (
             self._logins_do_periodo(periodo)
-            .with_entities(
-                cast(UserLogin.logged_at, Date).label("d"),
-                func.count().label("acessos"),
-                func.count(func.distinct(UserLogin.user_id)).label("usuarias"),
-            )
-            .group_by("d")
-            .order_by("d")
+            .with_entities(UserLogin.logged_at, UserLogin.user_id)
             .all()
         )
+        por_dia: Dict[Any, Dict[str, Any]] = {}
+        for logged_at, user_id in linhas:
+            if logged_at.tzinfo is None:
+                logged_at = logged_at.replace(tzinfo=timezone.utc)
+            d = _brt_date(logged_at)
+            bucket = por_dia.setdefault(d, {"acessos": 0, "usuarias": set()})
+            bucket["acessos"] += 1
+            bucket["usuarias"].add(user_id)
         return [
-            {"date": str(d), "acessos": acessos, "usuarias": usuarias}
-            for d, acessos, usuarias in linhas
+            {"date": str(d), "acessos": v["acessos"], "usuarias": len(v["usuarias"])}
+            for d, v in sorted(por_dia.items())
         ]
 
     def uso_de_links_e_paginas(
@@ -268,17 +285,29 @@ class PlatformUsageService:
         return saida
 
     def atividade_por_usuaria(self, periodo: str) -> List[Dict[str, Any]]:
-        linhas = (
+        from app.services.admin_metrics_service import _brt_date
+
+        brutas = (
             self._logins_do_periodo(periodo)
-            .with_entities(
-                UserLogin.user_id,
-                func.count().label("acessos"),
-                func.count(func.distinct(cast(UserLogin.logged_at, Date))).label("dias"),
-                func.max(UserLogin.logged_at).label("ultimo"),
-            )
-            .group_by(UserLogin.user_id)
-            .order_by(func.count().desc())
+            .with_entities(UserLogin.user_id, UserLogin.logged_at)
             .all()
+        )
+        por_usuario: Dict[int, Dict[str, Any]] = {}
+        for uid, logged_at in brutas:
+            if logged_at.tzinfo is None:
+                logged_at = logged_at.replace(tzinfo=timezone.utc)
+            info = por_usuario.setdefault(uid, {"acessos": 0, "dias": set(), "ultimo": logged_at})
+            info["acessos"] += 1
+            info["dias"].add(_brt_date(logged_at))
+            if logged_at > info["ultimo"]:
+                info["ultimo"] = logged_at
+        linhas = sorted(
+            (
+                (uid, v["acessos"], len(v["dias"]), v["ultimo"])
+                for uid, v in por_usuario.items()
+            ),
+            key=lambda row: row[1],
+            reverse=True,
         )
         if not linhas:
             return []
@@ -294,11 +323,20 @@ class PlatformUsageService:
         )
         ids = [l[0] for l in linhas]
         uso = self.uso_de_links_e_paginas(periodo, ids)
+
+        from app.services.admin_metrics_service import AdminMetricsService, _normalize_plan_label
+
+        planos = {
+            ev.user_id: _normalize_plan_label(ev.plan_name, ev.plan_id)
+            for ev in AdminMetricsService(self.db).active_subscribers()
+            if ev.user_id in set(ids)
+        }
         return [
             {
                 "user_id": uid,
                 "nome": capitalizar_nome(nomes.get(uid)) or emails.get(uid) or f"#{uid}",
                 "email": emails.get(uid),
+                "plan": planos.get(uid),
                 "acessos": acessos,
                 "dias_ativos": dias,
                 "ultimo_acesso": ultimo.isoformat() if ultimo else None,

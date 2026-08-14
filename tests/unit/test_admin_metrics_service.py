@@ -388,21 +388,41 @@ def test_faturamento_do_mes_nao_dobra_com_import_e_webhook():
     assert rev["net"] == 18150
 
 
-def test_mrr_cents_nao_perde_centavos_com_divisao_por_assinante():
+def test_mrr_cents_nao_perde_centavos_com_divisao_por_assinante(monkeypatch):
     """3 assinantes trimestrais com resto não-nulo cada (100/3 = 33,33...) — a
     divisão inteira por assinante (100 // 3 = 33) perderia 1 centavo em cada um,
-    3 no total. Precisão cheia + arredondar só a soma preserva o valor exato."""
+    3 no total. Precisão cheia + arredondar só a soma preserva o valor exato.
+
+    Rodada 7, item 3: `gross` passou a vir do preço de TABELA do plano/
+    frequência (não mais de `amount_gross_cents`). O preço de tabela real
+    (11700, essencial/trimestral) divide 11700/3 = 3900 exato, sem resto —
+    não pega o bug hipotético de divisão inteira (`//` em vez de `/`) na
+    linha `gross_frac += g / div`. Por isso mockamos `list_price_cents`
+    pra devolver 10000 (10000/3 = 3333,33...), que tem resto e volta a
+    cobrir a precisão do lado do bruto. `net` continua vindo de
+    `amount_net_cents` e segue testando a precisão (sem mock)."""
+    import app.services.admin_metrics_service as ams
     from app.services.admin_metrics_service import AdminMetricsService
+
+    monkeypatch.setattr(ams, "list_price_cents", lambda plan, frequency: 10000)
 
     svc = AdminMetricsService.__new__(AdminMetricsService)  # sem DB
     svc._last_paid_for = lambda ev: None  # força usar amount_net_cents/gross direto
     actives = [
-        SimpleNamespace(plan_frequency="quarterly", amount_net_cents=100, amount_gross_cents=100)
+        SimpleNamespace(
+            plan_frequency="quarterly",
+            plan_name="Essencial",
+            plan_id="essencial",
+            amount_net_cents=100,
+            amount_gross_cents=100,
+        )
         for _ in range(3)
     ]
     result = svc.mrr_cents(actives)
     assert result["net"] == 100  # não 99 (3 × (100 // 3))
-    assert result["gross"] == 100
+    # Bruto = soma com precisão cheia de 10000/3 arredondada (10000), não
+    # 3 × (10000 // 3) = 9999 (o que daria se a divisão fosse inteira).
+    assert result["gross"] == round(3 * (10000 / 3))
 
 
 def test_serie_novas_x_canceladas_cobre_12_meses_ate_o_atual():

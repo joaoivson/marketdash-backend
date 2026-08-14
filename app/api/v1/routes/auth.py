@@ -37,17 +37,18 @@ def login(
         request.password,
         referrer_user_id=request.referrer_user_id,
     )
-    # Login efetivo — não refresh de token
+    # Login efetivo — não refresh de token. record_access() já tem a janela
+    # de dedupe de 2min (Rodada 7, item 4: este caminho legado gravava direto,
+    # sem essa proteção — inflava contagem de acesso pra quem cai aqui).
     try:
-        from app.models.user_login import UserLogin
+        from app.services.daily_access_service import record_access
 
         user = result.get("user") if isinstance(result, dict) else getattr(result, "user", None)
         uid = getattr(user, "id", None)
         if uid:
             ip = http_request.client.host if http_request.client else None
             ua = http_request.headers.get("user-agent")
-            db.add(UserLogin(user_id=uid, ip=ip, user_agent=ua))
-            db.commit()
+            record_access(db, uid, ip=ip, user_agent=ua)
     except Exception:  # noqa: BLE001
         try:
             db.rollback()
