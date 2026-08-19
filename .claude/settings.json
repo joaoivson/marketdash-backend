@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker-compose:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker ps:*)",
+      "Bash(PYTHONPATH=$PWD .venv312/bin/python -m pytest:*)",
+      "Bash(.venv312/bin/python:*)",
+      "Bash(black:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(curl:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10000,
+            "command": "python3 -c \"\nimport json, sys\nd = json.load(sys.stdin)\ncmd = (d.get('tool_input') or {}).get('command', '')\nlow = cmd.lower()\nif 'uvicorn' in low and 'docker' not in low:\n    sys.stderr.write('BLOQUEADO: o backend roda via docker-compose (servico app, porta 8000), nunca direto no host. Use: docker-compose up -d app\\n')\n    sys.exit(2)\nif 'pytest' in low and 'docker' not in low and '.venv312' not in low:\n    sys.stderr.write('BLOQUEADO: o venv default e Python 3.9 e quebra na colecao. Use: PYTHONPATH=\\$PWD .venv312/bin/python -m pytest tests/unit -q\\n')\n    sys.exit(2)\nsys.exit(0)\n\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15000,
+            "command": "python3 -c \"\nimport json, sys, subprocess\nd = json.load(sys.stdin)\nf = (d.get('tool_input') or {}).get('file_path', '')\nif f.endswith('.py'):\n    subprocess.run(['black', '--quiet', f], capture_output=True)\nif '/migrations/' in f:\n    print('LEMBRETE: migration nova precisa ser IDEMPOTENTE (IF NOT EXISTS) e ADITIVA (sem DROP/TRUNCATE). Aplicar em homologacao e conferir o objeto antes de producao. Este projeto nao tem controle de versao de schema.')\nif '/app/tasks/' in f:\n    print('LEMBRETE: task nova entra em celery_app.conf.include, e a prioridade so pode ser 0 (interativo) ou 9 (batch) - priority 5 nunca executa.')\nif '/app/api/v1/routes/' in f and not f.endswith('__init__.py'):\n    print('LEMBRETE: rota nova so responde depois de registrada em app/api/v1/routes/__init__.py.')\nsys.exit(0)\n\""
+          }
+        ]
+      }
+    ]
+  }
+}
