@@ -38,7 +38,7 @@
 | Alta | **Rodada 7 do painel admin validada só contra homologação** — itens 1, 2, 3 e o achado card×lista precisam de reconfirmação contra produção | Ver seção de pendências no `CHANGELOG.md` da raiz | Pendente (precisa de acesso a produção) |
 | Média | **Dedupe de login legado sem evidência de impacto** — `POST /auth/login` passou a usar `record_access()` (janela de 2min), mas o diagnóstico contra hml achou 0 pares <2min | Não confirma nem descarta o efeito em produção | Pendente — falta rodar contra produção |
 | Média | **`list_clients()` de-dup por upgrade é frágil por natureza** — qualquer mudança em `is_plan_change` precisa reconferir os 4 achados da Rodada 6 (zero-rows, contaminação de total por CPF, candidatura efêmera) | Todos com teste de regressão sintético em `test_admin_metrics_service.py` | Vivo — checklist ao mexer |
-| Baixa | **Arquivos `* 2.py` duplicados** em `services/` e `repositories/` (`campaign_service 2.py`, `campaign_repository 2.py`) e `models/campaign 2.py` | Sobra de cópia do Finder; não são importados, mas confundem busca e grep | Pendente — apagar |
+| ~~Baixa~~ | ~~**Arquivos `* 2.py` duplicados**~~ | Deixou de ser cosmético: entraram no commit `352b0e9` e **quebraram o CI de homologação** — o espaço no nome fez o `xargs` do `py_compile` procurar `./app/models/campaign` | **Resolvido em 19/08** — apagados; CI agora usa `-print0 \| xargs -0` + step que falha nomeando o arquivo; `.gitignore` bloqueia `* [0-9].py` |
 | Baixa | **`CLAUDE.md` diz porta 8081; compose e proxy do Vite usam 8000** | Quem segue o doc sobe na porta errada e o proxy do frontend não acha | Pendente — corrigir o doc |
 
 ## Débitos técnicos

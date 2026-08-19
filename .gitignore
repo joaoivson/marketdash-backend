@@ -36,3 +36,7 @@ uploads/
 *~
 
 .env.backup-*
+
+# Duplicata do Finder/iCloud ("campaign 2.py"). Espaço no nome quebra o
+# `find | xargs py_compile` do CI e o arquivo nem é importável em Python.
+* [0-9].py

@@ -29,9 +29,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Duplicata do Finder ("campaign 2.py") não é importável e ainda quebrava
+      # o py_compile abaixo com um "No such file or directory" enigmático.
+      # Falha aqui com o nome do arquivo na cara.
+      - name: Check for duplicate/invalid Python filenames
+        run: |
+          dups=$(find . -type f -name "*.py" -not -path "./.git/*" -name "* *")
+          if [ -n "$dups" ]; then
+            echo "❌ Arquivos .py com espaço no nome (provável duplicata do Finder):"
+            echo "$dups"
+            exit 1
+          fi
+
       - name: Validate Python syntax
         run: |
-          find . -type f -name "*.py" -not -path "./.git/*" -not -path "./__pycache__/*" | xargs python -m py_compile
+          find . -type f -name "*.py" -not -path "./.git/*" -not -path "*/__pycache__/*" -print0 | xargs -0 python -m py_compile
 
       - name: Validate imports
         env:
