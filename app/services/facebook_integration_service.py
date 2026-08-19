@@ -5,11 +5,12 @@ from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.encryption import decrypt_value, encrypt_value
-from app.models.campaign import CampaignDailyInsight
+from app.models.campaign import CampaignDailyInsight, CampaignPlatformDailyInsight
 from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
 from app.schemas.facebook_integration import (
@@ -302,6 +303,12 @@ class FacebookIntegrationService:
         from app.models.ad_spend import AdSpend
         from app.models.click_row import ClickRow
 
+        # Placement primeiro: tem FK pra campaigns, precisa sair antes.
+        platform_insights_deleted = (
+            self.db.query(CampaignPlatformDailyInsight)
+            .filter(CampaignPlatformDailyInsight.user_id == user_id)
+            .delete(synchronize_session=False)
+        )
         insights_deleted = (
             self.db.query(CampaignDailyInsight)
             .filter(CampaignDailyInsight.user_id == user_id)
@@ -326,6 +333,7 @@ class FacebookIntegrationService:
         return {
             "campaigns": campaigns_deleted,
             "insights": insights_deleted,
+            "platform_insights": platform_insights_deleted,
             "ad_spends": spends_deleted,
             "clicks": clicks_deleted,
         }
@@ -390,6 +398,37 @@ class FacebookIntegrationService:
             since = (now - timedelta(days=window_days)).date()
             until = now.date()
 
+            # Janela do breakdown por placement (Instagram vs Facebook) é decidida
+            # SEPARADAMENTE: a tabela é nova, então quem já usava o MarketDash tem 90
+            # dias de insights agregados e ZERO linha por plataforma. Reaproveitar
+            # `needs_backfill` deixaria esses usuários sem histórico de Instagram pra
+            # sempre, porque `last_sync_at` já está preenchido.
+            #
+            # SAVEPOINT: se a migration 051 ainda não foi aplicada, a tabela não
+            # existe e o SELECT aborta a transação inteira no Postgres — derrubando
+            # um sync de Facebook que funcionava. O savepoint isola a falha: o
+            # placement fica de fora desta rodada e o gasto continua entrando.
+            placement_disponivel = True
+            platform_since = since
+            try:
+                with db.begin_nested():
+                    earliest_platform = camp_repo.earliest_platform_insight_date(user_id)
+                platform_needs_backfill = (
+                    earliest_platform is None
+                    or earliest_platform > (now.date() - timedelta(days=7))
+                )
+                platform_window_days = (
+                    SYNC_WINDOW_DAYS if platform_needs_backfill else INCREMENTAL_WINDOW_DAYS
+                )
+                platform_since = (now - timedelta(days=platform_window_days)).date()
+            except SQLAlchemyError as exc:
+                placement_disponivel = False
+                logger.warning(
+                    "Placement por plataforma indisponível (migration 051 aplicada?) "
+                    "user_id=%s: %s — o sync segue sem essa etapa",
+                    user_id, exc,
+                )
+
             processed = 0
             for ad_account_id in account_ids:
                 try:
@@ -420,6 +459,11 @@ class FacebookIntegrationService:
                         user_id, ad_account_id, exc.detail,
                     )
 
+                # fb_campaign_id -> id local. Necessário para casar as linhas do
+                # breakdown por placement (que vêm no nível da CONTA, numa chamada só)
+                # com as campanhas que acabamos de fazer upsert.
+                campaign_id_by_fb_id: dict[str, int] = {}
+
                 for c in campaigns:
                     fb_campaign_id = str(c.get("id") or "")
                     if not fb_campaign_id:
@@ -448,6 +492,7 @@ class FacebookIntegrationService:
                         fb_campaign_id=fb_campaign_id,
                         fields=campaign_fields,
                     )
+                    campaign_id_by_fb_id[fb_campaign_id] = campaign.id
 
                     # Insights diários: UPSERT da janela (preserva histórico, atualiza valores).
                     try:
@@ -485,6 +530,68 @@ class FacebookIntegrationService:
                         )
                     camp_repo.upsert_insights(rows)
                     processed += 1
+
+                # Breakdown por placement: UMA chamada por CONTA (level=campaign),
+                # não por campanha — o custo em rate limit não cresce com o número de
+                # campanhas. Falha aqui NÃO derruba o sync: o gasto total já foi salvo
+                # acima e a tela de placement simplesmente não atualiza nesta rodada.
+                if not placement_disponivel:
+                    continue
+
+                try:
+                    platform_rows_raw = await fb.get_account_campaign_platform_insights(
+                        token, ad_account_id, platform_since.isoformat(), until.isoformat()
+                    )
+                except HTTPException as exc:
+                    logger.warning(
+                        "Facebook insights por placement falhou user_id=%s conta=%s: %s",
+                        user_id, ad_account_id, exc.detail,
+                    )
+                    platform_rows_raw = []
+
+                platform_rows: list[CampaignPlatformDailyInsight] = []
+                for ins in platform_rows_raw:
+                    fb_cid = str(ins.get("campaign_id") or "")
+                    local_id = campaign_id_by_fb_id.get(fb_cid)
+                    if not local_id:
+                        # Campanha fora da lista sincronizada (ex.: DELETED). Ignorar é
+                        # correto: sem linha em `campaigns` não há FK pra apontar.
+                        continue
+                    try:
+                        day = date.fromisoformat(ins.get("date_start"))
+                    except (TypeError, ValueError):
+                        continue
+                    platform_rows.append(
+                        CampaignPlatformDailyInsight(
+                            user_id=user_id,
+                            campaign_id=local_id,
+                            fb_campaign_id=fb_cid,
+                            date=day,
+                            publisher_platform=fb.normalize_publisher_platform(
+                                ins.get("publisher_platform")
+                            ),
+                            spend=_to_float(ins.get("spend")),
+                            clicks=_to_int(ins.get("inline_link_clicks") or ins.get("clicks")),
+                            impressions=_to_int(ins.get("impressions")),
+                            cpc=_to_float(ins.get("cost_per_inline_link_click") or ins.get("cpc")) or None,
+                            ctr=_to_float(ins.get("inline_link_click_ctr") or ins.get("ctr")) or None,
+                            reach=_to_int(ins.get("reach")) or None,
+                        )
+                    )
+                if platform_rows:
+                    try:
+                        with db.begin_nested():
+                            saved = camp_repo.upsert_platform_insights(platform_rows)
+                        logger.info(
+                            "Placement insights user_id=%s conta=%s: %d linhas",
+                            user_id, ad_account_id, saved,
+                        )
+                    except SQLAlchemyError as exc:
+                        placement_disponivel = False
+                        logger.warning(
+                            "Placement por plataforma não gravado user_id=%s conta=%s: %s",
+                            user_id, ad_account_id, exc,
+                        )
 
             # Espelha o gasto do Meta na tabela AdSpend (fonte do gasto do Dashboard).
             # AdSpend = projeção pura dos insights; o lançamento manual foi descontinuado.

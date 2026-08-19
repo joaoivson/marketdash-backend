@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.core.config import settings
-from . import auth, datasets, dashboard, ad_spends, cakto, subscription, clicks, feedback, capture_sites, uploads, custom_links, shopee, page_events, kiwify, payment, user_settings, internal, affiliates, facebook, campaigns, admin_panel, ai_diagnostics, whatsapp
+from . import auth, datasets, dashboard, ad_spends, cakto, subscription, clicks, feedback, capture_sites, uploads, custom_links, shopee, page_events, kiwify, payment, user_settings, internal, affiliates, facebook, instagram, campaigns, admin_panel, ai_diagnostics, whatsapp
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth")
@@ -19,6 +19,7 @@ router.include_router(uploads.router, prefix="/uploads", tags=["uploads"])
 router.include_router(custom_links.router, prefix="/links", tags=["custom_links"])
 router.include_router(shopee.router, prefix="/shopee")
 router.include_router(facebook.router, prefix="/facebook")
+router.include_router(instagram.router, prefix="/instagram")
 router.include_router(campaigns.router, prefix="/campaigns")
 router.include_router(page_events.router, prefix="/events", tags=["events"])
 router.include_router(user_settings.router, prefix="/settings", tags=["settings"])

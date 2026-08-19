@@ -1,8 +1,8 @@
 import logging
 import re
 import unicodedata
-from datetime import date, datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from datetime import date
+from typing import List, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -12,7 +12,6 @@ from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
 from app.repositories.user_settings_repository import UserSettingsRepository
 from app.services.user_settings_service import UserSettingsService
-from app.utils.text_normalize import normalizar_compacto
 from app.schemas.campaign import (
     CampaignDailyPoint,
     CampaignDetailResponse,
@@ -22,12 +21,6 @@ from app.schemas.campaign import (
     CampaignResponse,
     SubIdOption,
     SubIdOptionsResponse,
-)
-from app.schemas.campaign_platform import (
-    PlatformBreakdownResponse,
-    PlatformCampaignRow,
-    PlatformDailyPoint,
-    PlatformTotals,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,13 +32,6 @@ ROAS_BREAKEVEN = 1.0
 # Filtros de status aceitos pela lista (situação real no Meta).
 STATUS_FILTERS = ("all", "active", "paused")
 
-# Campanha ACTIVE sem NENHUM gasto/clique/impressão nos últimos N dias entra como
-# "zumbi de orçamento esgotado" (ver _still_delivering) — a não ser que tenha sido
-# sincronizada pela 1ª vez há menos de NEW_CAMPAIGN_GRACE_DAYS (aí ainda não teve
-# tempo de acumular insight, e não é o mesmo problema).
-RECENT_ACTIVITY_WINDOW_DAYS = 7
-NEW_CAMPAIGN_GRACE_DAYS = 3
-
 # Parte textual de um sub_id (ex.: "legging500280526" -> "legging"), ignorando os números.
 _SUBID_WORD_RE = re.compile(r"[a-zA-Z]+")
 
@@ -55,11 +41,10 @@ def _normalize(s: str) -> str:
 
     'Comente "COBRE LEITO"' -> 'comentecobreleito' ; 'cobreleito2304' -> 'cobreleito2304'.
     Assim 'cobreleito' (do sub_id) casa com o nome da campanha que vem com espaço.
-
-    Implementação movida para `app/utils/text_normalize.py` para ser reaproveitada
-    pelo gatilho de comentário do Instagram. Comportamento idêntico ao anterior.
     """
-    return normalizar_compacto(s)
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
 def merge_sub_id_option_rows(
@@ -135,27 +120,6 @@ def merge_sub_id_option_rows(
 def _is_active(campaign: Campaign) -> bool:
     eff = (campaign.effective_status or campaign.status or "").upper()
     return eff == "ACTIVE"
-
-
-def _still_delivering(campaign: Campaign, recent_activity_ids: set) -> bool:
-    """Campanha ACTIVE mas com orçamento VITALÍCIO já esgotado fica travada em
-    `effective_status=ACTIVE` na Meta pra sempre, mesmo há semanas sem entregar
-    nada — `ad_review_issue` não pega esse caso (olha status do anúncio, não
-    histórico de entrega). Dá benefício da dúvida a campanha recém-(re)ativada
-    ainda sem insight acumulado — usa `status_active_since` (quando ficou
-    ACTIVE pela última vez: criação OU reativação após pausa), NÃO
-    `created_at`: uma campanha antiga que estava pausada e acabou de ser
-    reativada tem `created_at` de semanas atrás e cairia no mesmo balde do
-    zumbi se usássemos só a data de criação."""
-    if campaign.id in recent_activity_ids:
-        return True
-    since = campaign.status_active_since or campaign.created_at
-    if since is None:
-        return True
-    if since.tzinfo is None:
-        since = since.replace(tzinfo=timezone.utc)
-    grace_cutoff = datetime.now(timezone.utc) - timedelta(days=NEW_CAMPAIGN_GRACE_DAYS)
-    return since > grace_cutoff
 
 
 def _health(linked: bool, spend: float, roas: float) -> str:
@@ -276,17 +240,7 @@ class CampaignService:
         # ACTIVE pra sempre sem nunca entregar nada, inflando a contagem e o orçamento
         # somado (caso real: campanha "recentemente rejeitada" no Gerenciador, zero
         # gasto/clique/impressão em 30 dias, contando como ativa igual às outras).
-        # Exclui também campanha ACTIVE com orçamento vitalício esgotado (zero
-        # entrega há mais de RECENT_ACTIVITY_WINDOW_DAYS dias) — mesma classe de
-        # bug: o Gerenciador do Meta já não conta como ativa, o MarketDash contava.
-        recent_activity_ids = self.repo.campaign_ids_with_recent_activity(
-            user_id, since=date.today() - timedelta(days=RECENT_ACTIVITY_WINDOW_DAYS)
-        )
-        active_now = [
-            c
-            for c in campaigns
-            if _is_active(c) and not c.ad_review_issue and _still_delivering(c, recent_activity_ids)
-        ]
+        active_now = [c for c in campaigns if _is_active(c) and not c.ad_review_issue]
         budget_now = round(sum(c.daily_budget or 0.0 for c in active_now), 2)
         active_count_now = len(active_now)
 
@@ -527,119 +481,3 @@ class CampaignService:
         )
         ad_rate, comm_rate, _ = self._tax_rates(user_id)
         return self._build_response(campaign, spend, clicks, impressions, comm, ad_rate, comm_rate, reach)
-
-
-class PlatformBreakdownService:
-    """Breakdown de veiculação por plataforma (Instagram vs Facebook vs resto).
-
-    ATRIBUIÇÃO DE COMISSÃO — leia antes de mudar
-    ---------------------------------------------
-    A Meta entrega gasto/cliques/impressões quebrados por `publisher_platform`, mas
-    a comissão vem da Shopee vinculada ao **Sub ID da campanha**, não ao placement:
-    a Shopee não sabe se o clique veio do feed do Instagram ou do Facebook. Ou seja,
-    NÃO existe comissão "real" por plataforma vinda de fonte primária.
-
-    O que fazemos: ratear a comissão/faturamento/pedidos da campanha entre as
-    plataformas **na proporção do gasto** de cada uma no período. É a mesma
-    convenção que o Gerenciador usa pra distribuir resultado por placement quando
-    não há conversão rastreada por placement.
-
-    Consequências que o produto precisa assumir:
-    - Se uma campanha gastou 70% no Instagram, 70% da comissão dela é atribuída ao
-      Instagram — mesmo que na prática a conversão tenha vindo toda do Facebook.
-    - O ROAS por plataforma é, portanto, uma ESTIMATIVA. O total somado bate exato
-      com o número da tela Campanhas; o corte por plataforma não é auditável.
-    - Campanha sem Sub ID vinculado não contribui comissão nenhuma (igual à tela
-      Campanhas), mas o gasto dela continua entrando no total da plataforma.
-
-    Se um dia a Shopee expuser a origem do clique, troque o rateio por atribuição
-    direta — a assinatura pública deste service não muda.
-    """
-
-    def __init__(self, repo: CampaignRepository):
-        self.repo = repo
-
-    def breakdown(
-        self,
-        user_id: int,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> PlatformBreakdownResponse:
-        totals_raw = self.repo.platform_totals(user_id, start_date, end_date)
-        if not totals_raw:
-            return PlatformBreakdownResponse(has_data=False)
-
-        by_campaign_raw = self.repo.platform_by_campaign(user_id, start_date, end_date)
-        daily_raw = self.repo.platform_daily(user_id, start_date, end_date)
-
-        # Comissão por Sub ID das campanhas que aparecem no breakdown.
-        sub_ids = sorted({r["sub_id"] for r in by_campaign_raw if r.get("sub_id")})
-        sales_by_sub = self.repo.aggregate_by_subids(user_id, sub_ids, start_date, end_date)
-
-        # Gasto total de cada campanha no período (denominador do rateio).
-        spend_por_campanha: Dict[int, float] = {}
-        for row in by_campaign_raw:
-            spend_por_campanha[row["campaign_id"]] = (
-                spend_por_campanha.get(row["campaign_id"], 0.0) + float(row["spend"] or 0.0)
-            )
-
-        # Rateio proporcional ao gasto: campanha → plataforma.
-        vendas_por_plataforma: Dict[str, dict] = {}
-        for row in by_campaign_raw:
-            sub_id = row.get("sub_id")
-            if not sub_id:
-                continue
-            venda = sales_by_sub.get(sub_id)
-            if not venda:
-                continue
-            total_camp = spend_por_campanha.get(row["campaign_id"], 0.0)
-            if total_camp <= 0:
-                # Campanha com comissão e gasto zero no período: sem base pra ratear.
-                # Ignorar é melhor que dividir igualmente entre plataformas — o
-                # segundo inventaria receita de Instagram onde não houve veiculação.
-                continue
-            fatia = float(row["spend"] or 0.0) / total_camp
-            acc = vendas_por_plataforma.setdefault(
-                row["platform"], {"commission": 0.0, "revenue": 0.0, "orders": 0.0}
-            )
-            acc["commission"] += venda["commission"] * fatia
-            acc["revenue"] += venda["revenue"] * fatia
-            acc["orders"] += venda["orders"] * fatia
-
-        total_spend = sum(float(t["spend"] or 0.0) for t in totals_raw)
-
-        totals: List[PlatformTotals] = []
-        for t in totals_raw:
-            venda = vendas_por_plataforma.get(t["platform"], {})
-            commission = round(float(venda.get("commission", 0.0)), 2)
-            revenue = round(float(venda.get("revenue", 0.0)), 2)
-            # Pedidos rateados são fracionários por natureza; arredondamos só na saída.
-            orders = int(round(float(venda.get("orders", 0.0))))
-            spend = float(t["spend"] or 0.0)
-            clicks = int(t["clicks"] or 0)
-            totals.append(
-                PlatformTotals(
-                    platform=t["platform"],
-                    spend=round(spend, 2),
-                    clicks=clicks,
-                    impressions=int(t["impressions"] or 0),
-                    commission=commission,
-                    revenue=revenue,
-                    orders=orders,
-                    # Mesma definição da tela Campanhas: lucro = comissão − gasto.
-                    profit=round(commission - spend, 2),
-                    roas=round(revenue / spend, 2) if spend > 0 else None,
-                    cpc=round(spend / clicks, 2) if clicks > 0 else None,
-                    spend_share=round(spend / total_spend, 4) if total_spend > 0 else 0.0,
-                )
-            )
-
-        totals.sort(key=lambda x: x.spend, reverse=True)
-
-        return PlatformBreakdownResponse(
-            has_data=True,
-            totals=totals,
-            daily=[PlatformDailyPoint(**d) for d in daily_raw],
-            by_campaign=[PlatformCampaignRow(**c) for c in by_campaign_raw],
-            total_spend=round(total_spend, 2),
-        )

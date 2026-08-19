@@ -239,6 +239,7 @@ def get_user_plan_context(
         CHECKOUT_LINKS,
         normalize_plan,
         plan_limit,
+        MAX_ONLY_MENUS,
         PRO_ONLY_MENUS,
     )
 
@@ -264,6 +265,7 @@ def get_user_plan_context(
         "is_demo": bool(getattr(current_user, "is_demo", False)),
         "menus": sorted(cfg["menus"]),
         "pro_only_menus": sorted(PRO_ONLY_MENUS),
+        "max_only_menus": sorted(MAX_ONLY_MENUS),
         "limites": dict(cfg["limites"]),
         "limites_paginas_captura": plan_limit(plan, "paginas_captura"),
         "limites_links": plan_limit(plan, "links"),

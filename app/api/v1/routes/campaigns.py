@@ -20,7 +20,8 @@ from app.schemas.campaign import (
     CampaignStatusUpdate,
     SubIdOptionsResponse,
 )
-from app.services.campaign_service import CampaignService
+from app.schemas.campaign_platform import PlatformBreakdownResponse
+from app.services.campaign_service import CampaignService, PlatformBreakdownService
 from app.services.facebook_integration_service import FacebookIntegrationService
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,24 @@ def list_campaigns(
     """Lista campanhas com KPIs e métricas agregadas no período."""
     return _service(db).list_campaigns(
         current_user.id, start_date=start_date, end_date=end_date, status_filter=status, search=search
+    )
+
+
+# IMPORTANTE: rota literal — precisa vir ANTES de /{campaign_id} (mesmo motivo do /export).
+@router.get("/platform-breakdown", response_model=PlatformBreakdownResponse)
+def platform_breakdown(
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Gasto/cliques/ROAS por plataforma de veiculação (Instagram, Facebook, ...).
+
+    A comissão por plataforma é RATEADA pelo gasto — a Shopee não informa o
+    placement de origem do clique. Ver docstring de `PlatformBreakdownService`.
+    """
+    return PlatformBreakdownService(CampaignRepository(db)).breakdown(
+        current_user.id, start_date=start_date, end_date=end_date
     )
 
 

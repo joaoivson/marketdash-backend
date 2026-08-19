@@ -85,3 +85,9 @@ no Supabase. Ela reutiliza os secrets do Vault da migration 018
 - **Gasto no Dashboard antigo**: o gasto das campanhas NÃO é espelhado em `AdSpend`
   automaticamente (evita dupla contagem com lançamentos manuais). A tela Campanhas usa
   `CampaignDailyInsight` (Facebook) como fonte do gasto.
+
+---
+
+## Instagram
+
+A automação de Instagram (comentário → direct) usa o **mesmo app da Meta** descrito aqui, mas por outro caminho: Business Login for Instagram, com `INSTAGRAM_APP_ID/SECRET` próprios e host `graph.instagram.com`. A configuração de anúncios abaixo NÃO é tocada por ela. Setup, roteiro de homologação e promoção para produção: [`AUTOMACAO_INSTAGRAM.md`](./AUTOMACAO_INSTAGRAM.md).

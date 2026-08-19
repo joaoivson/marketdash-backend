@@ -45,6 +45,8 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "captura",
                 "meus_links",
                 "diagnostico_ia",
+                # Automação Instagram (comentário → direct) é exclusiva do MAX.
+                "automacoes",
                 "indique_ganhe",
                 "configuracoes",
                 "planos",
@@ -65,6 +67,9 @@ def is_unlimited(value: int) -> bool:
 
 # Menus que exigem plano Pro (cadeado no Essencial).
 PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links", "diagnostico_ia"})
+
+# Menus exclusivos do MAX (cadeado no Essencial E no Pro).
+MAX_ONLY_MENUS: FrozenSet[str] = frozenset({"automacoes"})
 
 # Checkout Kiwify por (plano, periodo) — product_id preenchido via tabela/env.
 PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {
