@@ -9,6 +9,7 @@
 
 | Data | Decisão | Por quê |
 |---|---|---|
+| 2026-08-20 | **Sincronização em homologação é privilégio de uma lista curta** (`app/core/sync_gate.py`, hoje só o Luiz Fernando). Vale nos 2 botões manuais e nos 2 caminhos de cron | hml bate na API real da Shopee/Meta com o rate limit de produção; várias contas de teste sincronizando gastam cota e poluem a validação. O gate liga **pela ref do banco** (`app/core/ambiente.py`), nunca por `ENVIRONMENT` — e responde `False` em produção e em dev local, porque um gate que ligasse em produção pararia o sync de todas as alunas |
 | — | **Supabase só para auth e Storage.** Todo dado por SQLAlchemy | Um só lugar de verdade sobre schema e query; PostgREST no caminho duplicaria regra de acesso |
 | — | **`get_current_user()` valida o token chamando `supabase.auth.get_user(token)`** — não decodifica JWT localmente | Revogação de sessão vale na hora; decodificar local aceitaria token revogado até expirar |
 | — | **Toda query filtra por `user_id`**, com `SET LOCAL app.current_user_id` para RLS | Isolamento de dado de afiliado é o núcleo do produto; falha aqui é vazamento entre clientes |

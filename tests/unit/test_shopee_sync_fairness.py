@@ -24,13 +24,19 @@ def test_get_all_active_orders_by_last_sync_asc_nulls_first():
 
 
 @pytest.mark.asyncio
-async def test_run_shopee_sync_all_skips_recent_users():
+async def test_run_shopee_sync_all_skips_recent_users(monkeypatch):
+    from app.core.config import settings
     from app.services import shopee_integration_service as svc_mod
+
+    # Este teste é sobre fairness, não sobre o gate de homologação. Sem fixar o
+    # banco, o resultado passa a depender do DATABASE_URL da máquina: com o .env
+    # apontando para hml, o gate entra e nenhum usuário sincroniza.
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/marketdash")
 
     now = datetime.now(timezone.utc)
     fresh = MagicMock(user_id=1, last_sync_at=now - timedelta(minutes=10))
     stale = MagicMock(user_id=9, last_sync_at=now - timedelta(hours=36))
-    fake_user = MagicMock(is_demo=False)
+    fake_user = MagicMock(is_demo=False, email="aluna@exemplo.com")
 
     lock_conn = MagicMock()
     lock_conn.execute.return_value.scalar.return_value = True

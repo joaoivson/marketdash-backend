@@ -627,14 +627,26 @@ async def run_facebook_sync_all(trigger: str = "cron") -> dict:
     que agenda esta função num BackgroundTask do FastAPI: roda no próprio processo da API.
     Falha de um usuário não derruba os demais (cada sync_user é atômico e dá commit por user).
     """
+    from app.core.ambiente import is_homologacao
+    from app.core.sync_gate import sync_liberado_para
     from app.db.session import SessionLocal
+    from app.models.user import User
     from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
 
     # Lista os usuários ativos numa sessão curta, depois sincroniza cada um na SUA PRÓPRIA
     # sessão (isola falha e evita estado cruzado entre usuários após commit/rollback).
     db0 = SessionLocal()
+    skipped_gate = 0
     try:
         user_ids = [i.user_id for i in FacebookIntegrationRepository(db0).get_all_active()]
+        # Em homologação o cron sincroniza só quem está liberado (ver
+        # app/core/sync_gate.py). Os e-mails vêm em UMA query — fora de
+        # homologação nem essa query roda, o custo em produção é zero.
+        if is_homologacao() and user_ids:
+            emails = dict(db0.query(User.id, User.email).filter(User.id.in_(user_ids)).all())
+            liberados = [uid for uid in user_ids if sync_liberado_para(emails.get(uid))]
+            skipped_gate = len(user_ids) - len(liberados)
+            user_ids = liberados
     finally:
         db0.close()
 
@@ -656,5 +668,8 @@ async def run_facebook_sync_all(trigger: str = "cron") -> dict:
                 db.rollback()
         finally:
             db.close()
-    logger.info("FB sync inline (pg_cron, sem worker): %d/%d usuários", synced, len(user_ids))
-    return {"synced": synced, "total": len(user_ids)}
+    logger.info(
+        "FB sync inline (pg_cron, sem worker): %d/%d usuários skipped_gate=%d",
+        synced, len(user_ids), skipped_gate,
+    )
+    return {"synced": synced, "total": len(user_ids), "skipped_gate": skipped_gate}
