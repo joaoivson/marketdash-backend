@@ -56,6 +56,14 @@ class InstagramConnectionResponse(BaseModel):
     webhook_subscrito: bool = False
     webhook_erro: Optional[str] = None
 
+    # BUSINESS | MEDIA_CREATOR. Só Criador consegue tornar o perfil privado — e
+    # perfil privado não recebe webhook de comentário. A tela usa isso para um
+    # aviso preventivo, sem bloquear.
+    account_type: Optional[str] = None
+    # False = conectou sem `instagram_business_manage_comments`: o direct sai, mas
+    # a resposta pública no comentário não. Silencioso se ninguém avisar.
+    pode_responder_comentario: bool = True
+
     class Config:
         from_attributes = True
 

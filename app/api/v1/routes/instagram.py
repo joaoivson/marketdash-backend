@@ -140,12 +140,12 @@ def listar_automacoes(
     response_model=InstagramAutomationResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def criar_automacao(
+async def criar_automacao(
     payload: InstagramAutomationCreate,
     current_user: User = Depends(exige_plano_max),
     db: Session = Depends(get_db),
 ):
-    return _automacoes(db).criar(current_user.id, payload)
+    return await _automacoes(db).criar(current_user.id, payload)
 
 
 @router.get("/automations/{automation_id}", response_model=InstagramAutomationResponse)
@@ -158,24 +158,24 @@ def obter_automacao(
 
 
 @router.put("/automations/{automation_id}", response_model=InstagramAutomationResponse)
-def atualizar_automacao(
+async def atualizar_automacao(
     automation_id: int,
     payload: InstagramAutomationUpdate,
     current_user: User = Depends(exige_plano_max),
     db: Session = Depends(get_db),
 ):
-    return _automacoes(db).atualizar(current_user.id, automation_id, payload)
+    return await _automacoes(db).atualizar(current_user.id, automation_id, payload)
 
 
 @router.patch("/automations/{automation_id}/status", response_model=InstagramAutomationResponse)
-def alterar_status(
+async def alterar_status(
     automation_id: int,
     payload: InstagramAutomationStatusUpdate,
     current_user: User = Depends(exige_plano_max),
     db: Session = Depends(get_db),
 ):
     """Toggle Ativa/Pausada da lista. Sem confirmação — é reversível."""
-    return _automacoes(db).alterar_status(current_user.id, automation_id, payload.status)
+    return await _automacoes(db).alterar_status(current_user.id, automation_id, payload.status)
 
 
 @router.post(

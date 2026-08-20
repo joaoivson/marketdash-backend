@@ -99,6 +99,30 @@ class InstagramAutomationService:
 
     # ----------------------------- automações ---------------------------- #
 
+    async def _exigir_webhook_ativo(self, user_id: int) -> None:
+        """Só deixa ATIVAR se a conta estiver recebendo os comentários.
+
+        Sem isso a aluna publica o post achando que a automação está rodando, e
+        descobre pelo silêncio — que é o pior jeito de descobrir. Tenta reparar
+        antes de recusar: se a inscrição estiver só faltando, ela acontece aqui.
+        """
+        conexao = await self.conexao_service.garantir_webhook(user_id)
+        if conexao.webhook_subscrito:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "WEBHOOK_NAO_ATIVO",
+                "message": (
+                    "Ainda não estamos recebendo os comentários deste perfil, então a "
+                    "automação não dispararia. Confira em Configurações → Integração "
+                    "Instagram: o perfil precisa ser público e a opção "
+                    "\"Permitir acesso às mensagens\" precisa estar ligada."
+                ),
+                "webhook_erro": conexao.webhook_erro,
+            },
+        )
+
     def _to_response(
         self, automacao: InstagramAutomation, contadores: Optional[dict] = None
     ) -> InstagramAutomationResponse:
@@ -186,9 +210,13 @@ class InstagramAutomationService:
         automacao.dm_texto = dados.dm_texto or ""
         automacao.status = dados.status
 
-    def criar(self, user_id: int, dados: InstagramAutomationCreate) -> InstagramAutomationResponse:
+    async def criar(
+        self, user_id: int, dados: InstagramAutomationCreate
+    ) -> InstagramAutomationResponse:
         conexao = self.conexao_service.require_conexao_ativa(user_id)
         self._validar(dados, para_ativar=dados.status == AUTOMACAO_ATIVA)
+        if dados.status == AUTOMACAO_ATIVA:
+            await self._exigir_webhook_ativo(user_id)
 
         automacao = InstagramAutomation(user_id=user_id, connection_id=conexao.id, nome=dados.nome)
         self._aplicar(automacao, dados)
@@ -198,7 +226,7 @@ class InstagramAutomationService:
         logger.info("Automação Instagram criada id=%s user_id=%s", automacao.id, user_id)
         return self._to_response(automacao)
 
-    def atualizar(
+    async def atualizar(
         self, user_id: int, automation_id: int, dados: InstagramAutomationUpdate
     ) -> InstagramAutomationResponse:
         automacao = self.repo.get_automation(user_id, automation_id)
@@ -207,12 +235,14 @@ class InstagramAutomationService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="Automação não encontrada."
             )
         self._validar(dados, para_ativar=dados.status == AUTOMACAO_ATIVA)
+        if dados.status == AUTOMACAO_ATIVA:
+            await self._exigir_webhook_ativo(user_id)
         self._aplicar(automacao, dados)
         self.db.commit()
         self.db.refresh(automacao)
         return self._to_response(automacao, self.repo.contadores_por_automacao(user_id))
 
-    def alterar_status(
+    async def alterar_status(
         self, user_id: int, automation_id: int, novo_status: str
     ) -> InstagramAutomationResponse:
         automacao = self.repo.get_automation(user_id, automation_id)
@@ -221,9 +251,10 @@ class InstagramAutomationService:
                 status_code=status.HTTP_404_NOT_FOUND, detail="Automação não encontrada."
             )
         if novo_status == AUTOMACAO_ATIVA:
-            # Ligar exige a conexão viva: uma automação "ativa" com token morto
-            # mente pra aluna — o toggle fica verde e nada é enviado.
-            self.conexao_service.require_conexao_ativa(user_id)
+            # Ligar exige conexão viva E webhook chegando: uma automação "ativa"
+            # com token morto ou conta não inscrita mente pra aluna — o toggle
+            # fica verde e nada é enviado.
+            await self._exigir_webhook_ativo(user_id)
             faltando = self._campos_faltando(automacao)
             if faltando:
                 raise HTTPException(

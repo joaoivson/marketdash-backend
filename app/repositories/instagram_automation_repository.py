@@ -44,6 +44,7 @@ class InstagramAutomationRepository:
         ig_user_id: str,
         ig_username: Optional[str],
         ig_avatar_url: Optional[str],
+        account_type: Optional[str],
         access_token_encrypted: str,
         token_expires_at: Optional[datetime],
         scopes: Optional[str],
@@ -55,6 +56,7 @@ class InstagramAutomationRepository:
         conexao.ig_user_id = str(ig_user_id)
         conexao.ig_username = ig_username
         conexao.ig_avatar_url = ig_avatar_url
+        conexao.account_type = account_type
         conexao.access_token = access_token_encrypted
         conexao.token_expires_at = token_expires_at
         conexao.scopes = scopes

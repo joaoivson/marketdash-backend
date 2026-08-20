@@ -169,6 +169,29 @@ estamos recebendo os comentários"*.
 > o webhook nunca casar com nenhuma conexão nossa. O código já usa `user_id`, com
 > teste de regressão.
 
+### Automação não fica ativa com o webhook fora do ar
+
+Ativar uma automação exige, além da conexão viva, `webhook_subscrito = true`. Se
+faltar, o backend **tenta inscrever na hora** e só recusa se não conseguir — 409
+`WEBHOOK_NAO_ATIVO`, com o motivo. Na lista, o toggle fica travado e aparece o selo
+"Aguardando conexão"; **pausar continua sempre liberado**.
+
+Por que travar: sem isso a aluna publica o post achando que está rodando e descobre
+pelo silêncio. Automação "ativa" que não dispara é pior que automação pausada.
+
+### Escopos: guardamos o que foi CONCEDIDO, não o que pedimos
+
+A tela de consentimento da Meta agrupa permissões com nomes próprios — dá para sair
+de lá sem `instagram_business_manage_comments` sem perceber. Nesse caso o direct
+continua saindo e **só a resposta pública para de funcionar**, sem erro nenhum.
+
+Por isso `instagram_connections.scopes` recebe a lista que veio na resposta do OAuth
+(campo `permissions`), não a lista que pedimos. Faltando o escopo de comentários, a
+tela avisa. Se a Meta não devolver `permissions`, caímos no que pedimos e não
+alarmamos à toa.
+
+Conferência: `SELECT ig_username, scopes FROM instagram_connections;`
+
 ### Conta privada: detectada pela consequência, não por um campo
 
 A doc é explícita: *"The Instagram professional account that owns the media objects
@@ -275,6 +298,7 @@ CRON_SECRET=<já existente>
 | 052 | `052_instagram_automacao_comentario_direct.sql` | `instagram_connections`, `instagram_automations`, `instagram_events` |
 | 053 | `053_cron_instagram_token_refresh.sql` | pg_cron diário 05h15 UTC → renovação de tokens |
 | 054 | `054_instagram_webhook_subscription_state.sql` | Estado da inscrição de webhook por conta (já vem na 052; a 054 é só para quem aplicou a 052 antes desta correção) |
+| 055 | `055_instagram_account_type.sql` | `account_type` na conexão (idem: já vem na 052, a 055 é o catch-up) |
 
 Todas idempotentes, todas com RLS por `app.current_user_id`.
 

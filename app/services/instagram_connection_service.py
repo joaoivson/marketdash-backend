@@ -66,12 +66,23 @@ class InstagramConnectionService:
             return CONEXAO_EXPIRADA
         return conexao.status or CONEXAO_ATIVA
 
+    @staticmethod
+    def _montar_resposta(conexao: InstagramConnection) -> InstagramConnectionResponse:
+        """Resposta da conexão, com os alertas derivados dos escopos concedidos."""
+        resp = InstagramConnectionResponse.model_validate(conexao)
+        concedidos = [e.strip() for e in (conexao.scopes or "").split(",") if e.strip()]
+        # Sem lista de escopos não dá pra afirmar que falta algo — não alarmar.
+        resp.pode_responder_comentario = (
+            ig.ESCOPO_COMENTARIOS in concedidos if concedidos else True
+        )
+        return resp
+
     def get_status(self, user_id: int) -> Optional[InstagramConnectionResponse]:
         conexao = self.repo.get_connection_by_user(user_id)
         if not conexao:
             return None
         status_atual = self._resolver_status(conexao)
-        resp = InstagramConnectionResponse.model_validate(conexao)
+        resp = self._montar_resposta(conexao)
         resp.status = status_atual
         return resp
 
@@ -165,15 +176,28 @@ class InstagramConnectionService:
                 },
             )
 
+        # Guardamos o que foi CONCEDIDO, não o que pedimos. Se a aluna desmarcar
+        # uma permissão na tela de consentimento, tudo conecta e só o recurso
+        # daquela permissão para de funcionar — em silêncio. Com a lista real, dá
+        # pra avisar. Se a Meta não devolver `permissions`, caímos no que pedimos
+        # e a tela não alarma à toa.
+        concedidas = ig.permissoes_concedidas(longo) or ig.permissoes_concedidas(curto)
         conexao = self.repo.upsert_connection(
             user_id=user_id,
             ig_user_id=ig_user_id,
             ig_username=perfil.get("username"),
             ig_avatar_url=perfil.get("profile_picture_url"),
+            account_type=tipo_conta or None,
             access_token_encrypted=encrypt_value(access_token),
             token_expires_at=token_expires_at,
-            scopes=",".join(ig.DEFAULT_SCOPES),
+            scopes=",".join(concedidas or ig.DEFAULT_SCOPES),
         )
+        if concedidas and ig.ESCOPO_COMENTARIOS not in concedidas:
+            logger.warning(
+                "Instagram: user_id=%s conectou SEM %s — resposta pública no "
+                "comentário não vai funcionar. Concedidas: %s",
+                user_id, ig.ESCOPO_COMENTARIOS, ",".join(concedidas),
+            )
         self.db.commit()
         self.db.refresh(conexao)
 
@@ -185,7 +209,7 @@ class InstagramConnectionService:
             "Instagram conectado user_id=%s @%s (expira em %s, webhook=%s)",
             user_id, conexao.ig_username, token_expires_at, conexao.webhook_subscrito,
         )
-        return InstagramConnectionResponse.model_validate(conexao)
+        return self._montar_resposta(conexao)
 
     def disconnect(self, user_id: int) -> None:
         """Remove a conexão e tudo que depende dela. Idempotente."""
@@ -261,9 +285,21 @@ class InstagramConnectionService:
             )
         await self.assinar_webhook(conexao)
         self.db.refresh(conexao)
-        resp = InstagramConnectionResponse.model_validate(conexao)
+        resp = self._montar_resposta(conexao)
         resp.status = self._resolver_status(conexao)
         return resp
+
+    async def garantir_webhook(self, user_id: int) -> InstagramConnection:
+        """Devolve a conexão com a inscrição em dia, tentando reparar na hora.
+
+        Usada antes de ATIVAR uma automação: se a conta não está inscrita, tenta
+        inscrever agora. Auto-reparo em vez de mandar a aluna para outra tela.
+        """
+        conexao = self.require_conexao_ativa(user_id)
+        if not conexao.webhook_subscrito:
+            await self.assinar_webhook(conexao)
+            self.db.refresh(conexao)
+        return conexao
 
     # --------------------------- deauthorize ---------------------------- #
 

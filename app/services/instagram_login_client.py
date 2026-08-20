@@ -37,6 +37,12 @@ DEFAULT_SCOPES = [
     "instagram_business_manage_messages",
 ]
 
+# Sem este escopo a automação até manda o direct, mas NÃO consegue responder
+# publicamente no comentário. Como a tela de consentimento da Meta agrupa
+# permissões com nomes próprios, dá pra conceder "só mensagens" sem perceber.
+ESCOPO_COMENTARIOS = "instagram_business_manage_comments"
+ESCOPO_MENSAGENS = "instagram_business_manage_messages"
+
 # Tipos de conta que a API devolve em `account_type`. PERSONAL não expõe
 # comentários nem mensagens — bloqueamos na conexão, com mensagem clara.
 TIPOS_PROFISSIONAIS = {"BUSINESS", "MEDIA_CREATOR", "CREATOR"}
@@ -217,6 +223,24 @@ async def exchange_code_for_short_token(code: str, redirect_uri: str) -> dict[st
         "code": limpo,
     }
     return await _request("POST", OAUTH_TOKEN_URL, data=data)
+
+
+def permissoes_concedidas(resposta_token: dict) -> list[str]:
+    """Escopos que a aluna REALMENTE concedeu, lidos da resposta do OAuth.
+
+    Guardar o que pedimos em vez do que foi concedido esconde o pior cenário: a
+    aluna desmarca uma permissão na tela de consentimento, tudo conecta, e só a
+    resposta pública para de funcionar — sem erro em lugar nenhum.
+
+    A Meta devolve `permissions` ora como lista, ora como string separada por
+    vírgula. Ausente (formato mudou), devolvemos [] e quem chama decide.
+    """
+    bruto = (resposta_token or {}).get("permissions")
+    if isinstance(bruto, list):
+        return [str(p).strip() for p in bruto if str(p).strip()]
+    if isinstance(bruto, str):
+        return [p.strip() for p in bruto.split(",") if p.strip()]
+    return []
 
 
 async def exchange_for_long_lived_token(short_token: str) -> dict[str, Any]:

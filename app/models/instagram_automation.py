@@ -71,6 +71,9 @@ class InstagramConnection(Base):
     ig_user_id = Column(String(64), nullable=False, index=True)
     ig_username = Column(String(255), nullable=True)
     ig_avatar_url = Column(Text, nullable=True)
+    # BUSINESS | MEDIA_CREATOR — Criador de Conteúdo pode tornar o perfil
+    # privado, e perfil privado não recebe webhook de comentário.
+    account_type = Column(String(32), nullable=True)
 
     # Token longo (60 dias) criptografado com Fernet (SHOPEE_ENCRYPTION_KEY).
     access_token = Column(Text, nullable=False)

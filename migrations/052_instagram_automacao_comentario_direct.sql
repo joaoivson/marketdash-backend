@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS instagram_connections (
     ig_user_id VARCHAR(64) NOT NULL,
     ig_username VARCHAR(255) NULL,
     ig_avatar_url TEXT NULL,
+    -- BUSINESS | MEDIA_CREATOR. Criador de Conteúdo consegue tornar o perfil
+    -- privado, e perfil privado não recebe webhook de comentário.
+    account_type VARCHAR(32) NULL,
     -- Instagram User access token (longo, 60 dias), criptografado com a MESMA
     -- chave Fernet do Shopee/Facebook (SHOPEE_ENCRYPTION_KEY).
     access_token TEXT NOT NULL,

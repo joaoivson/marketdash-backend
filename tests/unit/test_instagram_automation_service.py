@@ -42,6 +42,9 @@ def db():
             access_token=encrypt_value("t"),
             token_expires_at=datetime.now(timezone.utc) + timedelta(days=50),
             status=CONEXAO_ATIVA,
+            # Sem isto o gate de ativação recusa: automação ativa com a conta fora
+            # do webhook mentiria pra aluna.
+            webhook_subscrito=True,
         )
     )
     s.commit()
@@ -71,46 +74,46 @@ def _payload(**kwargs) -> InstagramAutomationCreate:
 
 
 class TestNormalizacaoNaGravacao:
-    def test_palavras_ficam_normalizadas_e_o_original_e_preservado(self, svc, db):
-        criada = svc.criar(1, _payload(palavras=["QUERO", "Quéro!!"]))
+    async def test_palavras_ficam_normalizadas_e_o_original_e_preservado(self, svc, db):
+        criada = await svc.criar(1, _payload(palavras=["QUERO", "Quéro!!"]))
         # A tela mostra o que a aluna digitou...
         assert criada.palavras == ["QUERO", "Quéro!!"]
         # ...e o matching usa a versão normalizada, sem repetição.
         linha = db.query(InstagramAutomation).one()
         assert linha.palavras == ["quero"]
 
-    def test_escopo_qualquer_nao_guarda_media_id(self, svc, db):
+    async def test_escopo_qualquer_nao_guarda_media_id(self, svc, db):
         """Guardar o post aqui faria `cobre_media` responder pelo post errado."""
-        svc.criar(1, _payload(escopo=ESCOPO_QUALQUER, media_id="1800"))
+        await svc.criar(1, _payload(escopo=ESCOPO_QUALQUER, media_id="1800"))
         assert db.query(InstagramAutomation).one().media_id is None
 
 
 class TestValidacaoParaPublicar:
-    def test_rascunho_pode_ficar_incompleto(self, svc):
-        criada = svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO, palavras=[], dm_texto=""))
+    async def test_rascunho_pode_ficar_incompleto(self, svc):
+        criada = await svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO, palavras=[], dm_texto=""))
         assert criada.status == AUTOMACAO_RASCUNHO
 
-    def test_ativa_sem_palavra_chave_e_recusada(self, svc):
+    async def test_ativa_sem_palavra_chave_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
-            svc.criar(1, _payload(palavras=[]))
+            await svc.criar(1, _payload(palavras=[]))
         assert exc.value.status_code == 422
 
-    def test_ativa_sem_texto_de_dm_e_recusada(self, svc):
+    async def test_ativa_sem_texto_de_dm_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
-            svc.criar(1, _payload(dm_texto="   "))
+            await svc.criar(1, _payload(dm_texto="   "))
         assert exc.value.status_code == 422
 
-    def test_ativa_sem_post_escolhido_e_recusada(self, svc):
+    async def test_ativa_sem_post_escolhido_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
-            svc.criar(1, _payload(media_id=None))
+            await svc.criar(1, _payload(media_id=None))
         assert exc.value.status_code == 422
 
-    def test_resposta_publica_ligada_e_vazia_e_recusada(self, svc):
+    async def test_resposta_publica_ligada_e_vazia_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
-            svc.criar(1, _payload(resposta_publica_variacoes=[]))
+            await svc.criar(1, _payload(resposta_publica_variacoes=[]))
         assert exc.value.status_code == 422
 
-    def test_mais_de_cinco_variacoes_e_recusado_no_schema(self):
+    async def test_mais_de_cinco_variacoes_e_recusado_no_schema(self):
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
@@ -118,9 +121,9 @@ class TestValidacaoParaPublicar:
 
 
 class TestDuplicar:
-    def test_copia_nasce_pausada(self, svc):
+    async def test_copia_nasce_pausada(self, svc):
         """Duas automações idênticas ativas no mesmo post brigariam pelo comentário."""
-        original = svc.criar(1, _payload())
+        original = await svc.criar(1, _payload())
         copia = svc.duplicar(1, original.id)
         assert copia.status == "pausada"
         assert copia.nome.endswith("(cópia)")
@@ -128,13 +131,72 @@ class TestDuplicar:
 
 
 class TestToggle:
-    def test_ativar_automacao_incompleta_e_recusado(self, svc):
-        rascunho = svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO, dm_texto=""))
+    async def test_ativar_automacao_incompleta_e_recusado(self, svc):
+        rascunho = await svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO, dm_texto=""))
         with pytest.raises(HTTPException) as exc:
-            svc.alterar_status(1, rascunho.id, AUTOMACAO_ATIVA)
+            await svc.alterar_status(1, rascunho.id, AUTOMACAO_ATIVA)
         assert exc.value.status_code == 422
         assert "mensagem do direct" in str(exc.value.detail)
 
-    def test_pausar_sempre_funciona(self, svc):
-        ativa = svc.criar(1, _payload())
-        assert svc.alterar_status(1, ativa.id, "pausada").status == "pausada"
+    async def test_pausar_sempre_funciona(self, svc):
+        ativa = await svc.criar(1, _payload())
+        assert (await svc.alterar_status(1, ativa.id, "pausada")).status == "pausada"
+
+
+class TestGateDeWebhook:
+    """Automação não pode ficar ativa se a conta não está recebendo comentários."""
+
+    @pytest.mark.asyncio
+    async def test_ativar_com_webhook_fora_do_ar_e_recusado(self, svc, db, monkeypatch):
+        from app.services import instagram_login_client as ig
+
+        ativa = await svc.criar(1, _payload())
+
+        # A conta perde a inscrição (ex.: perfil virou privado).
+        conexao = db.query(InstagramConnection).one()
+        conexao.webhook_subscrito = False
+        conexao.webhook_erro = "perfil privado"
+        db.commit()
+
+        # E a tentativa de reparo automático também falha.
+        async def _subscribe(_t, _i):
+            raise ig.InstagramApiError("conta privada", codigo=100, permanente=True)
+
+        monkeypatch.setattr(ig, "subscribe_account_to_webhooks", _subscribe)
+
+        with pytest.raises(HTTPException) as exc:
+            await svc.alterar_status(1, ativa.id, AUTOMACAO_ATIVA)
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "WEBHOOK_NAO_ATIVO"
+
+    @pytest.mark.asyncio
+    async def test_ativar_repara_a_inscricao_em_vez_de_so_recusar(self, svc, db, monkeypatch):
+        """Auto-reparo: se só faltava inscrever, a ativação resolve na hora."""
+        from app.services import instagram_login_client as ig
+
+        automacao = await svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO))
+        conexao = db.query(InstagramConnection).one()
+        conexao.webhook_subscrito = False
+        db.commit()
+
+        async def _subscribe(_t, _i):
+            return True
+
+        monkeypatch.setattr(ig, "subscribe_account_to_webhooks", _subscribe)
+
+        resultado = await svc.alterar_status(1, automacao.id, AUTOMACAO_ATIVA)
+
+        assert resultado.status == AUTOMACAO_ATIVA
+        db.refresh(conexao)
+        assert conexao.webhook_subscrito is True
+
+    @pytest.mark.asyncio
+    async def test_pausar_nao_exige_webhook(self, svc, db):
+        """Desligar sempre pode — travar isso prenderia a aluna numa automação ruim."""
+        ativa = await svc.criar(1, _payload())
+        conexao = db.query(InstagramConnection).one()
+        conexao.webhook_subscrito = False
+        db.commit()
+
+        assert (await svc.alterar_status(1, ativa.id, "pausada")).status == "pausada"
