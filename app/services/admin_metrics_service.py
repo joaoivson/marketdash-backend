@@ -258,11 +258,80 @@ def _subscriber_state_sort_key(ev: SubscriptionEvent) -> tuple:
     return (priority, received)
 
 
+def _identidade_da_pessoa(ev) -> str:
+    """Quem é o ser humano por trás do evento — e-mail, com CPF de reserva.
+
+    `_subscriber_key()` identifica a ASSINATURA (e o mesmo cliente pode ter mais
+    de uma: upgrade, ou import sem `subscription_id` + webhook com ele). Para
+    contar gente — base do churn, por exemplo — a chave certa é esta.
+    """
+    return (getattr(ev, "customer_email", None) or "").strip().lower() or (
+        getattr(ev, "customer_cpf", None) or ""
+    ).strip()
+
+
+def _pessoa_por_chave(events: List[SubscriptionEvent]) -> Dict[str, str]:
+    """Mapa `subscriber_key` → pessoa. Chave sem identidade responde por si mesma."""
+    mapa: Dict[str, str] = {}
+    for ev in events:
+        chave = _subscriber_key(ev)
+        if chave in mapa:
+            continue
+        mapa[chave] = _identidade_da_pessoa(ev) or chave
+    return mapa
+
+
+def _consolidar_import_com_assinatura(
+    latest: Dict[str, SubscriptionEvent]
+) -> Dict[str, SubscriptionEvent]:
+    """Import histórico e webhook da MESMA assinatura viram uma chave só.
+
+    O import histórico da Kiwify não trouxe `subscription_id`, então seus eventos
+    viram a chave `cpf:`/`email:`. O webhook que chega depois traz o id e vira
+    `sub:` — `_subscriber_key()` não tem como saber que é a mesma assinatura.
+    Resultado: o **cancelamento não alcança a linha do import**, que fica
+    congelada no último estado conhecido (ativo) e segue contando.
+
+    Caso real (Rodada 8): assinante cancelou em 15/08 e continuou somando
+    R$49/mês no MRR — a chave `sub:` ficou cancelada e a `cpf:` ficou ativa.
+    Era isso que fazia o bruto do painel não fechar com a tabela de preços.
+
+    Só consolida quando há mistura import × subscription. Duas chaves `sub:` da
+    mesma pessoa são upgrade/downgrade — duas assinaturas de verdade, tratadas
+    pela Rodada 6, e fundi-las quebraria aquele tratamento.
+    """
+    por_pessoa: Dict[str, List[str]] = defaultdict(list)
+    for chave, ev in latest.items():
+        ident = (ev.customer_email or "").strip().lower() or (ev.customer_cpf or "").strip()
+        if ident:
+            por_pessoa[ident].append(chave)
+
+    minimo = datetime.min.replace(tzinfo=timezone.utc)
+    descartar: set = set()
+    for chaves in por_pessoa.values():
+        if len(chaves) < 2:
+            continue
+        de_sub = [k for k in chaves if k.startswith("sub:")]
+        do_import = [k for k in chaves if not k.startswith("sub:")]
+        if not de_sub or not do_import:
+            continue
+        # o webhook (com subscription_id) é a fonte mais nova; a linha do import
+        # que ficou parada antes dele é a mesma assinatura, já superada.
+        mais_recente_sub = max((_utc(latest[k].received_at) or minimo) for k in de_sub)
+        for k in do_import:
+            if (_utc(latest[k].received_at) or minimo) <= mais_recente_sub:
+                descartar.add(k)
+
+    if not descartar:
+        return latest
+    return {k: v for k, v in latest.items() if k not in descartar}
+
+
 def _latest_by_subscriber(events: List[SubscriptionEvent]) -> Dict[str, SubscriptionEvent]:
     latest: Dict[str, SubscriptionEvent] = {}
     for ev in sorted(events, key=_subscriber_state_sort_key):
         latest[_subscriber_key(ev)] = ev
-    return latest
+    return _consolidar_import_com_assinatura(latest)
 
 
 def _is_active_now(ev: SubscriptionEvent, today: date) -> bool:
@@ -310,11 +379,92 @@ def cancel_instants(events) -> Dict[str, List[datetime]]:
     return dict(por_assinante)
 
 
+def _is_late(ev) -> bool:
+    """Assinatura em atraso: existe e não foi cancelada — só o pagamento não entrou."""
+    return (getattr(ev, "event_type", None) or "").lower() == "subscription_late" or (
+        getattr(ev, "subscription_status", None) or ""
+    ).lower() == "waiting_payment"
+
+
+def assinaturas_pagas_em(
+    momento: datetime,
+    periodos: Dict[str, List[Dict[str, Any]]],
+    cancelamentos: Dict[str, List[datetime]],
+) -> Dict[str, Dict[str, Any]]:
+    """Assinaturas com vigência PAGA cobrindo `momento`, já descontados os cancelamentos.
+
+    Retrato histórico: responde "quem estava valendo em X", não "quem está
+    valendo hoje". Devolve `{chave: período que cobre}` — o MRR usa o período
+    (valores), o churn usa só as chaves (contagem).
+
+    Um cancelamento só derruba o período em que ele caiu (ou um anterior):
+    cancelou em maio e reassinou em julho não afeta julho.
+    """
+    vivos: Dict[str, Dict[str, Any]] = {}
+    for chave, lista in periodos.items():
+        cobrindo = None
+        for p in lista:
+            if p["inicio"] <= momento < p["fim"]:
+                if cobrindo is None or p["inicio"] > cobrindo["inicio"]:
+                    cobrindo = p
+        if not cobrindo:
+            continue
+        if any(cobrindo["inicio"] <= c <= momento for c in cancelamentos.get(chave, [])):
+            continue
+        vivos[chave] = cobrindo
+    return vivos
+
+
+def ultimo_evento_ate(
+    momento: datetime, events: List[SubscriptionEvent]
+) -> Dict[str, SubscriptionEvent]:
+    """Último evento de cada assinatura ATÉ `momento` — o estado como era ali.
+
+    Diferente de `_latest_by_subscriber()`, que olha o último evento de todos os
+    tempos: para responder "como estava em 31/07" não se pode usar informação
+    que só chegou em agosto.
+    """
+    minimo = datetime.min.replace(tzinfo=timezone.utc)
+    ultimo: Dict[str, tuple] = {}
+    for ev in events:
+        quando = _utc(ev.received_at)
+        if quando is None or quando > momento:
+            continue
+        chave = _subscriber_key(ev)
+        atual = ultimo.get(chave)
+        if atual is None or quando >= (atual[0] or minimo):
+            ultimo[chave] = (quando, ev)
+    return {k: v[1] for k, v in ultimo.items()}
+
+
+def assinaturas_atrasadas_em(
+    momento: datetime,
+    events: List[SubscriptionEvent],
+    cancelamentos: Dict[str, List[datetime]],
+) -> set:
+    """Assinaturas em atraso em `momento`: vigência vencida, mas ainda NÃO canceladas.
+
+    Não entram no MRR (não há pagamento cobrindo o período), mas fazem parte da
+    base do churn: a assinatura existe e ainda pode renovar ou cancelar — e, no
+    caso real da Rodada 8, duas delas cancelaram dias depois do corte e apareciam
+    no numerador do churn sem estar no denominador, o que é aritmeticamente
+    inválido.
+    """
+    atrasadas = set()
+    for chave, ev in ultimo_evento_ate(momento, events).items():
+        if not _is_late(ev):
+            continue
+        if any(c <= momento for c in cancelamentos.get(chave, [])):
+            continue
+        atrasadas.add(chave)
+    return atrasadas
+
+
 def _client_display_status(ev: SubscriptionEvent, is_active: bool) -> str:
     """Status de exibição na lista/ficha — late ≠ churn; late com acesso pode ser ativo no count."""
     etype = (ev.event_type or "").lower()
     sub_st = (ev.subscription_status or "").lower()
-    is_late = etype == "subscription_late" or sub_st == "waiting_payment"
+    is_late = _is_late(ev)
     is_canceled = etype == "subscription_canceled" or sub_st in ("canceled", "cancelled")
 
     if is_canceled and is_active:
@@ -427,20 +577,7 @@ class AdminMetricsService:
             cancelamentos = cancel_instants(self._all_events())
         # Mesmo cuidado de mrr_cents: precisão cheia por assinante, arredonda só no total.
         net_frac = gross_frac = 0.0
-        for chave, lista in periodos.items():
-            # o período mais recente que cobre o instante (renovação sobrepõe a anterior)
-            cobrindo = None
-            for p in lista:
-                if p["inicio"] <= momento < p["fim"]:
-                    if cobrindo is None or p["inicio"] > cobrindo["inicio"]:
-                        cobrindo = p
-            if not cobrindo:
-                continue
-            cancelada = any(
-                cobrindo["inicio"] <= c <= momento for c in cancelamentos.get(chave, [])
-            )
-            if cancelada:
-                continue
+        for cobrindo in assinaturas_pagas_em(momento, periodos, cancelamentos).values():
             net_frac += cobrindo["net_cents"] / cobrindo["divisor"]
             gross_frac += cobrindo["gross_cents"] / cobrindo["divisor"]
         return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
@@ -509,11 +646,44 @@ class AdminMetricsService:
 
     def churn_for_month(self, year: int, month: int) -> Dict[str, Any]:
         start, end = _month_bounds(year, month)
-        # renovando no início do mês — cancelado-com-acesso segue "ativo" pro
-        # produto (aba Uso), mas não é mais receita recorrente esperada, então
-        # não conta no denominador do churn.
-        start_actives = self.renewing_subscribers(as_of=(start - timedelta(seconds=1)).date())
-        start_count = max(len(start_actives), 1)
+        # Denominador = RETRATO do instante anterior ao início do mês (31/07
+        # 23:59:59 BRT, para o churn de agosto), reconstruído das cobranças.
+        #
+        # Rodada 8, item 1: antes isto usava `renewing_subscribers(as_of=...)`,
+        # que monta o estado a partir do ÚLTIMO evento de cada assinante — todos
+        # eles, inclusive os recebidos DEPOIS do corte. Duas distorções opostas:
+        # quem assinou em agosto entrava no denominador de agosto (tinha
+        # `access_until` no futuro) e quem cancelou em agosto saía dele — quando
+        # é exatamente esse quem o churn quer medir. Dava 6/41 num mês em que a
+        # base real de 31/07 tinha 20 assinaturas.
+        instante = start - timedelta(seconds=1)
+        eventos = self._all_events()
+        periodos = build_coverage_periods(eventos)
+        cancelamentos = cancel_instants(eventos)
+        chaves_base = set(assinaturas_pagas_em(instante, periodos, cancelamentos))
+        # Atrasadas contam: a assinatura existe e ainda não foi cancelada. Sem
+        # elas, quem estava em atraso no corte e cancelou no meio do mês cai no
+        # numerador sem estar no denominador — churn com base inválida.
+        chaves_base |= assinaturas_atrasadas_em(instante, eventos, cancelamentos)
+        # Quem JÁ estava cancelado no corte sai da base, mesmo que
+        # `cancel_instants()` não tenha registrado o cancelamento — ele ignora
+        # `is_plan_change=True`, e a Kiwify marca esse flag em cancelamento que
+        # não é troca de plano nenhuma (caso real: pagou 22:05 e cancelou 22:07
+        # do dia 31/07, mesmo plano dos dois lados, tudo marcado como troca).
+        # Sem isto, essa pessoa fica viva no retrato para sempre. É o mesmo
+        # problema que já tinha derrubado a contagem de `new_subscriptions()`.
+        cancelada_no_corte = {
+            chave for chave, ev in ultimo_evento_ate(instante, eventos).items()
+            if _is_canceled(ev)
+        }
+        chaves_base -= cancelada_no_corte
+        # Contamos PESSOAS, não chaves de assinatura: o mesmo cliente pode ter
+        # duas chaves (import sem `subscription_id` + webhook com ele, ou
+        # upgrade). Sem isto, a base e o numerador falam de "assinantes"
+        # diferentes para a mesma pessoa e a divisão perde o sentido.
+        pessoa = _pessoa_por_chave(eventos)
+        base = {pessoa.get(k, k) for k in chaves_base}
+        start_count = max(len(base), 1)
         cancels = (
             self.db.query(SubscriptionEvent)
             .filter(
@@ -529,10 +699,11 @@ class AdminMetricsService:
             c for c in cancels
             if (c.cancel_reason or "").strip().lower() not in PRODUTOR_ADJUSTMENT_REASONS
         ]
-        # unique by subscriber
-        keys = {_subscriber_key(c) for c in cancels}
+        # uma saída por PESSOA (mesma régua do denominador)
+        keys = {pessoa.get(_subscriber_key(c), _identidade_da_pessoa(c) or _subscriber_key(c))
+                for c in cancels}
         n = len(keys)
-        return {"count": n, "rate": round(n / start_count, 4), "start_actives": len(start_actives)}
+        return {"count": n, "rate": round(n / start_count, 4), "start_actives": len(base)}
 
     def _agora(self) -> datetime:
         """Ponto de corte do mês corrente — sobrescrito nos testes."""
@@ -771,7 +942,6 @@ class AdminMetricsService:
         # mais correto — recalcular é o comportamento desejado aqui.
         periodos = build_coverage_periods(all_events)
         cancelamentos = cancel_instants(all_events)
-        agora = datetime.now(timezone.utc)
         primeira_cobranca = min(
             (p["inicio"] for lista in periodos.values() for p in lista), default=None
         )
@@ -781,12 +951,23 @@ class AdminMetricsService:
         mrr_series: List[Dict[str, Any]] = []
         y, m = mrr_y, mrr_m
         while (y, m) <= (today.year, today.month):
-            # mês fechado: último instante do mês. mês corrente: retrato de agora.
             fim_do_mes = datetime(
                 y, m, monthrange(y, m)[1], 23, 59, 59, tzinfo=timezone.utc
             )
-            momento = agora if (y, m) == (today.year, today.month) else fim_do_mes
-            mrr = self.mrr_at(momento, periodos, cancelamentos)
+            if (y, m) == (today.year, today.month):
+                # Rodada 8, item 4: enquanto o mês não fecha, o ponto é o MESMO
+                # número do card de MRR — não um segundo MRR calculado por outro
+                # método. `mrr_at` mede vigência paga cobrindo o instante e tira o
+                # bruto da cobrança real; o card usa a base "renovando" e o preço de
+                # tabela. Dois métodos na mesma tela viravam dois valores e ninguém
+                # sabia qual era o certo.
+                # Quando o mês virar, este ponto passa a ser calculado por
+                # `mrr_at(fim_do_mes)` — o valor MUDA no dia da virada, e isso é
+                # intencional: aí a pergunta deixa de ser "quanto é hoje" e passa a
+                # ser "quanto estava valendo no fim do mês".
+                mrr = self.mrr_cents()
+            else:
+                mrr = self.mrr_at(fim_do_mes, periodos, cancelamentos)
             mrr_series.append({
                 "month": f"{y:04d}-{m:02d}",
                 "net": mrr["net"],
