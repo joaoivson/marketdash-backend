@@ -39,7 +39,6 @@ AUTOMACAO_RASCUNHO = "rascunho"
 
 ESCOPO_POST_ESPECIFICO = "post_especifico"
 ESCOPO_QUALQUER = "qualquer"
-ESCOPO_PROXIMO = "proximo"
 
 TRIGGER_PALAVRAS = "palavras"
 TRIGGER_QUALQUER = "qualquer"
@@ -148,9 +147,11 @@ class InstagramAutomation(Base):
     def cobre_media(self, media_id: str) -> bool:
         """A automação vale para este post?
 
-        `qualquer` cobre tudo. `proximo` só cobre depois de amarrado a um post
-        concreto — enquanto `media_id` for NULL ele ainda está esperando a
-        próxima publicação e não deve responder a post nenhum.
+        `qualquer` cobre tudo; `post_especifico` só o post escolhido. O escopo
+        `proximo` ("próxima publicação") foi removido na Rodada 1 de ajustes —
+        a amarração era preguiçosa (acontecia no primeiro comentário de um post
+        novo), então a aluna não sabia em qual post a automação ia grudar até
+        acontecer, e ficava esperando indefinidamente se ninguém comentasse.
         """
         if self.escopo == ESCOPO_QUALQUER:
             return True

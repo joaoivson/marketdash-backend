@@ -179,8 +179,7 @@ class InstagramAutomationService:
     def _aplicar(self, automacao: InstagramAutomation, dados) -> None:
         automacao.nome = dados.nome.strip()
         automacao.escopo = dados.escopo
-        # 'qualquer' não aponta pra post nenhum; 'proximo' fica sem post até a
-        # próxima publicação ser capturada. Guardar um media_id nesses casos faria
+        # 'qualquer' não aponta pra post nenhum — guardar um media_id aqui faria
         # `cobre_media` responder pelo post errado.
         automacao.media_id = dados.media_id if dados.escopo == ESCOPO_POST_ESPECIFICO else None
         automacao.media_thumbnail_url = (

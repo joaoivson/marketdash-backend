@@ -211,27 +211,32 @@ permite fazer sem chutar.
 Nota de escopo: contas **Business** não conseguem ficar privadas no Instagram; o
 cenário atinge sobretudo contas **Criador de Conteúdo**.
 
-### ⚠️ O webhook `comments` NÃO dispara antes do App Review
+### O webhook `comments` DISPARA antes do App Review (corrigido em 20/08)
 
-Este é o ponto que muda o cronograma. A doc de webhooks do Instagram diz, com
-todas as letras:
+A doc da Meta diz que `comments` exige **Advanced Access** e app em **Live**
+para entregar notificação. Planejamos o cronograma em cima disso — e **na
+prática não foi o que aconteceu**.
 
-- *"Advanced Access is required to receive `comments` and `live_comments` webhook
-  notifications"*
-- *"Your app must be set to Live in the App Dashboard for Meta to send webhook
-  notifications"*
+Validado em homologação em 20/08 com a conta `@promosdabeatrizz_`: comentário
+real de outra conta, com o app ainda em Standard Access. Resultado: resposta
+pública embaixo do comentário e direct entregue, **em menos de 10 segundos**.
 
-Ou seja: **comentar de verdade no post não chama o nosso webhook enquanto o review
-não sair.** A premissa do §10 do spec ("os passos 1–4 podem ser testados
-inteiramente em Standard Access") vale para tudo, *menos* para a entrega da
-notificação. Confirme no painel antes de fechar o cronograma — mas planeje para o
-caso pior.
+O que provavelmente explica: a conta está adicionada como **testadora** no
+painel e o app está **Live**. Ou seja, para *homologar* não dependemos do
+review.
 
-**Como testar mesmo assim, sem esperar o review:** existe
-`scripts/simular_comentario_instagram.py`, que monta o payload no formato real,
-assina com o `INSTAGRAM_APP_SECRET` (a mesma assinatura da Meta) e faz o POST no
-webhook. Dali em diante **tudo é real**: matching, dedupe, janela, throttle e o
-envio do direct pela API. O único passo simulado é a entrega da notificação.
+Consequências práticas:
+
+1. O roteiro de validação roda inteiro com comentário real.
+2. O **screencast do App Review deixa de ser ovo-e-galinha** — dá para gravar
+   conectar → criar automação → comentar → direct chegando. Não precisa abrir
+   suporte antes de submeter.
+3. **Falta confirmar** se vale para conta que NÃO está no painel. Se só
+   funcionar para testadoras, o Advanced Access continua sendo pré-requisito
+   para as alunas — mas não para nós.
+
+`scripts/simular_comentario_instagram.py` continua útil para o que o comentário
+real não cobre: volume (100 comentários), janela de 7 dias e caminhos de erro.
 
 ```bash
 export INSTAGRAM_APP_SECRET=<o mesmo do backend>
@@ -240,10 +245,6 @@ python scripts/simular_comentario_instagram.py \
   --ig-user-id <ig_user_id da conta conectada> \
   --media-id <id do post> --texto "quero"
 ```
-
-Isso também resolve o screencast do App Review pela metade: o direct que chega no
-vídeo é real. Se a Meta exigir o comentário real na gravação, aí é
-ovo-e-galinha — vale abrir suporte antes de submeter.
 
 ### App Review
 

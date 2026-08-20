@@ -9,6 +9,9 @@
 
 | Data | Decisão | Por quê |
 |---|---|---|
+| 2026-08-20 | **Escopo `proximo` ("próxima publicação") removido** da UI e do backend | A amarração era preguiçosa — acontecia no primeiro comentário de um post novo. Com dois posts publicados, grudava em qualquer um dos dois e a aluna só descobria depois; sem comentário, esperava indefinidamente. `qualquer` resolve o caso sem ambiguidade |
+| 2026-08-20 | **Advanced Access NÃO é pré-requisito para homologar** — o webhook `comments` entrega com o app em Standard | Validado com comentário real em 20/08 (direct em <10s). Provável causa: a conta está como testadora no painel e o app está Live. Pendente: confirmar se vale para conta fora do painel |
+| 2026-08-20 | **Trava de `webhook_subscrito` repara antes de recusar** — mexer no banco não a exercita | `_exigir_webhook_ativo` chama `garantir_webhook()`, que re-inscreve a conta na hora. Para testar a recusa é preciso que a re-inscrição falhe de verdade (perfil privado, "Permitir acesso às mensagens" desligado) |
 | 2026-08-20 | **Métrica de assinante conta PESSOA, não `subscriber_key`.** O mesmo cliente tem mais de uma chave em dois casos: upgrade (duas `sub:`) e import histórico sem `subscription_id` + webhook com ele (`cpf:` + `sub:`) | No 2º caso o cancelamento **não alcança** a linha do import, que congela em "ativo" — uma cancelada seguiu somando R$49/mês no MRR. `_latest_by_subscriber()` consolida import × webhook; upgrade continua com duas chaves (são duas assinaturas de verdade) |
 | 2026-08-20 | **Retrato histórico não pode usar evento que chegou depois do instante.** Base do churn = `assinaturas_pagas_em()` + atrasadas − canceladas no corte, tudo reconstruído das cobranças | `renewing_subscribers(as_of=...)` olhava o último evento de TODOS os tempos e só comparava `access_until >= as_of`: quem assinou em agosto entrava na base de julho e quem cancelou em agosto saía dela. Dava 6/41 onde o correto era 6/20 |
 | 2026-08-20 | **`is_plan_change` da Kiwify não é confiável como sinal de upgrade** — o churn confere o estado real no corte (`ultimo_evento_ate()`) em vez de só respeitar o flag | Caso real 31/07: pagou 22:05, cancelou 22:07, MESMO plano dos dois lados, os 4 eventos marcados `is_plan_change=True`. Como `cancel_instants()` ignora troca de plano, a pessoa ficava viva no retrato para sempre. Mesmo defeito que já tinha derrubado `new_subscriptions()` (commit adff2dd) |
@@ -49,6 +52,7 @@
 
 | Item | Onde | Impacto | Plano |
 |---|---|---|---|
+| **Subcode 2534014 tem dois significados** | `instagram_login_client.py` | A Meta usa o mesmo subcode para "já respondido" e para "comentário inexistente". Tratamos como "já respondido" — o comportamento (permanente, não retentar) está certo nos dois casos, mas a mensagem engana quem investiga log | Diferenciar pela mensagem da Meta, ou tornar o texto genérico |
 | **Sem Alembic** | `migrations/` | Migration é SQL solto aplicado à mão; ordem e idempotência são responsabilidade de quem roda | Conviver com disciplina, ou adotar Alembic com baseline |
 | **`cost` / `profit` mortos em `dataset_rows_v2`** | modelo + tabela | As colunas existem e não são a fonte de nada — o KPI que a usuária vê é calculado **no frontend** a partir de `raw_data`. Confiar nelas dá número errado | Não usar; remover só com migração consciente |
 | **CI deployava só a API** | pipeline | O worker Celery ficou semanas com código velho porque um `\|\| echo` mascarava a falha do deploy | **Resolvido em 03/08** — manter o olho quando mexer no CI |

@@ -32,7 +32,6 @@ from app.models.instagram_automation import (
     DM_IGNORADO,
     DM_PROCESSANDO,
     DM_SEM_MATCH,
-    ESCOPO_PROXIMO,
     TRIGGER_QUALQUER,
     InstagramAutomation,
     InstagramConnection,
@@ -169,7 +168,6 @@ class InstagramCommentPipeline:
 
         # 3) Automações ativas que cobrem o post
         ativas = self.repo.active_automations_for_connection(conexao.id)
-        await self._amarrar_proxima_publicacao(conexao, ativas, media_id)
         candidatas = [a for a in ativas if a.cobre_media(media_id)]
         if not candidatas:
             return {"status": "ignorado", "motivo": "nenhuma automação cobre este post"}
@@ -216,59 +214,6 @@ class InstagramCommentPipeline:
             return {"status": "duplicado", "motivo": "corrida no comment_id"}
 
         return await self._enviar(conexao, automacao, evento, comment_id)
-
-    async def _amarrar_proxima_publicacao(
-        self, conexao: InstagramConnection, ativas: list, media_id: Optional[str]
-    ) -> None:
-        """Prende as automações de escopo `proximo` ao primeiro post NOVO.
-
-        Não existe webhook de "publiquei um post", então a amarração é preguiçosa:
-        acontece no primeiro comentário de um post ainda não amarrado. Por isso a
-        checagem de data é obrigatória — sem ela, um comentário atrasado num post
-        ANTIGO amarraria a automação ao post errado, e a aluna veria a automação
-        presa a algo que ela publicou semana passada.
-
-        Só uma chamada extra à Meta, e apenas quando há automação esperando.
-        """
-        if not media_id:
-            return
-        pendentes = [a for a in ativas if a.escopo == ESCOPO_PROXIMO and not a.media_id]
-        if not pendentes:
-            return
-
-        try:
-            media = await ig.get_media(self.conexao_service.token_de(conexao), media_id)
-        except ig.InstagramApiError as exc:
-            logger.warning(
-                "Instagram: não deu pra ler o post %s para amarrar 'próxima publicação': %s",
-                media_id, exc.mensagem,
-            )
-            return
-
-        publicado_em = parse_comment_timestamp(media.get("timestamp"))
-        amarradas = 0
-        for automacao in pendentes:
-            criada_em = automacao.created_at
-            if criada_em is not None and criada_em.tzinfo is None:
-                criada_em = criada_em.replace(tzinfo=timezone.utc)
-            # Sem data do post não dá pra afirmar que é posterior — melhor deixar
-            # a automação esperando do que amarrar no post errado.
-            if publicado_em is None:
-                continue
-            if criada_em is not None and publicado_em < criada_em:
-                continue
-            automacao.media_id = str(media.get("id") or "") or None
-            automacao.media_thumbnail_url = media.get("thumbnail_url") or media.get("media_url")
-            legenda = " ".join((media.get("caption") or "").split())
-            automacao.media_caption_preview = legenda[:140] or None
-            automacao.media_permalink = media.get("permalink")
-            amarradas += 1
-        if amarradas:
-            self.db.commit()
-            logger.info(
-                "Instagram: %d automação(ões) 'próxima publicação' amarradas ao post %s",
-                amarradas, media_id,
-            )
 
     async def _enviar(
         self,
