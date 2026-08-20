@@ -231,9 +231,24 @@ Consequências práticas:
 2. O **screencast do App Review deixa de ser ovo-e-galinha** — dá para gravar
    conectar → criar automação → comentar → direct chegando. Não precisa abrir
    suporte antes de submeter.
-3. **Falta confirmar** se vale para conta que NÃO está no painel. Se só
-   funcionar para testadoras, o Advanced Access continua sendo pré-requisito
-   para as alunas — mas não para nós.
+3. **Confirmado em 20/08: vale só para quem tem papel no app.** A doc de
+   Access Levels é explícita — Standard Access "is intended for apps that will
+   only be used by people who have roles on them", e *"unapproved permissions
+   can only be requested from app users who have a role on the requesting
+   app"*. Papel = admin, developer ou **tester**, que é o caso da
+   `@promosdabeatrizz_`.
+
+   Ou seja: **o App Review continua bloqueante para as alunas.** Uma conta sem
+   papel no app não consegue nem conceder as permissões no diálogo — não
+   conecta, e portanto não recebe webhook. O que mudou é só o nosso caminho de
+   validação: homologamos e gravamos o screencast sem esperar o review.
+
+   Advanced Access exige App Review **e** Business Verification. Planeje o
+   lançamento por essa data, não pela data em que a automação "funcionou em
+   homologação".
+
+   Fontes: [Access Levels](https://developers.facebook.com/docs/graph-api/overview/access-levels/) ·
+   [App Roles](https://developers.facebook.com/docs/development/build-and-test/app-roles/)
 
 `scripts/simular_comentario_instagram.py` continua útil para o que o comentário
 real não cobre: volume (100 comentários), janela de 7 dias e caminhos de erro.
