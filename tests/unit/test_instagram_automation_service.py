@@ -74,6 +74,7 @@ def _payload(**kwargs) -> InstagramAutomationCreate:
 
 
 class TestNormalizacaoNaGravacao:
+    @pytest.mark.asyncio
     async def test_palavras_ficam_normalizadas_e_o_original_e_preservado(self, svc, db):
         criada = await svc.criar(1, _payload(palavras=["QUERO", "Quéro!!"]))
         # A tela mostra o que a aluna digitou...
@@ -82,6 +83,7 @@ class TestNormalizacaoNaGravacao:
         linha = db.query(InstagramAutomation).one()
         assert linha.palavras == ["quero"]
 
+    @pytest.mark.asyncio
     async def test_escopo_qualquer_nao_guarda_media_id(self, svc, db):
         """Guardar o post aqui faria `cobre_media` responder pelo post errado."""
         await svc.criar(1, _payload(escopo=ESCOPO_QUALQUER, media_id="1800"))
@@ -89,30 +91,36 @@ class TestNormalizacaoNaGravacao:
 
 
 class TestValidacaoParaPublicar:
+    @pytest.mark.asyncio
     async def test_rascunho_pode_ficar_incompleto(self, svc):
         criada = await svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO, palavras=[], dm_texto=""))
         assert criada.status == AUTOMACAO_RASCUNHO
 
+    @pytest.mark.asyncio
     async def test_ativa_sem_palavra_chave_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
             await svc.criar(1, _payload(palavras=[]))
         assert exc.value.status_code == 422
 
+    @pytest.mark.asyncio
     async def test_ativa_sem_texto_de_dm_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
             await svc.criar(1, _payload(dm_texto="   "))
         assert exc.value.status_code == 422
 
+    @pytest.mark.asyncio
     async def test_ativa_sem_post_escolhido_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
             await svc.criar(1, _payload(media_id=None))
         assert exc.value.status_code == 422
 
+    @pytest.mark.asyncio
     async def test_resposta_publica_ligada_e_vazia_e_recusada(self, svc):
         with pytest.raises(HTTPException) as exc:
             await svc.criar(1, _payload(resposta_publica_variacoes=[]))
         assert exc.value.status_code == 422
 
+    @pytest.mark.asyncio
     async def test_mais_de_cinco_variacoes_e_recusado_no_schema(self):
         from pydantic import ValidationError
 
@@ -121,6 +129,7 @@ class TestValidacaoParaPublicar:
 
 
 class TestDuplicar:
+    @pytest.mark.asyncio
     async def test_copia_nasce_pausada(self, svc):
         """Duas automações idênticas ativas no mesmo post brigariam pelo comentário."""
         original = await svc.criar(1, _payload())
@@ -131,6 +140,7 @@ class TestDuplicar:
 
 
 class TestToggle:
+    @pytest.mark.asyncio
     async def test_ativar_automacao_incompleta_e_recusado(self, svc):
         rascunho = await svc.criar(1, _payload(status=AUTOMACAO_RASCUNHO, dm_texto=""))
         with pytest.raises(HTTPException) as exc:
@@ -138,6 +148,7 @@ class TestToggle:
         assert exc.value.status_code == 422
         assert "mensagem do direct" in str(exc.value.detail)
 
+    @pytest.mark.asyncio
     async def test_pausar_sempre_funciona(self, svc):
         ativa = await svc.criar(1, _payload())
         assert (await svc.alterar_status(1, ativa.id, "pausada")).status == "pausada"
