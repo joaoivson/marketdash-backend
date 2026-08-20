@@ -301,6 +301,9 @@ def test_mrr_series_includes_current_month_when_first_event_is_now(monkeypatch):
     monkeypatch.setattr(
         svc, "mrr_at", lambda momento, periodos=None, cancelamentos=None: {"net": 50, "gross": 55}
     )
+    # Rodada 8 item 4: o MÊS CORRENTE (o único ponto deste teste) passou a sair
+    # de mrr_cents(), pra bater com o card. Meses fechados seguem em mrr_at.
+    monkeypatch.setattr(svc, "mrr_cents", lambda actives=None: {"net": 50, "gross": 55})
     monkeypatch.setattr(svc, "new_vs_canceled_series", lambda: [])
 
     series = svc.series_12m()

@@ -74,6 +74,12 @@ PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {
     ("pro", "mensal"): 6700,
     ("pro", "trimestral"): 14700,
     ("pro", "anual"): 44700,
+    # MAX faltava aqui e caía no preço do Pro (o `max → pro` de
+    # list_price_cents), tirando R$30/mês do bruto por assinante Max.
+    # Mesmos valores de CHECKOUT_LINKS — os dois nascem da mesma tabela.
+    ("max", "mensal"): 9700,
+    ("max", "trimestral"): 20700,
+    ("max", "anual"): 62700,
 }
 
 
@@ -88,11 +94,13 @@ def _norm_freq(frequency: Optional[str]) -> str:
 
 def list_price_cents(plan: str, frequency: str) -> Optional[int]:
     p = (plan or "").strip().lower()
-    if p not in ("essencial", "pro"):
-        if p == "max":
-            p = "pro"
-        else:
-            p = "essencial" if "essenc" in p else ("pro" if "pro" in p else p)
+    if p not in ("essencial", "pro", "max"):
+        p = (
+            "essencial" if "essenc" in p
+            else "max" if "max" in p
+            else "pro" if "pro" in p
+            else p
+        )
     return PLAN_LIST_PRICE_CENTS.get((p, _norm_freq(frequency)))
 
 
