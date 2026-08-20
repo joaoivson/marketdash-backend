@@ -453,6 +453,30 @@ que essa URL mostre o status do pedido em linguagem legível).
 - [ ] `git push origin develop` no frontend (o workflow roda lint + tsc + build)
 - [ ] Conferir `/docs` listando as rotas `/api/v1/instagram/*`
 
+### 8.2.1 Pré-requisito que trava o roteiro inteiro: conta MAX em HML
+
+A tela é exclusiva do MAX, e **homologação não nasce com nenhuma assinatura
+MAX** — só Pro e Essencial, herdadas do import. Sem isso, `/dashboard/automacoes`
+redireciona para `/dashboard/planos` e `GET /api/v1/instagram/automations`
+responde `403 PLANO_INSUFICIENTE`: o roteiro não sai do item 1.
+
+Como resolver (feito em 20/08 para a conta do Luiz, `user_id=9`):
+
+```sql
+-- em HOMOLOGAÇÃO
+UPDATE subscriptions SET plan = 'max' WHERE id = <id da assinatura>;
+-- reverter:  UPDATE subscriptions SET plan = 'pro' WHERE id = <id>;
+```
+
+O plano vem da tabela `subscriptions` (campo `plan`), **não** de
+`subscription_events` — é `get_user_plan_context()` quem resolve, via
+`SubscriptionRepository.get_by_user_id()`.
+
+Ao conferir na tela, espere o `planStore` carregar antes de julgar: nos
+primeiros segundos o item ainda aparece com cadeado e `/dashboard/automacoes`
+redireciona, porque o store começa em `essencial` e só depois recebe o contexto.
+Medir cedo demais faz parecer que o gating está errado quando não está.
+
 ### 8.3 Roteiro de validação
 
 **Conexão**
