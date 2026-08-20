@@ -112,7 +112,7 @@ class Settings(BaseSettings):
     # openssl rand -hex 32 e cadastrar igual no painel de Webhooks da Meta.
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: Optional[str] = None
     # Versão da Instagram Graph API (host graph.instagram.com).
-    INSTAGRAM_API_VERSION: str = "v23.0"
+    INSTAGRAM_API_VERSION: str = "v25.0"
 
     # Travas anti-bloqueio do envio. O teto da Meta é 750 private replies/hora
     # por conta profissional; 600 deixa margem para o que já foi gasto fora do

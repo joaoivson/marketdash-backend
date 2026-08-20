@@ -277,7 +277,7 @@ INSTAGRAM_APP_ID=xxxxxxxxxxxxxxxx
 INSTAGRAM_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 INSTAGRAM_OAUTH_REDIRECT_URI=https://hml.marketdash.com.br/dashboard/automacoes/callback
 INSTAGRAM_WEBHOOK_VERIFY_TOKEN=<openssl rand -hex 32>
-INSTAGRAM_API_VERSION=v23.0
+INSTAGRAM_API_VERSION=v25.0
 
 # Travas de envio (padrões já aplicados; só mexer com motivo)
 INSTAGRAM_MAX_PRIVATE_REPLIES_HORA=600   # teto da Meta é 750
@@ -478,7 +478,7 @@ que essa URL mostre o status do pedido em linguagem legível).
         `webhook_erro`, corrija (perfil privado? "Permitir acesso às mensagens"
         desligado?) e use o botão **Tentar de novo**.
         Conferência direta na Meta, se quiser:
-        `curl "https://graph.instagram.com/v23.0/<IG_ID>/subscribed_apps?access_token=<token>"`
+        `curl "https://graph.instagram.com/v25.0/<IG_ID>/subscribed_apps?access_token=<token>"`
         (este GET não é documentado neste caminho — se a Meta recusar, não é sinal
         de problema; vale o `webhook_subscrito` do banco).
 

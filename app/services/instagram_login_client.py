@@ -87,7 +87,7 @@ class InstagramApiError(Exception):
 
 
 def _api_version() -> str:
-    return settings.INSTAGRAM_API_VERSION or "v23.0"
+    return settings.INSTAGRAM_API_VERSION or "v25.0"
 
 
 def _graph_url(path: str) -> str:
