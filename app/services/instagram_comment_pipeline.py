@@ -17,6 +17,8 @@ direct" não sai — seria mentira visível para todo mundo no post.
 
 import asyncio
 import logging
+
+from app.core.feature_flags import dm_com_botao
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -226,8 +228,17 @@ class InstagramCommentPipeline:
 
         await self._espacar_envio()
         try:
+            # Com o formato em `texto` (interruptor de emergência), o link volta
+            # para dentro da mensagem e o botão não é enviado — ver
+            # feature_flags.instagram_dm_formato().
+            com_botao = dm_com_botao()
             resposta = await ig.send_private_reply(
-                token, conexao.ig_user_id, comment_id, automacao.dm_texto
+                token,
+                conexao.ig_user_id,
+                comment_id,
+                automacao.dm_texto,
+                link=automacao.dm_link,
+                botao_texto=automacao.dm_botao_texto if com_botao else None,
             )
         except ig.InstagramApiError as exc:
             evento.dm_status = DM_FALHOU

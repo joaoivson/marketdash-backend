@@ -132,6 +132,11 @@ class InstagramAutomation(Base):
     resposta_publica_indice = Column(Integer, nullable=False, default=0)
 
     dm_texto = Column(Text, nullable=False, default="")
+    # Rodada 2: o link saiu de dentro da mensagem e virou botão (template
+    # `button` da Meta). Ambos NULL = automação antiga, que segue no formato
+    # texto puro — o fallback continua no código.
+    dm_link = Column(Text, nullable=True)
+    dm_botao_texto = Column(String(20), nullable=True)
 
     status = Column(String(16), nullable=False, default=AUTOMACAO_RASCUNHO)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

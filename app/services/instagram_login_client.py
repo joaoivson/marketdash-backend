@@ -365,8 +365,44 @@ async def get_account_subscriptions(access_token: str, ig_user_id: str) -> Optio
     return corpo.get("data")
 
 
+def montar_mensagem_dm(
+    texto: str, link: Optional[str] = None, botao_texto: Optional[str] = None
+) -> dict[str, Any]:
+    """Monta o `message` do direct: template com botão, ou texto puro.
+
+    Com link E texto de botão, vai como template `button` da Meta — texto em
+    cima, um `web_url` embaixo. Link colado no meio da mensagem parece spam;
+    botão parece mensagem de marca.
+
+    Sem os dois, cai no formato antigo (texto puro). Esse caminho é o
+    **fallback**: se a Meta recusar o template em produção, é só o envio parar
+    de mandar link/botão que tudo volta a funcionar, sem mexer no resto.
+    """
+    if link and botao_texto:
+        return {
+            "attachment": {
+                "type": "template",
+                "payload": {
+                    "template_type": "button",
+                    "text": texto,
+                    "buttons": [
+                        {"type": "web_url", "url": link, "title": botao_texto[:20]}
+                    ],
+                },
+            }
+        }
+    # Formato antigo: link (quando existe) colado no fim do texto.
+    corpo = f"{texto}\n\n{link}" if link else texto
+    return {"text": corpo}
+
+
 async def send_private_reply(
-    access_token: str, ig_user_id: str, comment_id: str, texto: str
+    access_token: str,
+    ig_user_id: str,
+    comment_id: str,
+    texto: str,
+    link: Optional[str] = None,
+    botao_texto: Optional[str] = None,
 ) -> dict[str, Any]:
     """Private reply: a mensagem no direct disparada por um comentário.
 
@@ -381,7 +417,7 @@ async def send_private_reply(
         _graph_url(f"{ig_user_id}/messages"),
         json_body={
             "recipient": {"comment_id": str(comment_id)},
-            "message": {"text": texto},
+            "message": montar_mensagem_dm(texto, link, botao_texto),
         },
         headers={"Authorization": f"Bearer {access_token}"},
     )

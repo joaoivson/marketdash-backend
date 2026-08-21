@@ -106,6 +106,8 @@ class InstagramAutomationBase(BaseModel):
     resposta_publica_variacoes: List[str] = []
 
     dm_texto: str = ""
+    dm_link: Optional[str] = None
+    dm_botao_texto: Optional[str] = Field(default=None, max_length=20)
 
     status: str = AUTOMACAO_RASCUNHO
 
@@ -142,6 +144,23 @@ class InstagramAutomationBase(BaseModel):
     @classmethod
     def _palavras_limpas(cls, v: List[str]) -> List[str]:
         return [t.strip() for t in (v or []) if t and t.strip()]
+
+    @field_validator("dm_link")
+    @classmethod
+    def _link_http(cls, v: Optional[str]) -> Optional[str]:
+        """Link vazio é NULL; link torto é recusado antes de virar botão morto."""
+        link = (v or "").strip()
+        if not link:
+            return None
+        if not link.startswith(("http://", "https://")):
+            raise ValueError("o link precisa começar com http:// ou https://")
+        return link
+
+    @field_validator("dm_botao_texto")
+    @classmethod
+    def _botao_limpo(cls, v: Optional[str]) -> Optional[str]:
+        texto = (v or "").strip()
+        return texto or None
 
 
 class InstagramAutomationCreate(InstagramAutomationBase):
@@ -180,6 +199,8 @@ class InstagramAutomationResponse(BaseModel):
     resposta_publica_ativa: bool
     resposta_publica_variacoes: List[str] = []
     dm_texto: str
+    dm_link: Optional[str] = None
+    dm_botao_texto: Optional[str] = None
     status: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

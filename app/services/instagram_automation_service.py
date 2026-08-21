@@ -175,8 +175,26 @@ class InstagramAutomationService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Escreva ao menos uma variação de resposta pública, ou desligue a opção.",
             )
+        # Link e botão andam juntos: link sem título vira mensagem sem botão (o
+        # link volta pro corpo, calado), e título sem link vira botão sem destino.
+        link = (getattr(dados, "dm_link", None) or "").strip()
+        botao = (getattr(dados, "dm_botao_texto", None) or "").strip()
+        if link and not botao:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Escreva o texto do botão — é ele que a pessoa vê no direct.",
+            )
+        if botao and not link:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Informe o link para onde o botão vai levar.",
+            )
 
     def _aplicar(self, automacao: InstagramAutomation, dados) -> None:
+        automacao.dm_link = (getattr(dados, "dm_link", None) or "").strip() or None
+        automacao.dm_botao_texto = (
+            (getattr(dados, "dm_botao_texto", None) or "").strip()[:20] or None
+        )
         automacao.nome = dados.nome.strip()
         automacao.escopo = dados.escopo
         # 'qualquer' não aponta pra post nenhum — guardar um media_id aqui faria

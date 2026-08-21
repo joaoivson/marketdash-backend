@@ -102,14 +102,22 @@ class ClienteFalso:
 
     def __init__(self):
         self.dms: list[tuple[str, str]] = []
+        # Rodada 2: guarda link e título do botão para os testes conferirem o
+        # formato enviado, não só o texto.
+        self.dms_completas: list[dict] = []
         self.replies: list[tuple[str, str]] = []
         self.erro_na_dm: Exception | None = None
         self.erro_no_reply: Exception | None = None
 
-    async def send_private_reply(self, token, ig_user_id, comment_id, texto):
+    async def send_private_reply(
+        self, token, ig_user_id, comment_id, texto, link=None, botao_texto=None
+    ):
         if self.erro_na_dm:
             raise self.erro_na_dm
         self.dms.append((comment_id, texto))
+        self.dms_completas.append(
+            {"comment_id": comment_id, "texto": texto, "link": link, "botao_texto": botao_texto}
+        )
         return {"message_id": f"msg-{comment_id}"}
 
     async def reply_to_comment(self, token, comment_id, texto):
