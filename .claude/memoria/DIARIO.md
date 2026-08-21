@@ -80,3 +80,28 @@ Corrigido; o selo agora vale para qualquer status.
 (permanente), mas a Meta usa o MESMO subcode para comentário inexistente. O
 comportamento (não retentar) está certo nos dois casos; a mensagem engana quem
 for investigar.
+
+## 2026-08-21 — Instagram Rodada 2: direct com botão
+
+O direct passou a sair como template `button` da Meta (texto + web_url) em vez
+de link colado no corpo. Campos novos `dm_link` e `dm_botao_texto` (migration
+056, aplicada em hml).
+
+Três caminhos em `montar_mensagem_dm()`: link+título vira template; só link volta
+pro texto com o link no fim; nada vira texto puro. Os dois últimos são o
+fallback que o Luiz pediu guardar — se a Meta recusar o template em produção, o
+produto continua entregando.
+
+Voltar não exige redeploy: `INSTAGRAM_DM_FORMATO=texto` no Coolify + restart.
+A env var é lida ANTES do feature-flags.json de propósito (arquivo versionado
+exigiria rebuild). Valor inválido cai no default, não desliga em silêncio.
+
+UI: Card 4 em três campos, "Inserir link" passou a preencher o campo de link,
+emoji no Card 3 e no Card 4, e o contador de caracteres alinhado com o seletor
+(estava solto em outra linha).
+
+**Estado da conexão mudou de dono:** estava em user 9 (Luiz), agora está em
+user 1 (relacionamento@) — alguém desconectou e reconectou pela outra conta, e
+o `disconnect` apaga conexão + automações junto. A automação atual é a
+"Esfoliante" do user 1. Quem for testar precisa saber em qual conta está a
+conexão.
