@@ -1,7 +1,7 @@
 # Contexto — MarketDash Backend
 
 > **Estado atual do repositório.** Sobrescreva as seções ao mudarem — o
-> histórico vive em `DIARIO.md`. Última atualização: **2026-08-19**.
+> histórico vive em `DIARIO.md`. Última atualização: **2026-08-21**.
 >
 > Esta primeira versão foi montada por inspeção do código, do `CHANGELOG.md`
 > da raiz e do `git log` de `develop`. Onde ela divergir do código, **o código
@@ -69,7 +69,7 @@ priority **0** (interativo) ou **9** (batch). Nunca outro valor.
 |---|---|---|
 | **Shopee Afiliados** | `shopee_graphql_client.py`, `shopee_integration_service.py` | Sync full/incremental, upsert aditivo, painel `/admin/sincronizacoes` |
 | **Facebook / Meta Ads** | `facebook_marketing_client.py`, `facebook_integration_service.py` | Campanhas + espelho de gasto/cliques → `AdSpend` |
-| **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do plano **MAX** |
+| **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
 | **Evolution (WhatsApp)** | `whatsapp_*` (4 services) | Resumo diário; no ar em **hml**, oculto em produção |
@@ -80,6 +80,19 @@ priority **0** (interativo) ou **9** (batch). Nunca outro valor.
 `app/core/plans.py` é a **fonte única** (espelhada em
 `marketdash-frontend/src/shared/lib/plans.ts`). `essencial` / `pro` / `max`;
 limite `-1` significa **ilimitado** (MAX). Adicionar plano = uma entrada ali.
+
+## Interruptores de emergência (env var, sem redeploy)
+
+| Variável | Efeito | Quando usar |
+|---|---|---|
+| `INSTAGRAM_DM_FORMATO=texto` | Direct volta ao formato antigo (link colado no fim da mensagem, sem botão) | Se a Meta recusar o template `button` em produção |
+
+Lida em `app/core/feature_flags.py`, **antes** do `feature-flags.json` — o
+arquivo é versionado e exigiria rebuild de imagem. Valor inválido cai no
+default, não desliga calado.
+
+⚠️ Em operação normal a variável **não deve existir**. Deixá-la em `texto`
+desliga o botão em silêncio e o QA valida o formato errado.
 
 ## Rodar e testar
 
@@ -95,4 +108,9 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 - **Rodada 7 do painel admin** validada só contra **homologação**. Itens 1, 2,
   3 e o achado card×lista precisam de reconfirmação contra **produção** — ver
   a seção de pendências no `CHANGELOG.md` da raiz.
+- **Automação Instagram**: Rodadas 1 e 2 no ar em homologação. Falta o
+  **App Review** — em Standard Access só admin/dev/tester do app completam o
+  OAuth, então aluna comum trava na autorização. O screencast é gravado depois
+  da Rodada 2, para o vídeo bater com a tela final.
+- **Migration 056** aplicada em homologação; **não** em produção (nem 049–055).
 - Branch de trabalho: **`develop`**. Produção sai de `main`.

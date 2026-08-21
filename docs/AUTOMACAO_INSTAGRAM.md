@@ -295,6 +295,15 @@ INSTAGRAM_OAUTH_REDIRECT_URI=https://hml.marketdash.com.br/dashboard/automacoes/
 INSTAGRAM_WEBHOOK_VERIFY_TOKEN=<openssl rand -hex 32>
 INSTAGRAM_API_VERSION=v25.0
 
+# Formato do direct. Default é `botao` (template da Meta com um web_url).
+# `texto` é o INTERRUPTOR DE EMERGÊNCIA: volta ao formato antigo (link colado no
+# fim da mensagem) sem redeploy — basta trocar aqui no Coolify e reiniciar.
+# Lida ANTES do feature-flags.json de propósito: o arquivo é versionado e
+# exigiria rebuild de imagem. Valor inválido cai no default, não desliga calado.
+# ⚠️ Em operação normal esta variável NÃO deve existir. Deixá-la em `texto`
+# desliga o botão silenciosamente e o QA testa o formato errado.
+INSTAGRAM_DM_FORMATO=botao
+
 # Travas de envio (padrões já aplicados; só mexer com motivo)
 INSTAGRAM_MAX_PRIVATE_REPLIES_HORA=600   # teto da Meta é 750
 INSTAGRAM_MAX_ENVIOS_SEGUNDO=5
@@ -315,6 +324,7 @@ CRON_SECRET=<já existente>
 | 053 | `053_cron_instagram_token_refresh.sql` | pg_cron diário 05h15 UTC → renovação de tokens |
 | 054 | `054_instagram_webhook_subscription_state.sql` | Estado da inscrição de webhook por conta (já vem na 052; a 054 é só para quem aplicou a 052 antes desta correção) |
 | 055 | `055_instagram_account_type.sql` | `account_type` na conexão (idem: já vem na 052, a 055 é o catch-up) |
+| 056 | `056_instagram_dm_botao.sql` | `dm_link` e `dm_botao_texto` — o direct passa a sair como template com botão (Rodada 2) |
 
 Todas idempotentes, todas com RLS por `app.current_user_id`.
 
@@ -348,8 +358,9 @@ Todas idempotentes, todas com RLS por `app.current_user_id`.
 
 ### A consequência da mensagem única
 
-O link vai já na primeira (e única) private reply. **Não existe segunda mensagem
-possível** para aquele comentário, a não ser que a pessoa responda
+O link vai já na primeira (e única) private reply — desde a Rodada 2, como
+**botão** (template `button` com um `web_url`), não mais colado no meio do texto.
+**Não existe segunda mensagem possível** para aquele comentário, a não ser que a pessoa responda
 espontaneamente. Isso é escolha de produto: não tente contornar com retry, segunda
 chamada ou mensagem extra — a API rejeita e conta contra a reputação do app.
 
@@ -360,7 +371,7 @@ chamada ou mensagem extra — a API rejeita e conta contra a reputação do app.
 ### Backend
 
 ```
-migrations/052, 053
+migrations/052, 053, 056
 app/models/instagram_automation.py            InstagramConnection, InstagramAutomation, InstagramEvent
 app/schemas/instagram_automation.py
 app/repositories/instagram_automation_repository.py
@@ -373,7 +384,27 @@ app/tasks/instagram_tasks.py                  fila + política de retry
 app/api/webhooks/instagram.py                 handshake, assinatura, deauthorize, data deletion
 app/api/v1/routes/instagram.py                conexão + automações (gate MAX)
 app/core/plans.py                             menu "automacoes" só no MAX + MAX_ONLY_MENUS
+app/core/feature_flags.py                     instagram_dm_formato() — interruptor do botão
 ```
+
+#### O formato do direct (Rodada 2)
+
+`montar_mensagem_dm()` (`instagram_login_client.py`) decide o que vai no
+`message` da private reply:
+
+| Situação | O que sai |
+|---|---|
+| `dm_link` **e** `dm_botao_texto` | `attachment` `template_type=button` com um `web_url` |
+| só `dm_link` | texto puro com o link no fim — não perde o link |
+| nenhum dos dois | texto puro, como era antes da Rodada 2 |
+
+Os dois últimos são o **fallback**: se a Meta recusar o template em produção, o
+produto continua entregando. O interruptor `INSTAGRAM_DM_FORMATO=texto` (§3)
+força esse caminho sem redeploy.
+
+Regra de validação ao publicar: link sem título vira mensagem sem botão (o link
+volta calado para o corpo) e título sem link vira botão sem destino — os dois
+casos são recusados com **422** e mensagem específica.
 
 ### Endpoints
 
@@ -413,9 +444,24 @@ src/features/dashboard/pages/AutomacoesCallback.tsx                 /callback
 src/features/landing/pages/ExclusaoDeDados.tsx                      /exclusao-de-dados (público)
 ```
 
-A conexão fica numa **aba própria em Configurações**, `Integração Instagram`, ao
-lado de `Integração Facebook` — mesmo componente `Tabs` das demais, mesma
-formatação (`<Instagram/> Integração Instagram`). Não é um card solto na página.
+src/components/shared/EmojiPicker.tsx                               seletor de emoji (Cards 3 e 4)
+
+A conexão fica numa **aba própria em Configurações**, ao lado de `Facebook` —
+mesmo componente `Tabs` das demais. Desde a Rodada 1 os rótulos são só o nome do
+serviço (`Shopee`, `Facebook`, `Instagram`): com a palavra "Integração" repetida
+em três abas a régua estourava e virava scroll horizontal.
+
+**Editor (estado depois das Rodadas 1 e 2):**
+
+| Card | Como está |
+|---|---|
+| 1 · Onde | Duas opções (publicação específica / qualquer). Uma **fileira de 4** posts recentes + modal "Escolher outra publicação" com **busca por legenda** — a grade inteira (224 posts na conta de teste) empurrava os cards 2-4 para fora da tela |
+| 2 · Quando | Chips de palavra-chave; texto de ajuda de uma linha |
+| 3 · Resposta pública | **Um campo por variação** (X individual, "+ Adicionar variação" some na 5ª) + seletor de emoji |
+| 4 · Direct | **Três campos**: Mensagem, Link (com "Inserir link", que preenche o campo) e Texto do botão (limite 20). Emoji na mensagem; contador alinhado com o seletor |
+
+O preview do Direct renderiza o botão **sob a mesma condição do backend** (só com
+link E título) — a tela não promete botão que o envio não manda.
 
 Menu **Automação Instagram** entre "Meus Links" e "Indique & Ganhe", badge Novo,
 cadeado + modal de upgrade para Essencial e Pro.
@@ -435,9 +481,12 @@ que essa URL mostre o status do pedido em linguagem legível).
    aparecem sozinhos. Sem os arquivos, a tela mostra só o texto numerado (não
    quebra).
 2. **App Review** ainda não submetido — obrigatório antes de liberar para alunas.
-3. **Amarração de "próxima publicação"** é preguiçosa: acontece no primeiro
-   comentário de um post publicado DEPOIS da criação da automação (não existe
-   webhook de "publiquei"). Se ninguém comentar, a automação segue esperando.
+3. ~~**Amarração de "próxima publicação"**~~ — **resolvida na Rodada 1 removendo
+   a opção.** O escopo `proximo` saiu da UI e do backend. A amarração era
+   preguiçosa (acontecia no primeiro comentário de um post novo, porque não
+   existe webhook de "publiquei"): com dois posts no ar a automação grudava em
+   qualquer um dos dois e a aluna só descobria depois; sem comentário, esperava
+   indefinidamente. "Qualquer publicação" cobre o caso sem ambiguidade.
 4. ~~Decidir um app × dois apps~~ — **decidido**: opção A, um app só, webhook
    apontando para HML e trocando na promoção.
 5. ~~Confirmar o App ID~~ — **resolvido**: `1041324905491556` (app `MarketDash-IG`),
@@ -615,7 +664,8 @@ automação (indica loop).
 1. [ ] **App Review aprovado** para as três permissões (sem isso, só admins e
        testadores do app conseguem conectar)
 2. [ ] Cadastrar as URLs de produção (redirect, deauthorize, data deletion, webhook)
-3. [ ] Aplicar migrations 051 → 052 → 053 no Supabase de produção
+3. [ ] Aplicar migrations 051 → 052 → 053 → **056** no Supabase de produção
+       (054 e 055 só se a 052 tiver sido aplicada antes das correções)
 4. [ ] Definir as `INSTAGRAM_*` no Coolify de produção
 5. [ ] Merge `develop` → `main`: **backend primeiro** (o frontend chama rotas que
        precisam existir), frontend depois
@@ -625,6 +675,8 @@ automação (indica loop).
 
 **Rollback.** Nada é destrutivo. Para desligar sem redeploy:
 `UPDATE instagram_automations SET status = 'pausada' WHERE status = 'ativa';`
+Para voltar o direct ao formato antigo (sem botão), sem mexer em automação
+nenhuma: `INSTAGRAM_DM_FORMATO=texto` no Coolify + restart (§3).
 Para parar a renovação: `SELECT cron.unschedule('instagram-token-refresh-diario');`
 Para cortar na origem: remover a assinatura do campo `comments` no painel da Meta.
 
@@ -636,10 +688,10 @@ Para cortar na origem: remover a assinatura do campo `comments` no painel da Met
 |---|---|---|
 | 1 | Conexão OAuth + tokens + renovação + deauthorization | ✅ |
 | 2 | Webhook + assinatura + persistência de eventos | ✅ |
-| 3 | Matching + dedupe validados contra o §9 | ✅ (68 testes) |
-| 4 | Envio (private reply + resposta pública) + fila + throttle | ✅ |
-| 5 | Telas | ✅ (faltam os 3 prints do checklist) |
-| 6 | Submissão do App Review com screencast | ⬜ pendente |
+| 3 | Matching + dedupe validados contra o §9 | ✅ (91 testes) |
+| 4 | Envio (private reply + resposta pública) + fila + throttle | ✅ — desde a Rodada 2 o direct sai como template com botão, com fallback |
+| 5 | Telas | ✅ Rodadas 1 e 2 aplicadas (faltam os 3 prints do checklist) |
+| 6 | Submissão do App Review com screencast | ⬜ pendente — o screencast é gravado DEPOIS da Rodada 2, para o vídeo bater com a tela final |
 
 > **Ressalva ao §10 do spec.** O spec afirma que os passos 1–4 são testáveis
 > inteiramente em Standard Access. Isso vale para o código todo, mas **não para o
