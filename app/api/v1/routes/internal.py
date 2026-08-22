@@ -144,6 +144,35 @@ async def cron_facebook_sync(
     return {"status": "accepted", "mode": "background-inline"}
 
 
+@router.post("/cron/instagram-token-refresh", status_code=status.HTTP_202_ACCEPTED)
+async def cron_instagram_token_refresh(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """Renova os tokens do Instagram que vencem em menos de 10 dias.
+
+    O token longo do Business Login for Instagram dura 60 dias e só pode ser
+    renovado enquanto ainda está válido — se vencer, a aluna PRECISA refazer o
+    login. Por isso o cron roda todo dia, com folga de 10 dias: mesmo que o
+    backend fique fora do ar alguns dias, ainda sobra janela pra renovar.
+
+    Roda INLINE num BackgroundTask (mesmo desenho do cron do Facebook).
+    """
+    caller_ip = request.client.host if request.client else "unknown"
+    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
+
+    from app.services.instagram_connection_service import run_instagram_token_refresh_all
+
+    background_tasks.add_task(run_instagram_token_refresh_all)
+    logger.info(
+        "cron.instagram-token-refresh (inline/background) caller_ip=%s source=%s",
+        caller_ip, request.headers.get("X-Cron-Source", "unknown"),
+    )
+    return {"status": "accepted", "mode": "background-inline"}
+
+
 @router.post("/cron/whatsapp-resumo", status_code=status.HTTP_202_ACCEPTED)
 async def cron_whatsapp_resumo(
     request: Request,

@@ -50,6 +50,30 @@ def _load_config() -> dict:
     return _config
 
 
+# Formatos do direct da automação de Instagram.
+DM_FORMATO_BOTAO = "botao"
+DM_FORMATO_TEXTO = "texto"
+
+
+def instagram_dm_formato() -> str:
+    """Como o direct sai: `botao` (template da Meta) ou `texto` (link inline).
+
+    A env var vem PRIMEIRO de propósito. O pedido era poder voltar ao formato
+    antigo em produção "sem redeploy grande": mudar INSTAGRAM_DM_FORMATO=texto
+    no Coolify e reiniciar resolve, sem rebuild de imagem nem commit. O
+    feature-flags.json fica como default versionado.
+    """
+    do_ambiente = (os.environ.get("INSTAGRAM_DM_FORMATO") or "").strip().lower()
+    if do_ambiente in (DM_FORMATO_BOTAO, DM_FORMATO_TEXTO):
+        return do_ambiente
+    do_arquivo = str(_load_config().get("instagram_dm_formato", DM_FORMATO_BOTAO)).lower()
+    return do_arquivo if do_arquivo in (DM_FORMATO_BOTAO, DM_FORMATO_TEXTO) else DM_FORMATO_BOTAO
+
+
+def dm_com_botao() -> bool:
+    return instagram_dm_formato() == DM_FORMATO_BOTAO
+
+
 def get_payment_provider() -> str:
     """Retorna o provider ativo: 'cakto' ou 'kiwify'."""
     return _load_config().get("payment_provider", "cakto")

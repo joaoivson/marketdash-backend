@@ -64,6 +64,12 @@ app.include_router(api_v1_router, prefix=settings.API_V1_STR)
 from app.api.v1.routes import cakto as cakto_v1
 app.include_router(cakto_v1.router, prefix="/cakto", tags=["cakto"])
 
+# Webhook do Instagram — fora do /api/v1 porque a URL fica cadastrada no painel
+# da Meta e não deve carregar versionamento de API interna.
+# Rotas: /webhooks/instagram (handshake + comentários), /deauthorize, /data-deletion
+from app.api.webhooks import instagram as instagram_webhook
+app.include_router(instagram_webhook.router, prefix="/webhooks")
+
 
 @app.get("/")
 def root():

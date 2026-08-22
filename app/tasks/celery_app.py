@@ -1,7 +1,5 @@
-import hashlib
-import re
-
 from celery import Celery
+from app.core.ambiente import identidade_do_banco
 from app.core.config import settings
 
 
@@ -26,15 +24,11 @@ def _fila_do_banco() -> str:
     construção: dois workers em bancos diferentes nunca dividem fila. Derivar de
     ENVIRONMENT não resolveria — hoje os DOIS ambientes reportam "development".
     """
-    url = settings.DATABASE_URL or ""
-    # ref do projeto Supabase, que já identifica o ambiente
-    achado = re.search(r"(?:db\.)?([a-z0-9]{20})\.supabase|postgres\.([a-z0-9]{20})", url)
-    if achado:
-        # ref do projeto por extenso: dá pra identificar o ambiente olhando o Redis
-        identidade = achado.group(1) or achado.group(2)
-    else:
-        identidade = hashlib.sha1(url.encode()).hexdigest()[:12]
-    return f"marketdash-{identidade}"
+    # A extração vive em app/core/ambiente.py — mesma função que responde
+    # "isto é homologação?". Duas cópias da regex divergiriam com o tempo.
+    # A ref do projeto entra por extenso: dá pra identificar o ambiente
+    # olhando o Redis.
+    return f"marketdash-{identidade_do_banco()}"
 
 
 FILA = _fila_do_banco()
@@ -84,6 +78,7 @@ celery_app.conf.include = [
     "app.tasks.csv_tasks",
     "app.tasks.shopee_tasks",
     "app.tasks.facebook_tasks",
+    "app.tasks.instagram_tasks",
 ]
 
 # Auto-discover any other tasks under app.tasks

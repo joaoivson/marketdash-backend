@@ -16,7 +16,12 @@ from app.models.commission import Commission
 from app.models.user_settings import UserSettings
 from app.models.shopee_integration import ShopeeIntegration
 from app.models.facebook_integration import FacebookIntegration
-from app.models.campaign import Campaign, CampaignDailyInsight
+from app.models.instagram_automation import (
+    InstagramConnection,
+    InstagramAutomation,
+    InstagramEvent,
+)
+from app.models.campaign import Campaign, CampaignDailyInsight, CampaignPlatformDailyInsight
 from app.models.kiwify_plan_product import KiwifyPlanProduct
 from app.models.subscription_event import SubscriptionEvent
 from app.models.user_login import UserLogin
@@ -25,15 +30,14 @@ from app.models.admin_client_note import AdminClientNote
 from app.models.page_view import PageView
 from app.models.sync_error_log import SyncErrorLog
 from app.models.sync_run import SyncRun
-from app.models.ai_diagnostic import AiDiagnostic, AiDiagnosticMessage  # noqa: F401
-from app.models.ai_credit_ledger import AiCreditLedger  # noqa: F401
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
     "Job", "JobChunk", "CaptureSite", "CustomLink", "CustomLinkEvent", "PageEvent", "Commission",
     "UserSettings", "ShopeeIntegration", "FacebookIntegration",
-    "Campaign", "CampaignDailyInsight", "KiwifyPlanProduct",
+    "InstagramConnection", "InstagramAutomation", "InstagramEvent",
+    "Campaign", "CampaignDailyInsight", "CampaignPlatformDailyInsight", "KiwifyPlanProduct",
     "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
-    "SyncRun", "AiDiagnostic", "AiDiagnosticMessage", "AiCreditLedger",
+    "SyncRun",
 ]
 

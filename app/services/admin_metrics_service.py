@@ -620,35 +620,29 @@ class AdminMetricsService:
         }
 
     def new_subscriptions(self, year: int, month: int) -> int:
+        """Assinantes cuja 1ª cobrança paga histórica caiu neste mês — não
+        depende do status atual (cancelamento depois não reescreve o mês de
+        entrada).
+
+        Não filtra por `is_plan_change`: um evento cuja ÚNICA cobrança do mês
+        está marcada como troca de plano (mesmo sem trocar de plano de
+        verdade — caso real de produção, Deivit Rafael, 31/07/2026: pagou
+        Essencial e cancelou 2min depois, MESMO plano do início ao fim, mas
+        os 2 eventos vieram com `is_plan_change=True`) ainda é a 1ª cobrança
+        real da pessoa. O filtro antigo, aplicado só na query do mês,
+        derrubava esse tipo de assinante da contagem — produção mostrava 6
+        novas em julho/2026 quando o correto é 7.
+        """
         start, end = _month_bounds(year, month)
-        paid = (
-            self.db.query(SubscriptionEvent)
-            .filter(
-                SubscriptionEvent.event_type.in_(PAID_EVENTS),
-                SubscriptionEvent.received_at >= start,
-                SubscriptionEvent.received_at <= end,
-                SubscriptionEvent.is_plan_change.is_(False),
-            )
-            .all()
-        )
-        # primeiro pago da assinatura no período
         first_paid: Dict[str, datetime] = {}
         for ev in self.db.query(SubscriptionEvent).filter(SubscriptionEvent.event_type.in_(PAID_EVENTS)).all():
             key = _subscriber_key(ev)
             ts = ev.received_at or datetime.min.replace(tzinfo=timezone.utc)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
             if key not in first_paid or ts < first_paid[key]:
                 first_paid[key] = ts
-        count = 0
-        seen = set()
-        for ev in paid:
-            key = _subscriber_key(ev)
-            if key in seen:
-                continue
-            fp = first_paid.get(key)
-            if fp and start <= fp <= end:
-                count += 1
-                seen.add(key)
-        return count
+        return sum(1 for ts in first_paid.values() if start <= ts <= end)
 
     def churn_for_month(self, year: int, month: int) -> Dict[str, Any]:
         start, end = _month_bounds(year, month)

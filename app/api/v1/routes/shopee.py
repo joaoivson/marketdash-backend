@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user, require_active_subscription
+from app.core.sync_gate import MOTIVO_BLOQUEIO, sync_liberado_para
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
@@ -119,6 +120,9 @@ def manual_sync(
     timeout de gateway (Cloudflare ~100s). Frontend deve fazer polling em
     GET /credentials.last_sync_at para detectar conclusão.
     """
+    if not sync_liberado_para(current_user.email):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MOTIVO_BLOQUEIO)
+
     days_back = _resolve_sync_days(days, payload)
 
     svc = _service(db)

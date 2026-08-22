@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_value, encrypt_value
+from app.core.sync_gate import sync_liberado_para
 from app.models.dataset import Dataset
 from app.models.dataset_row import DatasetRow
 from app.repositories.dataset_repository import DatasetRepository
@@ -726,9 +727,15 @@ async def run_shopee_sync_all(days_back: int = 7, trigger: str = "cron_increment
             cutoff = datetime.now(timezone.utc) - timedelta(minutes=SKIP_RECENT_SYNC_MINUTES)
             user_ids: list[int] = []
             skipped_recent = 0
+            skipped_gate = 0
             for integ in integrations:
                 user = db0.query(User).filter(User.id == integ.user_id).first()
                 if user and getattr(user, "is_demo", False):
+                    continue
+                # Em homologação o cron sincroniza só quem está liberado
+                # (ver app/core/sync_gate.py). Fora de hml passa todo mundo.
+                if not sync_liberado_para(user.email if user else None):
+                    skipped_gate += 1
                     continue
                 last = integ.last_sync_at
                 if last is not None:
@@ -775,14 +782,16 @@ async def run_shopee_sync_all(days_back: int = 7, trigger: str = "cron_increment
             finally:
                 db.close()
         logger.info(
-            "Shopee sync inline (pg_cron): %d/%d usuários days_back=%d skipped_recent=%d",
-            synced, len(user_ids), days_back, skipped_recent,
+            "Shopee sync inline (pg_cron): %d/%d usuários days_back=%d "
+            "skipped_recent=%d skipped_gate=%d",
+            synced, len(user_ids), days_back, skipped_recent, skipped_gate,
         )
         return {
             "synced": synced,
             "total": len(user_ids),
             "days_back": days_back,
             "skipped_recent": skipped_recent,
+            "skipped_gate": skipped_gate,
         }
     finally:
         if lock_conn is not None:

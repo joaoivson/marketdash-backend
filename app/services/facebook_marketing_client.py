@@ -10,6 +10,7 @@ na menor unidade da moeda da conta (centavos para BRL). Internamente o
 MarketDash trabalha em BRL, então convertemos dividindo/multiplicando por 100.
 """
 
+import json
 import logging
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -242,10 +243,28 @@ async def list_ad_accounts(access_token: str) -> list[dict]:
     return deduped
 
 
+# Sem filtro, a Graph API omite campanhas ARCHIVED/DELETED da resposta por
+# padrão ("A request with no filters returns only campaigns that were not
+# archived or deleted" — doc oficial da Meta). Isso fazia o sync nunca mais
+# tocar numa campanha depois de arquivada, deixando o último effective_status
+# conhecido (tipicamente ACTIVE) congelado pra sempre. Inclui ARCHIVED
+# explicitamente; DELETED fica de fora de propósito — campanha deletada não
+# é "arquivada", é removida de verdade.
+_CAMPAIGN_EFFECTIVE_STATUSES = [
+    "ACTIVE", "PAUSED", "ARCHIVED", "PENDING_REVIEW", "DISAPPROVED",
+    "PREAPPROVED", "PENDING_BILLING_INFO", "CAMPAIGN_PAUSED",
+    "ADSET_PAUSED", "IN_PROCESS", "WITH_ISSUES",
+]
+
+
 async def list_campaigns(access_token: str, ad_account_id: str) -> list[dict]:
     """Lista campanhas de uma ad account (formato 'act_123')."""
+    filtering = json.dumps([
+        {"field": "effective_status", "operator": "IN", "value": _CAMPAIGN_EFFECTIVE_STATUSES}
+    ])
     params = {
         "fields": "id,name,status,effective_status,objective,daily_budget,lifetime_budget",
+        "filtering": filtering,
         "access_token": access_token,
         "limit": 200,
     }
@@ -295,6 +314,57 @@ async def get_campaign_insights(
         "limit": 500,
     }
     return await _get_paginated(_graph_url(f"{campaign_id}/insights"), params)
+
+
+# Placements que a Meta pode devolver em `publisher_platform`. A referência de Ads
+# Insights não publica o enum (só a de Placement Targeting), então normalizamos e
+# mantemos "desconhecido" como escape — descartar a linha faria o gasto por
+# plataforma não fechar com o gasto total da campanha.
+KNOWN_PUBLISHER_PLATFORMS = {
+    "facebook", "instagram", "messenger", "audience_network", "threads",
+}
+UNKNOWN_PUBLISHER_PLATFORM = "desconhecido"
+
+
+def normalize_publisher_platform(raw) -> str:
+    """Normaliza o valor de `publisher_platform` vindo da Graph API."""
+    value = (str(raw or "")).strip().lower()
+    if not value:
+        return UNKNOWN_PUBLISHER_PLATFORM
+    return value if value in KNOWN_PUBLISHER_PLATFORMS else UNKNOWN_PUBLISHER_PLATFORM
+
+
+async def get_account_campaign_platform_insights(
+    access_token: str,
+    ad_account_id: str,
+    since: str,
+    until: str,
+) -> list[dict]:
+    """Insights diários de TODAS as campanhas de uma conta, quebrados por placement.
+
+    UMA chamada por conta (`level=campaign`), não por campanha — o custo em rate
+    limit não cresce com o número de campanhas do usuário.
+
+    `breakdowns=publisher_platform` é compatível com spend/clicks/impressions/cpc/ctr.
+    `reach` vem junto mas NÃO é somável entre plataformas (a Meta deduplica por
+    período) — quem consome precisa tratar isso.
+
+    Retorna uma lista de dicts com `campaign_id`, `publisher_platform`, `date_start`
+    e as métricas.
+    """
+    params = {
+        "fields": (
+            "campaign_id,spend,clicks,inline_link_clicks,impressions,cpc,"
+            "cost_per_inline_link_click,ctr,inline_link_click_ctr,reach,date_start,date_stop"
+        ),
+        "level": "campaign",
+        "breakdowns": "publisher_platform",
+        "time_increment": 1,
+        "time_range": '{"since":"%s","until":"%s"}' % (since, until),
+        "access_token": access_token,
+        "limit": 500,
+    }
+    return await _get_paginated(_graph_url(f"{ad_account_id}/insights"), params)
 
 
 # --------------------------------------------------------------------------- #

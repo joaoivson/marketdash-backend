@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from app.core.sync_gate import sync_liberado_para
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -53,15 +54,24 @@ def sync_all_facebook_users_task(trigger: str = "cron"):
         repo = FacebookIntegrationRepository(db)
         integrations = repo.get_all_active()
         dispatched = 0
+        skipped_gate = 0
         for integ in integrations:
             user = db.query(User).filter(User.id == integ.user_id).first()
             if user and getattr(user, "is_demo", False):
+                continue
+            # Mesmo gate do caminho inline (app/core/sync_gate.py): em
+            # homologação só a conta liberada sincroniza.
+            if not sync_liberado_para(user.email if user else None):
+                skipped_gate += 1
                 continue
             sync_facebook_user_task.apply_async(
                 kwargs={"user_id": integ.user_id, "trigger": trigger}, priority=6
             )
             dispatched += 1
-        logger.info("sync_all_facebook_users_task: %d tarefas agendadas", dispatched)
-        return {"dispatched": dispatched}
+        logger.info(
+            "sync_all_facebook_users_task: %d tarefas agendadas (skipped_gate=%d)",
+            dispatched, skipped_gate,
+        )
+        return {"dispatched": dispatched, "skipped_gate": skipped_gate}
     finally:
         db.close()

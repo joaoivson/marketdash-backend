@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from app.core.sync_gate import sync_liberado_para
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -171,9 +172,15 @@ def sync_all_shopee_users_task(days_back: int = 7, trigger: str = "cron_incremen
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=SKIP_RECENT_SYNC_MINUTES)
         dispatched = 0
         skipped_recent = 0
+        skipped_gate = 0
         for integ in integrations:
             user = db.query(User).filter(User.id == integ.user_id).first()
             if user and getattr(user, "is_demo", False):
+                continue
+            # Mesmo gate do caminho inline (app/core/sync_gate.py): em
+            # homologação só a conta liberada sincroniza.
+            if not sync_liberado_para(user.email if user else None):
+                skipped_gate += 1
                 continue
             last = integ.last_sync_at
             if last is not None:
@@ -193,8 +200,9 @@ def sync_all_shopee_users_task(days_back: int = 7, trigger: str = "cron_incremen
             )
             dispatched += 1
         logger.info(
-            "sync_all_shopee_users_task: %d tarefas agendadas (days_back=%d skipped_recent=%d)",
-            dispatched, days_back, skipped_recent,
+            "sync_all_shopee_users_task: %d tarefas agendadas "
+            "(days_back=%d skipped_recent=%d skipped_gate=%d)",
+            dispatched, days_back, skipped_recent, skipped_gate,
         )
         return {
             "dispatched": dispatched,

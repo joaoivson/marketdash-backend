@@ -11,9 +11,17 @@ def test_max_tem_links_e_paginas_captura_ilimitados():
     assert plan_limit("max", "paginas_captura") == UNLIMITED
 
 
-def test_max_creditos_ia_continua_numerico():
-    # Créditos de IA do MAX são feature futura — não vira ilimitado agora.
-    assert plan_limit("max", "creditos_ia") == 1000
+def test_essencial_tem_limites_zerados_e_nao_ilimitados():
+    # 0 e -1 são coisas diferentes: o Essencial não libera nada, o MAX libera tudo.
+    assert plan_limit("essencial", "links") == 0
+    assert plan_limit("essencial", "paginas_captura") == 0
+    assert not is_unlimited(plan_limit("essencial", "links"))
+
+
+def test_recurso_desconhecido_cai_em_zero_e_nao_em_ilimitado():
+    # Chaves removidas do mapa (ex.: a antiga "creditos_ia") caem no default 0,
+    # nunca em -1 — remover um limite não pode liberar o recurso sem querer.
+    assert plan_limit("max", "recurso_inexistente") == 0
 
 
 def test_is_unlimited():

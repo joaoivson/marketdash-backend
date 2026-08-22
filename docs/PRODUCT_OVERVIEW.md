@@ -80,5 +80,4 @@ Medio prazo:
 - Migracao para Supabase Auth.
 
 Longo prazo:
-- Modulos avancados de IA.
 - Sistema de pagamentos e assinaturas.

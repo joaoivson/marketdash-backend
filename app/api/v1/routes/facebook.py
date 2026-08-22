@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_current_user, require_active_subscription
+from app.core.sync_gate import MOTIVO_BLOQUEIO, sync_liberado_para
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
@@ -160,6 +161,8 @@ def manual_sync(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Conta demo não sincroniza com o Facebook.",
         )
+    if not sync_liberado_para(current_user.email):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MOTIVO_BLOQUEIO)
     svc = _service(db)
     status_obj = svc.get_status(current_user.id)
     if not status_obj or not status_obj.ad_account_ids:

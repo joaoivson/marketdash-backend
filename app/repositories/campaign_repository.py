@@ -6,7 +6,7 @@ from sqlalchemy import case, distinct, func
 from sqlalchemy.orm import Session
 
 from app.models.ad_spend import AdSpend
-from app.models.campaign import Campaign, CampaignDailyInsight
+from app.models.campaign import Campaign, CampaignDailyInsight, CampaignPlatformDailyInsight
 from app.models.click_row import ClickRow
 from app.models.dataset_row import DatasetRow
 from app.utils.order_status import STATUS_CANCELADO, STATUS_DO_KPI
@@ -480,3 +480,191 @@ class CampaignRepository:
                 continue
             out.append(s)
         return out
+
+    # ------------------- insights por placement (publisher_platform) ------------------- #
+
+    def earliest_platform_insight_date(self, user_id: int):
+        """Data do insight de placement mais antigo — decide backfill da Fase Instagram.
+
+        Separado de `earliest_insight_date` de propósito: usuários que já usavam o
+        MarketDash antes desta feature têm 90 dias de `campaign_daily_insights` mas
+        ZERO linha por placement. Se o backfill olhasse só a tabela antiga, esses
+        usuários nunca receberiam histórico de Instagram vs Facebook.
+        """
+        return (
+            self.db.query(func.min(CampaignPlatformDailyInsight.date))
+            .filter(CampaignPlatformDailyInsight.user_id == user_id)
+            .scalar()
+        )
+
+    def upsert_platform_insights(self, items: List[CampaignPlatformDailyInsight]) -> int:
+        """Upsert por (campaign_id, date, publisher_platform). Idempotente, sem delete.
+
+        Mesmo contrato de `upsert_insights`: re-sincronizar a janela sobrescreve os
+        valores do dia sem apagar dias fora dela. O banco é a fonte de verdade.
+        """
+        if not items:
+            return 0
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        # A Graph API pode devolver a mesma (campanha, dia, plataforma) mais de uma vez
+        # entre páginas. ON CONFLICT não resolve duplicata DENTRO do mesmo INSERT
+        # ("ON CONFLICT DO UPDATE command cannot affect row a second time"), então
+        # deduplicamos aqui, mantendo a última ocorrência.
+        by_key: Dict[tuple, dict] = {}
+        for it in items:
+            by_key[(it.campaign_id, it.date, it.publisher_platform)] = {
+                "user_id": it.user_id,
+                "campaign_id": it.campaign_id,
+                "fb_campaign_id": it.fb_campaign_id,
+                "date": it.date,
+                "publisher_platform": it.publisher_platform,
+                "spend": it.spend,
+                "clicks": it.clicks,
+                "impressions": it.impressions,
+                "cpc": it.cpc,
+                "ctr": it.ctr,
+                "reach": it.reach,
+            }
+        payload = list(by_key.values())
+        if not payload:
+            return 0
+
+        stmt = pg_insert(CampaignPlatformDailyInsight).values(payload)
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_platform_insight_campaign_date_platform",
+            set_={
+                "spend": stmt.excluded.spend,
+                "clicks": stmt.excluded.clicks,
+                "impressions": stmt.excluded.impressions,
+                "cpc": stmt.excluded.cpc,
+                "ctr": stmt.excluded.ctr,
+                "reach": stmt.excluded.reach,
+                "fb_campaign_id": stmt.excluded.fb_campaign_id,
+                "updated_at": func.now(),
+            },
+        )
+        self.db.execute(stmt)
+        self.db.flush()
+        return len(payload)
+
+    def platform_totals(
+        self,
+        user_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[dict]:
+        """Totais por plataforma no período: gasto, cliques, impressões.
+
+        NÃO agrega `reach` — a Meta deduplica alcance por período, então somar as
+        linhas diárias daria um número inflado que não bate com o Gerenciador.
+        """
+        q = self.db.query(
+            CampaignPlatformDailyInsight.publisher_platform.label("platform"),
+            func.coalesce(func.sum(CampaignPlatformDailyInsight.spend), 0.0).label("spend"),
+            func.coalesce(func.sum(CampaignPlatformDailyInsight.clicks), 0).label("clicks"),
+            func.coalesce(func.sum(CampaignPlatformDailyInsight.impressions), 0).label("impressions"),
+        ).filter(CampaignPlatformDailyInsight.user_id == user_id)
+
+        if start_date:
+            q = q.filter(CampaignPlatformDailyInsight.date >= start_date)
+        if end_date:
+            q = q.filter(CampaignPlatformDailyInsight.date <= end_date)
+
+        rows = q.group_by(CampaignPlatformDailyInsight.publisher_platform).all()
+        return [
+            {
+                "platform": r.platform,
+                "spend": float(r.spend or 0.0),
+                "clicks": int(r.clicks or 0),
+                "impressions": int(r.impressions or 0),
+            }
+            for r in rows
+        ]
+
+    def platform_daily(
+        self,
+        user_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[dict]:
+        """Série diária por plataforma (para o gráfico de evolução)."""
+        q = self.db.query(
+            CampaignPlatformDailyInsight.date.label("date"),
+            CampaignPlatformDailyInsight.publisher_platform.label("platform"),
+            func.coalesce(func.sum(CampaignPlatformDailyInsight.spend), 0.0).label("spend"),
+            func.coalesce(func.sum(CampaignPlatformDailyInsight.clicks), 0).label("clicks"),
+            func.coalesce(func.sum(CampaignPlatformDailyInsight.impressions), 0).label("impressions"),
+        ).filter(CampaignPlatformDailyInsight.user_id == user_id)
+
+        if start_date:
+            q = q.filter(CampaignPlatformDailyInsight.date >= start_date)
+        if end_date:
+            q = q.filter(CampaignPlatformDailyInsight.date <= end_date)
+
+        rows = (
+            q.group_by(
+                CampaignPlatformDailyInsight.date,
+                CampaignPlatformDailyInsight.publisher_platform,
+            )
+            .order_by(CampaignPlatformDailyInsight.date)
+            .all()
+        )
+        return [
+            {
+                "date": r.date.isoformat(),
+                "platform": r.platform,
+                "spend": float(r.spend or 0.0),
+                "clicks": int(r.clicks or 0),
+                "impressions": int(r.impressions or 0),
+            }
+            for r in rows
+        ]
+
+    def platform_by_campaign(
+        self,
+        user_id: int,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[dict]:
+        """Gasto/cliques por (campanha, plataforma) — alimenta a tabela da tela."""
+        q = (
+            self.db.query(
+                Campaign.id.label("campaign_id"),
+                Campaign.name.label("campaign_name"),
+                Campaign.sub_id.label("sub_id"),
+                CampaignPlatformDailyInsight.publisher_platform.label("platform"),
+                func.coalesce(func.sum(CampaignPlatformDailyInsight.spend), 0.0).label("spend"),
+                func.coalesce(func.sum(CampaignPlatformDailyInsight.clicks), 0).label("clicks"),
+                func.coalesce(func.sum(CampaignPlatformDailyInsight.impressions), 0).label("impressions"),
+            )
+            .join(Campaign, Campaign.id == CampaignPlatformDailyInsight.campaign_id)
+            .filter(CampaignPlatformDailyInsight.user_id == user_id)
+        )
+        if start_date:
+            q = q.filter(CampaignPlatformDailyInsight.date >= start_date)
+        if end_date:
+            q = q.filter(CampaignPlatformDailyInsight.date <= end_date)
+
+        rows = (
+            q.group_by(
+                Campaign.id,
+                Campaign.name,
+                Campaign.sub_id,
+                CampaignPlatformDailyInsight.publisher_platform,
+            )
+            .order_by(func.sum(CampaignPlatformDailyInsight.spend).desc())
+            .all()
+        )
+        return [
+            {
+                "campaign_id": r.campaign_id,
+                "campaign_name": r.campaign_name,
+                "sub_id": r.sub_id,
+                "platform": r.platform,
+                "spend": float(r.spend or 0.0),
+                "clicks": int(r.clicks or 0),
+                "impressions": int(r.impressions or 0),
+            }
+            for r in rows
+        ]

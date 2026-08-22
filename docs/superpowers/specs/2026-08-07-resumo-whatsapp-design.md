@@ -1,6 +1,6 @@
 # Resumo diário no WhatsApp — design
 
-**Status:** aprovado em 07/08/2026. É o v2 previsto na linha 157 da spec do Diagnóstico IA.
+**Status:** aprovado em 07/08/2026.
 
 ## O que é
 
@@ -70,7 +70,7 @@ Frontend
   Admin → conectar o número (QR code)
 ```
 
-Os números vêm do `KpiService`, o mesmo que alimenta a tela e o Diagnóstico IA.
+Os números vêm do `KpiService`, o mesmo que alimenta a tela.
 Nenhuma conta nova é feita aqui: se o resumo do WhatsApp e o dashboard
 divergirem, é bug de um só lugar.
 

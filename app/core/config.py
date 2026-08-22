@@ -39,15 +39,9 @@ class Settings(BaseSettings):
     # Arquivos maiores que este limite exigem volume compartilhado entre API e worker. Default: 5 MB.
     UPLOAD_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
 
-    # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
-    # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
-    # IA (Diagnóstico) — sem chave, a feature fica indisponível em vez de quebrar.
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
-
     # WhatsApp (resumo diário) via Evolution API auto-hospedada. Sem as três
-    # primeiras, a feature fica indisponível em vez de quebrar — mesmo padrão
-    # da IA. EVOLUTION_WEBHOOK_TOKEN autentica o caminho de volta (o SAIR).
+    # primeiras, a feature fica indisponível em vez de quebrar.
+    # EVOLUTION_WEBHOOK_TOKEN autentica o caminho de volta (o SAIR).
     EVOLUTION_URL: Optional[str] = None
     EVOLUTION_API_KEY: Optional[str] = None
     EVOLUTION_INSTANCIA: Optional[str] = None
@@ -58,6 +52,8 @@ class Settings(BaseSettings):
     WHATSAPP_TETO_DIARIO: int = 300
     WHATSAPP_FALHAS_PARA_PARAR: int = 5
 
+    # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
+    # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False
 
     # Abaixo deste tamanho o CSV é processado na própria requisição, sem fila.
@@ -92,6 +88,34 @@ class Settings(BaseSettings):
     # Login do Facebook para Empresas: ID da configuração OAuth (substitui `scope` no diálogo).
     # Painel → Login do Facebook para Empresas → Configurações → criar config (User access token).
     FACEBOOK_OAUTH_CONFIG_ID: Optional[str] = None
+
+    # ---------------------------------------------------------------- #
+    #  Instagram — Business Login for Instagram (automação comentário→DM) #
+    # ---------------------------------------------------------------- #
+    # ATENÇÃO: NÃO são o FACEBOOK_APP_ID/SECRET. O caso de uso "Instagram →
+    # API setup with Instagram login" gera credenciais PRÓPRIAS dentro do mesmo
+    # app da Meta. Usar o App ID do Facebook aqui faz o OAuth falhar com
+    # "Invalid platform app".
+    #
+    # Escolha deliberada (ver docs/AUTOMACAO_INSTAGRAM.md §3.1): este caminho não
+    # exige Página do Facebook vinculada e é isolado da configuração de anúncios
+    # — se uma permissão do Instagram for revogada, o Meta Ads não cai junto.
+    INSTAGRAM_APP_ID: Optional[str] = None
+    INSTAGRAM_APP_SECRET: Optional[str] = None
+    # Deve bater EXATAMENTE com a Redirect URL registrada no painel da Meta.
+    INSTAGRAM_OAUTH_REDIRECT_URI: Optional[str] = None
+    # Token do handshake GET /webhooks/instagram (hub.verify_token). Gerar com
+    # openssl rand -hex 32 e cadastrar igual no painel de Webhooks da Meta.
+    INSTAGRAM_WEBHOOK_VERIFY_TOKEN: Optional[str] = None
+    # Versão da Instagram Graph API (host graph.instagram.com).
+    INSTAGRAM_API_VERSION: str = "v25.0"
+
+    # Travas anti-bloqueio do envio. O teto da Meta é 750 private replies/hora
+    # por conta profissional; 600 deixa margem para o que já foi gasto fora do
+    # MarketDash. 5/s é limite auto-imposto — a API aceita mais, mas rajada é o
+    # que faz o Instagram tratar a conta como bot.
+    INSTAGRAM_MAX_PRIVATE_REPLIES_HORA: int = 600
+    INSTAGRAM_MAX_ENVIOS_SEGUNDO: int = 5
 
     # pg_cron (Supabase) → endpoint interno do backend. Secret compartilhado (X-Cron-Secret).
     # Gerar com: openssl rand -hex 32. Quando None, o endpoint /internal/cron/* retorna 503.

@@ -14,9 +14,9 @@ com os mesmos nomes:
   pedidos distintos — 49% de inflação.
 - O imposto nunca era aplicado: `commission` cru é bruto, não líquido.
 
-Um relatório de IA narrando "seu lucro foi R$ 0,00" ao lado de uma tela mostrando
-lucro real é a falha que o produto não pode ter. Daí este módulo: as fórmulas
-ficam aqui, e quem precisar dos números da tela consome daqui.
+Dois lugares narrando lucros diferentes para o mesmo período é a falha que o
+produto não pode ter. Daí este módulo: as fórmulas ficam aqui, e quem precisar
+dos números da tela consome daqui.
 
 Fórmulas (espelham `src/shared/lib/tax.ts`):
     gasto_com_imposto = gasto_pago      × (1 + ad_tax_rate)

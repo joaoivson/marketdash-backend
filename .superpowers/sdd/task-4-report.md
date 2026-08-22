@@ -1,254 +1,101 @@
-# Task 4 Report: Cliente OpenAI Isolado
+# Task 4 — Report: Cancelada sai do MRR e do card de ativos
 
-## Status
-**DONE**
+## O que foi implementado
 
-## Commit Hash
-`e69799d`
+Em `app/services/admin_metrics_service.py`:
 
-## Resumo de Testes
-8 testes novos PASSAM (test_openai_client.py) + baseline mantida: **265 passando + 3 pré-existentes = 268 total**
+1. **`_is_canceled(ev) -> bool`** (função de módulo, logo após `_is_active_now`): reconhece cancelamento por `event_type == "subscription_canceled"` ou `subscription_status in ("canceled", "cancelled")`.
 
-## Implementação
+2. **`cancel_instants(events) -> Dict[str, List[datetime]]`** (função de módulo): reconstrói, por assinante (`_subscriber_key`), a lista de instantes de cancelamento REAL — ignora eventos com `is_plan_change=True` (upgrade/downgrade não é saída de cliente) e eventos com `cancel_reason` em `PRODUTOR_ADJUSTMENT_REASONS` (ajuste administrativo do produtor). Usa `canceled_at` quando existe, senão `received_at`.
 
-### Arquivos Criados
-1. **`tests/unit/test_openai_client.py`** — 8 testes
-   - `test_sem_chave_nao_esta_disponivel()` — Cliente sem chave retorna False, com chave retorna True
-   - `test_sem_chave_levanta_erro_tipado()` — Chamada sem chave levanta ErroIA.motivo="sem_chave"
-   - `test_completar_json_devolve_dict_e_tokens()` — JSON parsing + token counting
-   - `test_json_invalido_levanta_erro_de_formato()` — ErroIA.motivo="formato" para JSON inválido
-   - `test_erro_http_levanta_erro_tipado()` — Status 500 → ErroIA.motivo="http"
-   - `test_timeout_levanta_erro_tipado()` — Timeout → ErroIA.motivo="timeout"
-   - `test_completar_texto_devolve_string()` — Modo texto retorna string + tokens
-   - `test_modelo_vai_no_corpo_da_requisicao()` — Modelo e system role no corpo HTTP
+3. **`AdminMetricsService.renewing_subscribers(as_of=None)`**: `[ev for ev in self.active_subscribers(as_of) if not _is_canceled(ev)]` — quem tem acesso E não está cancelada.
 
-2. **`app/services/openai_client.py`** — Cliente HTTP isolado
-   - `ErroIA(Exception)` com atributo `motivo` tipado: `"sem_chave"`, `"timeout"`, `"http"`, `"formato"`
-   - `OpenAiClient(api_key: Optional[str], modelo: str)` — Testável via `_transport` mock
-   - `.disponivel() -> bool` — Valida se há chave
-   - `.completar_json(sistema: str, usuario: str, timeout: float) -> tuple[dict, int, int]`
-   - `.completar_texto(sistema: str, mensagens: list[dict], timeout: float) -> tuple[str, int, int]`
+4. **`mrr_cents`**: passou a usar `renewing_subscribers()` como default (em vez de `active_subscribers()`) quando `actives` não é passado explicitamente.
 
-### Design Decisões
+5. **`mrr_at`**: ganhou o parâmetro `cancelamentos: Optional[Dict[str, List[datetime]]] = None`. Quando `None`, calcula via `cancel_instants(self._all_events())`. Para cada assinante, além de achar o período de cobertura (`cobrindo`) que contém `momento`, verifica se algum cancelamento caiu **dentro daquele período específico** (`cobrindo["inicio"] <= c <= momento`) — se sim, zera a contribuição daquele assinante para o MRR naquele instante.
 
-**1. Isolamento de rede**
-- Cliente interno via `httpx.Client` com transport injetável para testes
-- Nenhuma chamada real à OpenAI nesta task (Task 7 integra)
-- Mock via `httpx.MockTransport` — sem dependência de rede, sem real API key
+6. **`series_12m`**: computa `cancelamentos = cancel_instants(all_events)` uma vez e passa para cada chamada de `mrr_at(momento, periodos, cancelamentos)`.
 
-**2. Erro tipado (ErroIA.motivo)**
-- Camada de cima usa `exc.motivo` para decidir cobrança de crédito
-- Motivos: `"sem_chave"` (config), `"timeout"` (rede), `"http"` (API falhou), `"formato"` (JSON inválido)
-- Cada causa mapeada a uma ação na regra de cobrança (não cobrança se IA falha)
+7. **`plan_frequency_distribution`** e **`dashboard`**: trocaram `self.active_subscribers()` por `self.renewing_subscribers()`.
 
-**3. Chamada HTTP POST para v1/chat/completions**
-```python
-POST https://api.openai.com/v1/chat/completions
-Authorization: Bearer {api_key}
-{
-  "model": "gpt-4o-mini",
-  "messages": [{"role": "system", ...}, {"role": "user", ...}],
-  "response_format": {"type": "json_object"}  # só em completar_json
-}
+8. **`alerts`** e **`list_clients`** e **`churn_for_month`**: mantidos com `self.active_subscribers()` — não fazem parte do escopo do brief (ver seção "Grep de `active_subscribers()`" abaixo).
+
+## Evidência de TDD
+
+**RED** — teste criado (`tests/unit/test_mrr_cancelado_sai.py`, conteúdo exatamente conforme o brief) rodado antes de qualquer mudança em produção:
+
+```
+$ PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit/test_mrr_cancelado_sai.py -v
+...
+ImportError: cannot import name '_is_canceled' from 'app.services.admin_metrics_service'
 ```
 
-**4. Sem dependência do pacote `openai`**
-- httpx já em requirements.txt
-- Chamada HTTP direta propositalmente (uma dependência a menos no container)
+**GREEN** — após implementar `_is_canceled`, `cancel_instants`, `renewing_subscribers` e o novo `mrr_at`:
 
-## Executar Testes
-
-```bash
-# Apenas o cliente OpenAI
-python -m pytest tests/unit/test_openai_client.py -v
-
-# Suite completa (excluindo tests/load com erro pré-existente)
-python -m pytest tests/ --ignore=tests/load -q
-
-# Resultado esperado
-# 265 passed + 3 failed (pré-existentes em test_shopee_upsert_additive.py)
+```
+$ PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit/test_mrr_cancelado_sai.py tests/unit/test_mrr_historico.py tests/unit/test_subscription_canceled_with_access.py tests/unit/test_platform_usage_base_ativa.py -v
+...
+42 passed, 14 warnings in 1.75s
 ```
 
-## Auto-Revisão
+Todos os 5 testes de `test_mrr_cancelado_sai.py` (`test_is_canceled_reconhece_evento_e_status`, `test_cancel_instants_ignora_plan_change_e_ajuste_do_produtor`, `test_renewing_exclui_cancelada_com_acesso`, `test_mrr_at_zera_no_mes_do_cancelamento`, `test_cancelamento_anterior_ao_periodo_nao_derruba_reassinatura`) passaram.
 
-✅ **Passos executados na ordem exata do brief**
-✅ **Teste rodou e falhou antes da implementação**
-✅ **Código implementado conforme o brief (sem alterações)**
-✅ **Todos os 8 testes passam**
-✅ **Baseline mantida: 265 passando + 3 pré-existentes**
-✅ **Nenhuma regressão**
-✅ **Comentários em português explicam POR QUE (isolamento, não cobrança, etc.)**
-✅ **Commit com mensagem conforme o brief**
-✅ **Branch develop, nenhuma escrita em banco, nenhuma rede real**
+## Suíte completa
+
+```
+$ PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q
+3 failed, 440 passed, 18 warnings in 2.51s
+```
+
+As 3 falhas são em `tests/unit/test_shopee_upsert_additive.py` (`test_sync_commissions_never_deletes_the_window`, `test_sync_commissions_flags_suspected_partial_without_blocking_write`, `test_guard_ignores_first_day_of_window`) — **pré-existentes e não relacionadas a esta task**. Confirmei via `git stash` que as mesmas 3 falham igual no baseline antes de qualquer mudança minha (erro `ShopeePermanentError: AppID Shopee inválido`, algo de configuração de fixture/dado que já estava quebrado).
+
+## Achados durante a implementação (fora do escopo estrito do brief)
+
+O código do brief para `mrr_at` (passo 4) usa, como fallback quando `cancelamentos is None`, `cancel_instants(self._all_events())` — que exige `self.db`. Isso quebrou dois testes pré-existentes que criam `AdminMetricsService` **sem DB** (`AdminMetricsService.__new__(AdminMetricsService)` ou stub monkeypatchado) e chamam `mrr_at` sem passar `cancelamentos`:
+
+1. **`tests/unit/test_mrr_historico.py`** — helper `_mrr()` chamava `svc.mrr_at(momento, periodos)` (sem `db`, sem `cancelamentos`). Corrigido passando `cancelamentos={}` explicitamente. Esse arquivo testa a reconstrução de vigência (`build_coverage_periods`), não a semântica de cancelamento — isolá-lo de `cancel_instants` preserva todos os valores numéricos das 12 asserções pré-existentes (incluindo o caso do Deivit, cancelado-com-acesso, que continua contando no MRR *dentro deste arquivo* porque ele não testa esse comportamento — quem testa é o novo `test_mrr_cancelado_sai.py`).
+
+2. **`tests/unit/test_admin_metrics_service.py::test_mrr_series_includes_current_month_when_first_event_is_now`** — monkeypatch de `svc.mrr_at` com lambda de assinatura `(momento, periodos=None)`, que não aceita o novo terceiro argumento posicional que `series_12m` agora passa. Corrigido ampliando a assinatura do lambda para `(momento, periodos=None, cancelamentos=None)` — sem mudar nenhuma asserção.
+
+Ambos os ajustes são só de "test double"/fixture (adaptar assinatura ao novo parâmetro), não mudam nenhum valor esperado nem lógica de negócio testada. Fiz isso porque a task pede explicitamente "rode a suíte unitária inteira uma vez antes de commitar" e esperava-se ausência de regressões — sem esse ajuste, dois testes que passavam no baseline quebrariam.
+
+Isso é uma pequena divergência do texto "Esta task modifica só `app/services/admin_metrics_service.py` ... e cria `tests/unit/test_mrr_cancelado_sai.py`" — precisei também tocar `tests/unit/test_mrr_historico.py` e `tests/unit/test_admin_metrics_service.py`, mas apenas para corrigir assinaturas de test doubles quebradas pela mudança de contrato de `mrr_at` (a própria mudança de assinatura pedida pelo brief), não para alterar comportamento.
+
+## Grep de `active_subscribers()` — o que troquei e o que mantive
+
+```
+346:    def active_subscribers(self, as_of: Optional[date] = None) -> List[SubscriptionEvent]:
+351:    def renewing_subscribers(self, as_of: Optional[date] = None) -> List[SubscriptionEvent]:
+359:        return [ev for ev in self.active_subscribers(as_of) if not _is_canceled(ev)]
+362:        actives = actives if actives is not None else self.renewing_subscribers()   # mrr_cents — TROCADO (brief)
+483:        start_actives = self.active_subscribers(as_of=...)                          # churn_for_month — MANTIDO
+581:        actives = self.active_subscribers()                                          # alerts — MANTIDO (brief explícito)
+702:        actives = self.renewing_subscribers()                                        # plan_frequency_distribution — TROCADO (brief)
+730:        actives = self.renewing_subscribers()                                        # dashboard — TROCADO (brief)
+802:        actives_map = {... for e in self.active_subscribers()}                       # list_clients — MANTIDO
+```
+
+- **Trocados** (conforme brief): `mrr_cents`, `plan_frequency_distribution`, `dashboard`.
+- **Mantidos em `active_subscribers()`** (conforme brief, para `alerts`; por dedução para os demais, não listados no brief):
+  - `alerts()` — o brief é explícito: "manter self.active_subscribers()".
+  - `churn_for_month()` — usa `active_subscribers(as_of=...)` como denominador de "ativos no início do mês" para taxa de churn. Não está no escopo do brief (que só lista `mrr_cents`, `mrr_at`, `dashboard`, `plan_frequency_distribution`). Churn é sobre perda de ACESSO, não sobre deixar de "renovar" — manter parece semanticamente correto, mas não foi confirmado explicitamente no brief.
+  - `list_clients()` — usa `active_subscribers()` só para decidir o `status` de exibição de cada linha (`ativo` vs `cancelado_com_acesso` vs `inativo`), não para MRR. Não está no escopo do brief. Manter é semanticamente correto (é sobre acesso, não sobre receita esperada).
+
+Nenhuma chamada foi trocada por engano; nenhuma chamada listada no brief para trocar ficou esquecida.
+
+## Arquivos alterados
+
+- `app/services/admin_metrics_service.py` — implementação (ver brief, seguido à risca).
+- `tests/unit/test_mrr_cancelado_sai.py` — novo, conteúdo exato do brief.
+- `tests/unit/test_mrr_historico.py` — 1 linha ajustada (`_mrr` helper passa `cancelamentos={}`).
+- `tests/unit/test_admin_metrics_service.py` — 1 lambda ajustado (assinatura do stub de `mrr_at`).
 
 ## Preocupações
-**Nenhuma.** Implementação isolada, sem side effects, teste rápido (0.04s), baseline intacta.
 
----
-
-# Fix Crítico: Proteção de Leitura de Resposta OpenAI
-
-## Status
-**DONE**
-
-## Commit Hash
-`2ab1d97`
-
-## Defeito Identificado
-
-Método `_chamar()` não protege a leitura da resposta HTTP contra corpos malformados:
-
-```python
-# ANTES (vulnerável)
-dados = r.json()  # JSONDecodeError se não for JSON
-conteudo = dados["choices"][0]["message"]["content"]  # KeyError, IndexError
-int(uso.get("prompt_tokens") or 0)  # ValueError se não numérico
-```
-
-**Impacto crítico**: Se a API responde 200 com corpo inválido, exceções cruas escapam **sem tipagem**, violando o contrato central que garante `ErroIA(motivo="formato")`. Isso deixa indefinido se a camada acima debita crédito da usuária em caso de falha da IA.
-
-## Correção Implementada
-
-Proteger cada leitura com `try/except` específico, convertendo para `ErroIA(motivo="formato", detalhe=...)`:
-
-```python
-# DEPOIS (protegido)
-try:
-    dados = r.json()
-except (json.JSONDecodeError, ValueError) as e:
-    raise ErroIA("formato", f"corpo não é JSON válido: {str(e)[:100]}")
-
-try:
-    conteudo = dados["choices"][0]["message"]["content"]
-except (KeyError, IndexError, TypeError) as e:
-    raise ErroIA("formato", f"estrutura de resposta inesperada: {str(e)[:100]}")
-
-try:
-    prompt_tokens = int(uso.get("prompt_tokens") or 0)
-    completion_tokens = int(uso.get("completion_tokens") or 0)
-except (ValueError, TypeError) as e:
-    raise ErroIA("formato", f"tokens não numéricos: {str(e)[:100]}")
-```
-
-## Testes Adicionados
-
-6 novos testes cobrindo as situações críticas:
-
-1. **`test_corpo_nao_json_levanta_erro_formato`** — Corpo 200 que não é JSON → `ErroIA(motivo="formato")`
-2. **`test_json_sem_choices_levanta_erro_formato`** — JSON `{}` sem choices → `ErroIA(motivo="formato")`
-3. **`test_json_com_choices_vazio_levanta_erro_formato`** — `{"choices": []}` vazio → `ErroIA(motivo="formato")`
-4. **`test_json_com_estrutura_incompleta_levanta_erro_formato`** — `{"choices": [{"message": {}}]}` sem content → `ErroIA(motivo="formato")`
-5. **`test_usage_com_prompt_tokens_nao_numerico_levanta_erro_formato`** — usage.prompt_tokens não numérico → `ErroIA(motivo="formato")`
-6. **`test_authorization_header_é_enviado`** — Verifica que `Authorization: Bearer <chave>` é enviado (auditoria de segurança)
-
-## Execução de Testes
-
-```bash
-cd /Users/joaoivson/Desktop/PROJETOS/MarketDash/marketdash-backend
-source .venv312/bin/activate
-python -m pytest tests/unit -q
-```
-
-**Resultado:**
-```
-265 passed, 3 failed (pré-existentes em test_shopee_upsert_additive.py)
-```
-
-## Verificação
-
-✅ Todos os 6 novos testes PASSAM  
-✅ Baseline mantida: 265 passing (antes eram 259 unitários novos)  
-✅ Nenhuma regressão introduzida  
-✅ Código em português com comentários explicando POR QUE o erro deve ser tipado  
-✅ Header `Authorization` auditado  
-✅ Nenhuma chamada real de rede (httpx.MockTransport)  
-✅ Commit com mensagem em português explicando a importância da tipagem
-
----
-
-# Defeito Residual: `usage` Não-Dict na Resposta OpenAI
+1. **Divergência de escopo de arquivos** (documentada acima): toquei em dois arquivos de teste pré-existentes além do que o "Code Organization" da task autorizava explicitamente, para não deixar regressões na suíte completa. A mudança é puramente de assinatura de test double, sem alterar nenhuma asserção de valor — mas é uma divergência que vale confirmação humana.
+2. **`churn_for_month` e `list_clients`** continuam em `active_subscribers()` por dedução própria (não estão listados no brief nem como "trocar" nem como "manter" explicitamente) — se a intenção fosse diferente, isso precisaria ser revisitado numa task futura (possivelmente Task 8, que é citada no prompt como responsável por `platform_usage_service.py`).
+3. Nenhuma migration, nenhuma mudança em `charges.py` ou `platform_usage_service.py` — conforme restrição.
 
 ## Status
-**DONE**
 
-## Commit Hash
-`06c7f34`
-
-## Defeito Identificado
-
-Método `_chamar()` linha 75 tinha proteção incompleta contra `usage` malformado:
-
-```python
-# ANTES (vulnerável)
-uso = dados.get("usage") or {}
-try:
-    prompt_tokens = int(uso.get("prompt_tokens") or 0)
-```
-
-**Problema**: Se API retorna 200 com `usage` truthy MAS não-dict (ex: string `"quebrado"`, lista `[1,2]`, número `5`), o `or {}` **não ativa** (fallback só cai se falsy). Depois, `uso.get()` levanta `AttributeError` crua, escapando sem tipagem.
-
-**Exemplo de resposta vulnerável**:
-```json
-{
-  "choices": [{"message": {"content": "ok"}}],
-  "usage": "quebrado"
-}
-```
-
-Neste caso: `"quebrado".get(...)` → `AttributeError`, não capturado.
-
-## Correção Implementada
-
-Validar tipo antes de usar `.get()`:
-
-```python
-# DEPOIS (protegido)
-uso = dados.get("usage")
-if not isinstance(uso, dict):
-    uso = {}
-try:
-    prompt_tokens = int(uso.get("prompt_tokens") or 0)
-    completion_tokens = int(uso.get("completion_tokens") or 0)
-except (ValueError, TypeError) as e:
-    raise ErroIA("formato", f"tokens não numéricos: {str(e)[:100]}") from e
-```
-
-**Decisão de design**: Tokens são **telemetria**; resposta (conteúdo) é válida mesmo com `usage` quebrado. Portanto, gracefully degradar para tokens=0 ao invés de bloquear.
-
-**Bônus**: Adicionar `from e` nos `raise ErroIA(...)` existentes para preservar traceback.
-
-## Testes Adicionados
-
-3 novos testes cobrindo `usage` não-dict:
-
-1. **`test_usage_string_ao_invez_de_dict_nao_levanta_exceção`** — `"usage": "quebrado"` → tokens zerados, sem exceção crua
-2. **`test_usage_lista_ao_invez_de_dict_nao_levanta_exceção`** — `"usage": [1, 2, 3]` → tokens zerados
-3. **`test_usage_numero_ao_invez_de_dict_nao_levanta_exceção`** — `"usage": 42` → tokens zerados
-
-Todas verificam que: (1) nenhuma exceção crua escapa; (2) conteúdo da resposta é retornado corretamente; (3) tokens caem para (0, 0).
-
-## Execução de Testes
-
-```bash
-cd /Users/joaoivson/Desktop/PROJETOS/MarketDash/marketdash-backend
-source .venv312/bin/activate
-python -m pytest tests/unit -q
-```
-
-**Resultado**:
-```
-3 failed, 268 passed, 17 warnings in 1.40s
-```
-
-- **268 passed**: 265 baseline + 3 novos (usage não-dict)
-- **3 failed**: pré-existentes em `test_shopee_upsert_additive.py` (não modificados conforme instrução)
-
-## Verificação
-
-✅ Todos os 3 novos testes para `usage` não-dict PASSAM  
-✅ Baseline mantida: 265 + 3 novos = 268 total  
-✅ Nenhuma regressão introduzida  
-✅ Código em português com comentário explicando POR QUE (telemetria vs conteúdo)  
-✅ Nenhuma chamada real de rede (httpx.MockTransport)  
-✅ `from e` adicionado para preservar causa do erro  
-✅ Commit com mensagem conforme convenção português
+DONE.
