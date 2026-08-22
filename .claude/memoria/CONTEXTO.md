@@ -125,5 +125,15 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   **App Review** — em Standard Access só admin/dev/tester do app completam o
   OAuth, então aluna comum trava na autorização. O screencast é gravado depois
   da Rodada 2, para o vídeo bater com a tela final.
-- **Migration 056** aplicada em homologação; **não** em produção (nem 049–055).
+  ⚠️ Em 22/08 o código foi parar em `main` por acidente (merge de branch
+  inteiro). **A UI está oculta em produção** por `isProductionHost()`: menu,
+  aba de Configurações e as 4 rotas `/dashboard/automacoes*`. As migrations
+  052–056 seguem **não aplicadas** em produção, de propósito.
+- **Migrations**: 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
+  produção enquanto as features estiverem desligadas lá. ⚠️ A nota anterior
+  dizia que 049–055 não estavam em produção, mas isso é **falso para 049/050**:
+  a tela de Campanhas carrega em produção usando `ad_review_issue` e
+  `status_active_since` via ORM, o que seria `UndefinedColumn` se as colunas não
+  existissem. **Nunca confiar nesta tabela — medir no banco** com
+  `information_schema` antes de qualquer deploy.
 - Branch de trabalho: **`develop`**. Produção sai de `main`.
