@@ -15,7 +15,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "menus": frozenset(
             {"dashboard", "campanhas", "upload_cliques", "indique_ganhe", "configuracoes", "planos"}
         ),
-        "limites": {"paginas_captura": 0, "links": 0, "creditos_ia": 0},
+        "limites": {"paginas_captura": 0, "links": 0},
         "label": "Essencial",
     },
     "pro": {
@@ -26,13 +26,12 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "upload_cliques",
                 "captura",
                 "meus_links",
-                "diagnostico_ia",
                 "indique_ganhe",
                 "configuracoes",
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": 15, "links": 30, "creditos_ia": 200},
+        "limites": {"paginas_captura": 15, "links": 30},
         "label": "Pro",
     },
     "max": {
@@ -44,7 +43,6 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "upload_cliques",
                 "captura",
                 "meus_links",
-                "diagnostico_ia",
                 # Automação Instagram (comentário → direct) é exclusiva do MAX.
                 "automacoes",
                 "indique_ganhe",
@@ -52,7 +50,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": -1, "links": -1, "creditos_ia": 1000},
+        "limites": {"paginas_captura": -1, "links": -1},
         "label": "Max",
     },
 }
@@ -66,7 +64,7 @@ def is_unlimited(value: int) -> bool:
     return value == UNLIMITED
 
 # Menus que exigem plano Pro (cadeado no Essencial).
-PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links", "diagnostico_ia"})
+PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links"})
 
 # Menus exclusivos do MAX (cadeado no Essencial E no Pro).
 MAX_ONLY_MENUS: FrozenSet[str] = frozenset({"automacoes"})

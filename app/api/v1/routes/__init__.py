@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.core.config import settings
-from . import auth, datasets, dashboard, ad_spends, cakto, subscription, clicks, feedback, capture_sites, uploads, custom_links, shopee, page_events, kiwify, payment, user_settings, internal, affiliates, facebook, instagram, campaigns, admin_panel, ai_diagnostics, whatsapp
+from . import auth, datasets, dashboard, ad_spends, cakto, subscription, clicks, feedback, capture_sites, uploads, custom_links, shopee, page_events, kiwify, payment, user_settings, internal, affiliates, facebook, instagram, campaigns, admin_panel, whatsapp
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth")
@@ -26,7 +26,6 @@ router.include_router(user_settings.router, prefix="/settings", tags=["settings"
 router.include_router(internal.router, prefix="/internal", tags=["internal"])
 router.include_router(affiliates.router)  # rotas: /affiliates/me, /admin/affiliates/pending, /admin/commissions/pay
 router.include_router(admin_panel.router)  # /admin/dashboard, clients, expenses, dre, usage
-router.include_router(ai_diagnostics.router, prefix="/ai-diagnostics")
 router.include_router(whatsapp.router, prefix="/whatsapp")
 
 if settings.USE_JOBS_PIPELINE:

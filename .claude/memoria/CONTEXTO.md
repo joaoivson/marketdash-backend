@@ -73,7 +73,6 @@ priority **0** (interativo) ou **9** (batch). Nunca outro valor.
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
 | **Evolution (WhatsApp)** | `whatsapp_*` (4 services) | Resumo diário; no ar em **hml**, oculto em produção |
-| **OpenAI** | `openai_client.py`, `ai_*` (5 services) | Diagnóstico IA por créditos; oculto em produção |
 
 ## Planos
 

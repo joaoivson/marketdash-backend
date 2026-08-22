@@ -1,9 +1,9 @@
 """
 Única fronteira com a Evolution API.
 
-Mesmo racional do openai_client: isolar aqui é o que permite testar o resto do
-WhatsApp sem rede, e todo erro sai tipado (`ErroWhatsapp.motivo`) para quem
-chama decidir entre "tenta de novo amanhã" e "para o lote inteiro".
+Isolar o cliente HTTP aqui é o que permite testar o resto do WhatsApp sem
+rede, e todo erro sai tipado (`ErroWhatsapp.motivo`) para quem chama decidir
+entre "tenta de novo amanhã" e "para o lote inteiro".
 
 A diferença que importa: aqui o efeito colateral é uma mensagem no celular de
 alguém. Não existe "tentar de novo por precaução" — na dúvida, não manda.

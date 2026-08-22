@@ -1,6 +1,6 @@
 ---
 name: "integracoes-marketdash"
-description: "Integrações externas do MarketDash: Shopee Afiliados (GraphQL), Facebook/Meta Ads, Instagram (automação de comentários), Evolution/WhatsApp e OpenAI. Use ao implementar, depurar ou monitorar qualquer sync, conexão OAuth ou chamada a API de terceiro."
+description: "Integrações externas do MarketDash: Shopee Afiliados (GraphQL), Facebook/Meta Ads, Instagram (automação de comentários), e Evolution/WhatsApp. Use ao implementar, depurar ou monitorar qualquer sync, conexão OAuth ou chamada a API de terceiro."
 ---
 
 # Integrações — MarketDash
@@ -79,16 +79,6 @@ description: "Integrações externas do MarketDash: Shopee Afiliados (GraphQL), 
   silêncio.** Vale para qualquer webhook nosso: monte a URL a partir da base
   pública configurada, não do request.
 
-## OpenAI
-
-`openai_client.py` · `ai_diagnostic_service.py` · `ai_credit_service.py` ·
-`ai_snapshot_service.py` · `ai_prompts.py` · `ai_relatorio.py`
-
-- Consumo debitado em créditos por plano (`ai_credit_ledger`). Créditos
-  vêm de `plans.py`.
-- O diagnóstico trabalha sobre **snapshot** do período, não sobre a base ao
-  vivo — o relatório precisa ser reproduzível.
-- Aba **oculta em produção** por `isProductionHost()`.
 
 ## Depurar "o sync não trouxe nada"
 

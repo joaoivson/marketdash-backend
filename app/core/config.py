@@ -39,15 +39,9 @@ class Settings(BaseSettings):
     # Arquivos maiores que este limite exigem volume compartilhado entre API e worker. Default: 5 MB.
     UPLOAD_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
 
-    # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
-    # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
-    # IA (Diagnóstico) — sem chave, a feature fica indisponível em vez de quebrar.
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
-
     # WhatsApp (resumo diário) via Evolution API auto-hospedada. Sem as três
-    # primeiras, a feature fica indisponível em vez de quebrar — mesmo padrão
-    # da IA. EVOLUTION_WEBHOOK_TOKEN autentica o caminho de volta (o SAIR).
+    # primeiras, a feature fica indisponível em vez de quebrar.
+    # EVOLUTION_WEBHOOK_TOKEN autentica o caminho de volta (o SAIR).
     EVOLUTION_URL: Optional[str] = None
     EVOLUTION_API_KEY: Optional[str] = None
     EVOLUTION_INSTANCIA: Optional[str] = None
@@ -58,6 +52,8 @@ class Settings(BaseSettings):
     WHATSAPP_TETO_DIARIO: int = 300
     WHATSAPP_FALHAS_PARA_PARAR: int = 5
 
+    # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
+    # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False
 
     # Abaixo deste tamanho o CSV é processado na própria requisição, sem fila.

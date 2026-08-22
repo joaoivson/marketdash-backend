@@ -2,9 +2,9 @@
 Texto do resumo diário.
 
 Todo número aqui vem do `KpiService` e a classificação de campanha vem do
-`campaign_service` — os mesmos que alimentam a tela e o Diagnóstico IA. Nenhuma
-conta é refeita neste arquivo. Se o WhatsApp e o dashboard discordarem, o bug
-está num lugar só, não em dois que precisam ser mantidos em sincronia.
+`campaign_service` — os mesmos que alimentam a tela. Nenhuma conta é refeita
+neste arquivo. Se o WhatsApp e o dashboard discordarem, o bug está num lugar
+só, não em dois que precisam ser mantidos em sincronia.
 """
 import logging
 from dataclasses import dataclass

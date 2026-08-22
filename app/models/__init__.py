@@ -30,8 +30,6 @@ from app.models.admin_client_note import AdminClientNote
 from app.models.page_view import PageView
 from app.models.sync_error_log import SyncErrorLog
 from app.models.sync_run import SyncRun
-from app.models.ai_diagnostic import AiDiagnostic, AiDiagnosticMessage  # noqa: F401
-from app.models.ai_credit_ledger import AiCreditLedger  # noqa: F401
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
@@ -40,6 +38,6 @@ __all__ = [
     "InstagramConnection", "InstagramAutomation", "InstagramEvent",
     "Campaign", "CampaignDailyInsight", "CampaignPlatformDailyInsight", "KiwifyPlanProduct",
     "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
-    "SyncRun", "AiDiagnostic", "AiDiagnosticMessage", "AiCreditLedger",
+    "SyncRun",
 ]
 

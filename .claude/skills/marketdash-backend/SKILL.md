@@ -63,7 +63,6 @@ vira várias linhas.
 | **Afiliados (indique)** | `affiliates.py` | `affiliate_service` |
 | **Assinatura** | `subscription.py`, `kiwify.py`, `cakto.py`, `payment.py` | `subscription_service`, `kiwify_service`, `charges` |
 | **Painel admin** | `admin_panel.py` | `admin_metrics_service`, `admin_dre_service`, `platform_usage_service` |
-| **Diagnóstico IA** | `ai_diagnostics.py` | `ai_diagnostic_service`, `ai_credit_service`, `ai_snapshot_service` |
 | **WhatsApp** | `whatsapp.py` | `whatsapp_resumo_service`, `evolution_client` |
 
 ## Regras de domínio
@@ -89,8 +88,8 @@ vira várias linhas.
 Limite **`-1` = ilimitado** (MAX) — e o frontend precisa entender isso também,
 senão mostra "-1" na tela.
 
-Automação de Instagram é **exclusiva do MAX**. Diagnóstico IA e WhatsApp
-ficam **ocultos em produção** por `isProductionHost()` no frontend.
+Automação de Instagram é **exclusiva do MAX**. A aba WhatsApp
+fica **oculta em produção** por `isProductionHost()` no frontend.
 
 ## Feature flags
 

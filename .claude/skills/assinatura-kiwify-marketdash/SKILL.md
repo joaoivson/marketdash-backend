@@ -53,11 +53,11 @@ de criar o usuário** — pagamento sem conta é caso real, não erro.
 `app/core/plans.py` é a fonte única, espelhada em
 `marketdash-frontend/src/shared/lib/plans.ts`.
 
-| Plano | Menus extras | Limites (páginas / links / créditos IA) |
+| Plano | Menus extras | Limites (páginas / links) |
 |---|---|---|
-| `essencial` | — | 0 / 0 / 0 |
-| `pro` | captura, meus_links, diagnóstico IA | 15 / 30 / 200 |
-| `max` | tudo do Pro + **automações (Instagram)** | **-1 / -1** / 1000 |
+| `essencial` | — | 0 / 0 |
+| `pro` | captura, meus_links | 15 / 30 |
+| `max` | tudo do Pro + **automações (Instagram)** | **-1 / -1** |
 
 **`-1` significa ilimitado** — e o frontend precisa entender isso, senão
 mostra "-1" na tela. `max` ainda está fora da página de vendas: entra só por
