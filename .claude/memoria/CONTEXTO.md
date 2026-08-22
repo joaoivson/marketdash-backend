@@ -63,6 +63,20 @@ antigo (5) caía num step intermediário do Redis que ninguém consome e a task
 ficava enfileirada para sempre, aceita com 202 e nunca executada. Regra:
 priority **0** (interativo) ou **9** (batch). Nunca outro valor.
 
+## Removido
+
+**Diagnóstico IA (22/08/2026).** Era a única feature de IA do produto e saiu por
+inteiro: rota, 6 services (incluindo `openai_client.py`, único ponto de rede com
+LLM), 2 repositories, 2 models, 1 schema, 7 testes — e as chaves `OPENAI_*` do
+config. Migration `057` dropou as 3 tabelas em hml (em produção foi no-op: as
+043/044 nunca chegaram lá).
+
+Cuidado com **falso positivo de busca por "IA"**: resumo do WhatsApp (f-string +
+`KpiService`), automação de Instagram (templates da aluna), `insight` de cliques
+(agregação SQL), `insights` de campanha (endpoint de métricas da Meta) e
+`campaign_service._health` (heurística de 5 linhas) **não são IA** e continuam
+vivos. "Orquestra IA" é a razão social da empresa.
+
 ## Integrações vivas
 
 | Integração | Onde | Estado |
