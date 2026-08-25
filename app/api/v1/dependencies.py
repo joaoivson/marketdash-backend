@@ -269,6 +269,7 @@ def get_user_plan_context(
         "limites": dict(cfg["limites"]),
         "limites_paginas_captura": plan_limit(plan, "paginas_captura"),
         "limites_links": plan_limit(plan, "links"),
+        "limites_whatsapp_numeros": plan_limit(plan, "whatsapp_numeros"),
         "checkouts": [
             {
                 "plano": p,

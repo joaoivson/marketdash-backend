@@ -30,6 +30,8 @@ from app.models.admin_client_note import AdminClientNote
 from app.models.page_view import PageView
 from app.models.sync_error_log import SyncErrorLog
 from app.models.sync_run import SyncRun
+from app.models.whatsapp import WhatsappOptin, WhatsappEnvio
+from app.models.whatsapp_grupos import WhatsappInstancia, WhatsappGrupo, WhatsappGrupoInstancia
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
@@ -39,5 +41,7 @@ __all__ = [
     "Campaign", "CampaignDailyInsight", "CampaignPlatformDailyInsight", "KiwifyPlanProduct",
     "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
     "SyncRun",
+    "WhatsappOptin", "WhatsappEnvio",
+    "WhatsappInstancia", "WhatsappGrupo", "WhatsappGrupoInstancia",
 ]
 

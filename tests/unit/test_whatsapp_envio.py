@@ -16,7 +16,7 @@ from app.models.whatsapp import (
     ENVIO_OK, ORIGEM_FALHA, STATUS_CONFIRMADO, STATUS_DESLIGADO,
     STATUS_PENDENTE, TIPO_RESUMO,
 )
-from app.services.evolution_client import ErroWhatsapp
+from app.services.waha_client import ErroWhatsapp
 from app.services.whatsapp_envio_service import WhatsappEnvioService
 from app.services.whatsapp_optin_service import (
     CodigoInvalido, TentativasEsgotadas, WhatsappIndisponivel, WhatsappOptinService,
@@ -73,10 +73,10 @@ class _FakeCliente:
     def conectado(self):
         return self._conectado
 
-    def enviar_texto(self, numero, texto):
+    def enviar_texto(self, chat_id, texto):
         if self.erro:
             raise self.erro
-        self.enviadas.append((numero, texto))
+        self.enviadas.append((chat_id, texto))
         return {"ok": True}
 
 
@@ -96,8 +96,8 @@ def test_registrar_manda_codigo_e_deixa_pendente():
 
     assert repo.optins[1].status == STATUS_PENDENTE
     assert repo.optins[1].numero == "5511999998888"
-    numero, texto = cli.enviadas[0]
-    assert numero == "5511999998888"
+    chat_id, texto = cli.enviadas[0]
+    assert chat_id == "5511999998888@c.us"   # WAHA fala em chatId, não em número cru
     assert repo.optins[1].codigo in texto
 
 
@@ -108,7 +108,7 @@ def test_codigo_que_nao_sai_nao_deixa_optin_pendente_orfao():
     assert repo.por_usuario(1) is None
 
 
-def test_sem_evolution_configurada_nem_tenta():
+def test_sem_waha_configurado_nem_tenta():
     repo, cli = _FakeRepo(), _FakeCliente(config=False)
     with pytest.raises(WhatsappIndisponivel):
         WhatsappOptinService(repo, cli).registrar(1, "11999998888")

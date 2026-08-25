@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.user import User
 from app.repositories.whatsapp_repository import WhatsappRepository
-from app.services.evolution_client import EvolutionClient
+from app.services.waha_client import WahaClient
 from app.services.whatsapp_envio_service import WhatsappEnvioService
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,10 @@ def rodar_resumo_diario(apenas_user_id: Optional[int] = None) -> dict:
         servico = WhatsappEnvioService(
             db=db,
             repo=WhatsappRepository(db),
-            cliente=EvolutionClient(
-                settings.EVOLUTION_URL,
-                settings.EVOLUTION_API_KEY,
-                settings.EVOLUTION_INSTANCIA,
+            cliente=WahaClient(
+                settings.WAHA_URL,
+                settings.WAHA_API_KEY,
+                settings.WAHA_SESSAO_RESUMO,
             ),
             buscar_usuario=lambda uid: db.query(User).filter(User.id == uid).first(),
         )

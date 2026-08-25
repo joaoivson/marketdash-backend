@@ -15,7 +15,18 @@ class CustomLinkService:
         self.repository = repository
 
     def get_user_links(self, user_id: int) -> List[CustomLink]:
-        return self.repository.get_by_user(user_id)
+        return self._links_do_plano(user_id)
+
+    def _links_do_plano(self, user_id: int) -> List[CustomLink]:
+        """Links de Meus Links = todos MENOS os internos de grupo de WhatsApp
+        (identificados pela FK whatsapp_grupos.custom_link_id — nunca pela tag,
+        que é texto livre da usuária e colidiria). Mesma lista alimenta a tela
+        E o limite do plano: divergir os dois é o pior bug possível aqui."""
+        ids_de_grupo = self.repository.ids_de_links_de_grupo(user_id)
+        return [
+            l for l in self.repository.get_by_user(user_id)
+            if l.id not in ids_de_grupo
+        ]
 
     def get_link(self, link_id: int) -> Optional[CustomLink]:
         return self.repository.get(link_id)
@@ -44,7 +55,7 @@ class CustomLinkService:
     def create_link(self, user_id: int, link_in: CustomLinkCreate) -> CustomLink:
         from app.core.plans import is_unlimited
 
-        existing_links = self.repository.get_by_user(user_id)
+        existing_links = self._links_do_plano(user_id)
         max_links = self._max_links(user_id)
         if not is_unlimited(max_links):
             if max_links <= 0:

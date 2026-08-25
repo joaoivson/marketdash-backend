@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.models.whatsapp import (
     ENVIO_FALHOU, ENVIO_OK, ORIGEM_FALHA, STATUS_DESLIGADO, TIPO_RESUMO,
 )
-from app.services.evolution_client import ErroWhatsapp, mascarar
+from app.services.waha_client import ErroWhatsapp, chat_id_de_numero, mascarar
 from app.services.whatsapp_resumo_service import WhatsappResumoService, dia_do_resumo
 
 logger = logging.getLogger(__name__)
@@ -121,7 +121,7 @@ class WhatsappEnvioService:
                                            settings.WHATSAPP_INTERVALO_MAX_S))
 
             try:
-                self.cliente.enviar_texto(optin.numero, resumo.texto)
+                self.cliente.enviar_texto(chat_id_de_numero(optin.numero), resumo.texto)
             except ErroWhatsapp as e:
                 r.falhas += 1
                 self.repo.registrar_envio(optin.user_id, TIPO_RESUMO, ENVIO_FALHOU,

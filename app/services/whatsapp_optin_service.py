@@ -14,7 +14,9 @@ from app.models.whatsapp import (
     ENVIO_FALHOU, ENVIO_OK, ORIGEM_APP, ORIGEM_WHATSAPP, STATUS_CONFIRMADO,
     STATUS_DESLIGADO, STATUS_PENDENTE, TIPO_CONFIRMACAO, WhatsappOptin,
 )
-from app.services.evolution_client import ErroWhatsapp, mascarar, normalizar_numero
+from app.services.waha_client import (
+    ErroWhatsapp, chat_id_de_numero, mascarar, normalizar_numero,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +84,7 @@ class WhatsappOptinService:
         optin.desligado_por = None
 
         try:
-            self.cliente.enviar_texto(numero, texto_de_confirmacao(codigo))
+            self.cliente.enviar_texto(chat_id_de_numero(numero), texto_de_confirmacao(codigo))
         except ErroWhatsapp as e:
             # Não grava opt-in que não conseguiu nem receber o código: deixaria
             # uma linha pendente eterna com um número que talvez nem exista.

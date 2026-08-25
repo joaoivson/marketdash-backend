@@ -30,7 +30,7 @@ Supabase Storage (S3) · Docker Compose local.
 | `db` | PostgreSQL local | 5432 |
 | `redis` | Broker + backend do Celery | 6379 |
 | `minio` | S3 local | 9000 |
-| `evolution` | API de WhatsApp (Evolution) | — |
+| `waha` | API de WhatsApp (WAHA, engine GOWS — substituiu a Evolution em 25/08) | perfil `whatsapp`, porta 3001 |
 
 ⚠️ O `CLAUDE.md` da raiz manda subir uvicorn na **8081**; o compose e o proxy
 do Vite usam a **8000**. O caminho oficial é o compose — **backend roda em
@@ -86,7 +86,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
-| **Evolution (WhatsApp)** | `whatsapp_*` (4 services) | Resumo diário; no ar em **hml**, oculto em produção |
+| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Resumo diário (sessão global) + números/grupos das alunas (F1 do módulo de grupos); hml; **o número do resumo precisa re-parear (QR) pós-migração** |
 
 ## Planos
 
@@ -129,7 +129,7 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   inteiro). **A UI está oculta em produção** por `isProductionHost()`: menu,
   aba de Configurações e as 4 rotas `/dashboard/automacoes*`. As migrations
   052–056 seguem **não aplicadas** em produção, de propósito.
-- **Migrations**: 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
+- **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
   produção enquanto as features estiverem desligadas lá. ⚠️ A nota anterior
   dizia que 049–055 não estavam em produção, mas isso é **falso para 049/050**:
   a tela de Campanhas carrega em produção usando `ad_review_issue` e

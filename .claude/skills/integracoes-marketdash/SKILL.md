@@ -65,19 +65,25 @@ description: "Integrações externas do MarketDash: Shopee Afiliados (GraphQL), 
 - Pipeline: comentário → direct. **Exclusiva do plano MAX.**
 - Refresh de token roda por cron (`/internal/cron/instagram-token-refresh`).
 
-## WhatsApp (Evolution)
+## WhatsApp (WAHA)
 
-`evolution_client.py` · `whatsapp_*_service.py` · rotas em `whatsapp.py`
+`waha_client.py` · `whatsapp_*_service.py` · rotas em `whatsapp.py` (resumo +
+webhook) e `whatsapp_conexoes.py` (números/grupos das alunas) · runbook
+`docs/whatsapp-waha.md`
 
-- Resumo diário por cron (`/internal/cron/whatsapp-resumo`). No ar em
-  **homologação**; a aba fica **oculta em produção** por `isProductionHost()`
-  no frontend.
-- Evolution roda como serviço no compose. No Coolify, a rede compartilhada
-  quebra o alias `postgres` e as credenciais regeneram a cada deploy — fixe
-  os literais.
+- **WAHA substituiu a Evolution em 25/08** (engine GOWS/whatsmeow, ~60MB por
+  sessão). Sessão = número conectado; nome `mkd{ref4}u{user_id}x{hex4}` roteia
+  o webhook e separa hml de prod no mesmo servidor.
+- Resumo diário: sessão global `WAHA_SESSAO_RESUMO`, cron
+  `/internal/cron/whatsapp-resumo`; eventos `message` (SAIR) +
+  `session.status`. Sessões de aluna: SÓ `session.status` (LGPD).
+- Sync de grupos cria `sub_id`/`custom_link` na primeira vez (atribuição) e
+  grava `sync_runs` com `source="whatsapp_grupos"`.
+- No Coolify, **fixe WAHA_DASHBOARD_* e WAHA_API_KEY por env** — sem isso as
+  credenciais regeneram a cada start (mesma armadilha da era Evolution).
 - **`url_for` atrás do proxy gera webhook em `http`, toma 301 e falha em
-  silêncio.** Vale para qualquer webhook nosso: monte a URL a partir da base
-  pública configurada, não do request.
+  silêncio.** Use `WAHA_WEBHOOK_URL` (URL pública configurada), nunca o
+  request.
 
 
 ## Depurar "o sync não trouxe nada"

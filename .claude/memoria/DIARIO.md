@@ -11,6 +11,38 @@
 
 ---
 
+## 2026-08-25 — Grupos F1: WAHA no lugar da Evolution, números e grupos das alunas
+
+Migração TOTAL de gateway (decisão do plano de grupos): `waha_client.py` com o
+mesmo desenho do EvolutionClient (`_pedir` + MockTransport, erro tipado), e o
+resumo diário junto — `enviar_texto` agora fala `chatId` (`numero@c.us`).
+Raciocínios que o diff não conta:
+
+**Sessão de aluna assina SÓ `session.status`.** O webhook é um só para todas
+as sessões, roteado pelo nome (`mkd{ref4}u{id}x{hex4}`); prefixo de outro
+ambiente é ignorado — hml e prod podem dividir o mesmo servidor WAHA sem
+fratricídio. Conteúdo de mensagem não chega ao backend (LGPD); o `message` só
+existe na sessão do resumo, para o SAIR — e SAIR vindo de `@g.us` é ignorado
+(desligaria o resumo de quem por acaso está num grupo com o número).
+
+**O create_all mordeu antes da migration.** O app local roda com `--reload`
+apontando para hml: salvar os models criou as 3 tabelas lá ANTES da 058. O
+RLS-por-default do Supabase (deny-all sem policy) segurou; a 058 idempotente
+por cima completou policies + índice parcial. Regra nova no DECISOES: em dev
+local contra hml, migration ANTES do model.
+
+**Validado contra WAHA real** (GOWS local, tag `arm` no Mac): criar sessão,
+QR data-uri, idempotência (`422 already exists` → `ja_existia`), delete. RAM
+do container com 1 sessão ≈ 420MiB (base) — o marginal por sessão se mede na
+homologação com números reais antes do GA.
+
+**Pendências da fase**: aplicar 058 em PRODUÇÃO antes do deploy (protocolo);
+re-parear o número do resumo em cada ambiente (sessão não migra — decisão
+consciente de não suportar importação); subir o serviço WAHA no Coolify.
+
+---
+
+
 ## 2026-08-19 — Memória do time criada neste repo
 
 Criada a estrutura `.claude/` (agents, commands, memoria, rules, skills,

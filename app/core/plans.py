@@ -15,7 +15,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "menus": frozenset(
             {"dashboard", "campanhas", "upload_cliques", "indique_ganhe", "configuracoes", "planos"}
         ),
-        "limites": {"paginas_captura": 0, "links": 0},
+        "limites": {"paginas_captura": 0, "links": 0, "whatsapp_numeros": 0, "whatsapp_grupos": 0},
         "label": "Essencial",
     },
     "pro": {
@@ -31,7 +31,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": 15, "links": 30},
+        "limites": {"paginas_captura": 15, "links": 30, "whatsapp_numeros": 0, "whatsapp_grupos": 0},
         "label": "Pro",
     },
     "max": {
@@ -50,7 +50,9 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": -1, "links": -1},
+        # Módulo de Grupos (decisão João 25/08): 3 números, grupos ilimitados.
+        # O teto de mensagens/dia (240) é env + worker, não limite de plano aqui.
+        "limites": {"paginas_captura": -1, "links": -1, "whatsapp_numeros": 3, "whatsapp_grupos": -1},
         "label": "Max",
     },
 }

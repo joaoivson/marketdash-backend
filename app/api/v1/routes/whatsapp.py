@@ -1,12 +1,13 @@
 """
-Resumo diário no WhatsApp: opt-in da afiliada, webhook do SAIR e estado do número.
+Resumo diário no WhatsApp (opt-in, estado da sessão do MarketDash) e o
+webhook ÚNICO de eventos do WAHA — multi-sessão, roteado pelo nome.
 
-O webhook é a única rota aqui sem sessão de usuária — quem chama é a Evolution.
-Ele se autentica por token no header.
+O webhook é a única rota aqui sem sessão de usuária — quem chama é o WAHA.
+Ele se autentica por token no header e devolve 200 em qualquer caso: erro
+aqui faz o WAHA re-tentar, e reprocessar o mesmo evento não ajuda ninguém.
 """
 import hmac
 import logging
-import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
@@ -15,11 +16,17 @@ from app.api.v1.dependencies import require_admin, require_plan
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.user import User
+from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
 from app.repositories.whatsapp_repository import WhatsappRepository
 from app.schemas.whatsapp import (
     ConfirmarRequest, InstanciaResponse, OptinRequest, StatusResponse,
 )
-from app.services.evolution_client import ErroWhatsapp, EvolutionClient
+from app.services.waha_client import (
+    ErroWhatsapp, WahaClient, chat_id_de_numero, numero_de_jid,
+)
+from app.services.whatsapp_instancia_service import (
+    aplicar_evento_de_status, config_de_webhook, pertence_a_este_ambiente,
+)
 from app.services.whatsapp_optin_service import (
     CodigoInvalido, TentativasEsgotadas, WhatsappIndisponivel,
     WhatsappOptinService, pediu_para_sair,
@@ -29,32 +36,45 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["whatsapp"])
 
+# A sessão do resumo precisa do `message` (é o SAIR); as das alunas, não.
+EVENTOS_DA_SESSAO_RESUMO = ["message", "session.status"]
 
-def _cliente() -> EvolutionClient:
-    return EvolutionClient(
-        settings.EVOLUTION_URL, settings.EVOLUTION_API_KEY, settings.EVOLUTION_INSTANCIA
+
+def _cliente_resumo() -> WahaClient:
+    return WahaClient(
+        settings.WAHA_URL, settings.WAHA_API_KEY, settings.WAHA_SESSAO_RESUMO
     )
 
 
 def _servico(db: Session) -> WhatsappOptinService:
-    return WhatsappOptinService(WhatsappRepository(db), _cliente())
+    return WhatsappOptinService(WhatsappRepository(db), _cliente_resumo())
 
 
 def url_do_webhook(request: Request) -> str:
     """
-    URL pública do webhook, do jeito que a Evolution precisa alcançar.
-
-    `request.url_for` monta a partir do esquema que chega no container — http,
-    porque quem termina o TLS é o proxy. A Evolution recebia
-    `http://api.hml...`, que responde 301, e ela não segue redirecionamento:
-    o SAIR nunca chegava e a afiliada continuava recebendo. X-Forwarded-Proto é
-    o que o proxy diz sobre a requisição original.
+    URL pública do webhook. A configurada (WAHA_WEBHOOK_URL) manda; o fallback
+    deriva da request corrigindo o esquema via X-Forwarded-Proto — `url_for`
+    cru atrás do proxy gera http://, toma 301 e falha em silêncio (já mordeu).
     """
+    if settings.WAHA_WEBHOOK_URL:
+        return settings.WAHA_WEBHOOK_URL
+    import re
     url = str(request.url_for("webhook"))
     proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
     if proto in ("http", "https"):
         url = re.sub(r"^https?://", f"{proto}://", url)
     return url
+
+
+def _webhook_divergente(info: dict, desejado: dict) -> bool:
+    atuais = ((info.get("config") or {}).get("webhooks")) or []
+    if not atuais:
+        return True
+    atual = atuais[0] or {}
+    return (
+        atual.get("url") != desejado.get("url")
+        or sorted(atual.get("events") or []) != sorted(desejado.get("events") or [])
+    )
 
 
 INDISPONIVEL = HTTPException(
@@ -130,55 +150,49 @@ def desligar(
 @router.get("/instancia", response_model=InstanciaResponse)
 def instancia(request: Request, _: User = Depends(require_admin)):
     """
-    Estado do número do MarketDash + QR quando precisa parear. Só admin.
-
-    Se a instância ainda não existe na Evolution, cria e já aponta o webhook do
-    SAIR. Antes isso eram dois `curl` no passo a passo de implantação — passos
-    que precisam ser refeitos toda vez que o ambiente é recriado ou o número é
-    trocado depois de um banimento, e que ninguém lembra na hora certa.
+    Estado da sessão do RESUMO (o número do MarketDash) + QR para parear.
+    Só admin. Cria a sessão no WAHA se ainda não existe e reconcilia o webhook
+    a cada abertura da tela — webhook errado falha em SILÊNCIO (o SAIR não
+    chega) e a próxima notícia é uma denúncia.
     """
-    cliente = _cliente()
+    cliente = _cliente_resumo()
     if not cliente.configurado():
         return InstanciaResponse(configurado=False, estado="sem_config")
+    if not settings.WAHA_WEBHOOK_TOKEN:
+        logger.error("WAHA_WEBHOOK_TOKEN ausente: o SAIR não vai funcionar")
+
+    webhooks = None
+    if settings.WAHA_WEBHOOK_TOKEN:
+        webhooks = config_de_webhook(url_do_webhook(request), EVENTOS_DA_SESSAO_RESUMO)
 
     try:
-        if not cliente.instancia_existe():
-            logger.info("Instância %s não existe na Evolution — criando",
-                        settings.EVOLUTION_INSTANCIA)
-            cliente.criar_instancia()
-
-        # Reconcilia a cada abertura da tela, não só na criação: um webhook
-        # apontando para o lugar errado falha em SILÊNCIO — a afiliada responde
-        # SAIR, nada acontece, e a próxima notícia é uma denúncia. Já aconteceu
-        # aqui, com http:// no lugar de https://.
-        if settings.EVOLUTION_WEBHOOK_TOKEN:
-            desejada = url_do_webhook(request)
-            atual = cliente.webhook_atual()
-            if (atual.get("url") != desejada or not atual.get("enabled")
-                    or atual.get("events") != ["MESSAGES_UPSERT"]):
-                cliente.configurar_webhook(desejada, settings.EVOLUTION_WEBHOOK_TOKEN)
-                logger.info("Webhook do WhatsApp reapontado: %s → %s",
-                            atual.get("url"), desejada)
-        else:
-            # Sem webhook, quem responder SAIR continua recebendo — e é
-            # assim que um número é denunciado.
-            logger.error("EVOLUTION_WEBHOOK_TOKEN ausente: o SAIR não vai funcionar")
+        info = cliente.sessao_info()
+        if not info:
+            logger.info("Sessão %s não existe no WAHA — criando",
+                        settings.WAHA_SESSAO_RESUMO)
+            cliente.criar_sessao(webhooks=webhooks)
+            info = cliente.sessao_info()
+        elif webhooks and _webhook_divergente(info, webhooks[0]):
+            # Só reescreve quando a config REALMENTE mudou: o PUT reinicia a
+            # sessão, e reiniciar a cada abertura da tela derruba um lote de
+            # resumo em andamento (envios passam a falhar como "desconectado").
+            logger.info("Webhook do resumo reapontado")
+            cliente.atualizar_sessao(webhooks)
+        estado = str(info.get("status") or "inexistente")
     except ErroWhatsapp as e:
         return InstanciaResponse(configurado=True, estado=f"erro: {e.motivo}")
 
-    try:
-        estado = cliente.estado()
-    except ErroWhatsapp as e:
-        return InstanciaResponse(configurado=True, estado=f"erro: {e.motivo}")
+    if estado == "WORKING":
+        # A tela do admin espera "open" desde a era Evolution — manter o
+        # contrato poupa o frontend de conhecer os estados do WAHA.
+        return InstanciaResponse(configurado=True, estado="open")
 
     qr = None
-    if estado != "open":
-        try:
-            dados = cliente.qrcode()
-            qr = dados.get("base64") or (dados.get("qrcode") or {}).get("base64")
-        except ErroWhatsapp:
-            qr = None
-    return InstanciaResponse(configurado=True, estado=estado, qrcode=qr)
+    try:
+        qr = cliente.qrcode()
+    except ErroWhatsapp:
+        qr = None
+    return InstanciaResponse(configurado=True, estado=estado.lower(), qrcode=qr)
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
@@ -188,13 +202,14 @@ async def webhook(
     x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
 ):
     """
-    Mensagens recebidas no número do MarketDash.
+    Eventos do WAHA — TODAS as sessões (resumo + números das afiliadas).
 
-    Só existe para o SAIR. Devolve 200 em qualquer caso: erro aqui faz a
-    Evolution reenfileirar o evento, e ficar reprocessando a mesma mensagem não
-    ajuda ninguém.
+    Roteamento pelo nome da sessão: só tratamos sessões com o prefixo DESTE
+    ambiente (mkd{ref4}) ou a sessão do resumo. Evento de sessão alheia
+    (outro ambiente no mesmo servidor WAHA) é ignorado em silêncio — tratar
+    seria fratricídio hml×prod.
     """
-    esperado = settings.EVOLUTION_WEBHOOK_TOKEN
+    esperado = settings.WAHA_WEBHOOK_TOKEN
     if not esperado or not x_webhook_token or not hmac.compare_digest(x_webhook_token, esperado):
         # 200 de propósito: um 401 diria a quem sonda que existe token certo.
         logger.warning("Webhook do WhatsApp com token inválido")
@@ -205,19 +220,47 @@ async def webhook(
     except Exception:
         return {"ok": True}
 
-    dados = (evento or {}).get("data") or {}
-    chave = dados.get("key") or {}
-    if chave.get("fromMe"):
-        return {"ok": True}
+    nome_sessao = str((evento or {}).get("session") or "")
+    tipo = str((evento or {}).get("event") or "")
+    payload = (evento or {}).get("payload") or {}
 
-    remetente = str(chave.get("remoteJid") or "")
-    numero = remetente.split("@")[0].split(":")[0]
-    mensagem = dados.get("message") or {}
-    texto = (
-        mensagem.get("conversation")
-        or (mensagem.get("extendedTextMessage") or {}).get("text")
-        or ""
-    )
+    if tipo == "session.status":
+        _tratar_status(db, nome_sessao, evento, payload)
+    elif tipo == "message":
+        _tratar_mensagem(db, nome_sessao, payload)
+    return {"ok": True}
+
+
+def _tratar_status(db: Session, nome_sessao: str, evento: dict, payload: dict) -> None:
+    status_waha = str(payload.get("status") or "")
+    if nome_sessao == settings.WAHA_SESSAO_RESUMO:
+        logger.info("Sessão do resumo: %s", status_waha)
+        return
+    if not pertence_a_este_ambiente(nome_sessao):
+        return  # sessão de outro ambiente — não é nossa
+    repo = WhatsappInstanciaRepository(db)
+    instancia = repo.por_nome(nome_sessao)
+    if not instancia:
+        logger.warning("session.status de sessão desconhecida: %s", nome_sessao)
+        return
+    me = (evento or {}).get("me") or {}
+    numero = numero_de_jid(me.get("id")) or None
+    aplicar_evento_de_status(repo, instancia, status_waha, numero)
+
+
+def _tratar_mensagem(db: Session, nome_sessao: str, payload: dict) -> None:
+    """Só a sessão do resumo recebe `message` — e só para o SAIR."""
+    if nome_sessao != settings.WAHA_SESSAO_RESUMO:
+        return
+    if payload.get("fromMe"):
+        return
+    remetente = str(payload.get("from") or "")
+    if remetente.endswith("@g.us"):
+        # Mensagem de grupo no número do resumo: SAIR ali desligaria o resumo
+        # de um número que por acaso está no grupo. Ignorar é a única resposta.
+        return
+    numero = numero_de_jid(remetente)
+    texto = str(payload.get("body") or "")
 
     if numero and pediu_para_sair(texto):
         servico = _servico(db)
@@ -225,11 +268,10 @@ async def webhook(
         if n:
             logger.info("SAIR pelo WhatsApp desligou %s opt-in(s)", n)
             try:
-                _cliente().enviar_texto(
-                    numero,
+                _cliente_resumo().enviar_texto(
+                    chat_id_de_numero(numero),
                     "Pronto, você não vai mais receber o resumo diário. "
                     "Se mudar de ideia, é só religar nas Configurações do MarketDash.",
                 )
             except ErroWhatsapp:
                 pass   # já desligamos; a confirmação é cortesia
-    return {"ok": True}

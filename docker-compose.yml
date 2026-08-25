@@ -52,6 +52,13 @@ services:
       FACEBOOK_API_VERSION: ${FACEBOOK_API_VERSION:-v25.0}
       FACEBOOK_OAUTH_REDIRECT_URI: ${FACEBOOK_OAUTH_REDIRECT_URI:-}
       FACEBOOK_OAUTH_CONFIG_ID: ${FACEBOOK_OAUTH_CONFIG_ID:-}
+      # WhatsApp via WAHA (perfil `whatsapp` do compose). Host `waha` resolve
+      # na rede do compose; sem o serviço de pé, as rotas respondem 503/502.
+      WAHA_URL: ${WAHA_URL:-http://waha:3000}
+      WAHA_API_KEY: ${WAHA_API_KEY:-chave-local-de-desenvolvimento}
+      WAHA_SESSAO_RESUMO: ${WAHA_SESSAO_RESUMO:-mkdlocalresumo}
+      WAHA_WEBHOOK_TOKEN: ${WAHA_WEBHOOK_TOKEN:-token-local-de-desenvolvimento}
+      WAHA_WEBHOOK_URL: ${WAHA_WEBHOOK_URL:-}
     depends_on:
       db:
         condition: service_healthy
@@ -110,39 +117,34 @@ services:
 
   # Evolution API para desenvolver o resumo diário no WhatsApp sem depender do
   # servidor de homologação. Em hml/produção ela roda como recurso próprio no
-  # Coolify — ver docs/whatsapp-evolution.md.
+  # WAHA (WhatsApp HTTP API) — substituiu a Evolution em 25/08.
+  # Ver docs/whatsapp-waha.md.
   #
   # Perfil `whatsapp`: não sobe no `docker-compose up` padrão, porque conectar
-  # um número aqui e outro no Coolify na MESMA instância derruba a sessão dos
-  # dois. Suba de propósito:  docker compose --profile whatsapp up evolution
-  evolution:
-    image: evoapicloud/evolution-api:v2.2.3
-    container_name: marketdash_evolution
+  # um número aqui e outro no Coolify na MESMA sessão derruba a conexão dos
+  # dois. Suba de propósito:  docker compose --profile whatsapp up waha
+  waha:
+    # Tag `arm` para Mac M-series (a `latest` é amd64-only); no Coolify
+    # (amd64) usar devlikeapro/waha:latest — ver docs/whatsapp-waha.md.
+    image: devlikeapro/waha:arm
+    container_name: marketdash_waha
     profiles: ["whatsapp"]
     ports:
-      - "8085:8080"
+      - "3001:3000"
     environment:
-      AUTHENTICATION_API_KEY: chave-local-de-desenvolvimento
-      DATABASE_ENABLED: "true"
-      DATABASE_PROVIDER: postgresql
-      DATABASE_CONNECTION_URI: postgresql://dashads_user:dashads_password@db:5432/dashads_db?schema=evolution
-      DATABASE_SAVE_DATA_INSTANCE: "true"
-      # Cache local, não Redis: no Docker daqui o nome `redis` resolve só em
-      # IPv6 e o cliente da Evolution não conecta, enchendo o log de erro. Em
-      # produção o Redis vale a pena; para desenvolver, cache em memória basta.
-      CACHE_REDIS_ENABLED: "false"
-      CACHE_LOCAL_ENABLED: "true"
-      # Só o evento de mensagem recebida: é tudo que o webhook do SAIR precisa.
-      WEBHOOK_GLOBAL_ENABLED: "false"
-      LOG_LEVEL: ERROR
-    depends_on:
-      db:
-        condition: service_healthy
+      # Engine GOWS (whatsmeow/Go): ~60MB por sessão — é o que torna o cap de
+      # 60 sessões viável em ~4GB. Fallback: NOWEB (payloads podem diferir).
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WAHA_API_KEY: chave-local-de-desenvolvimento
+      WAHA_LOG_LEVEL: warn
+      # Sessões sobrevivem a restart pelo volume; em produção usar Postgres
+      # (WHATSAPP_SESSIONS_POSTGRESQL_URL) — ver runbook.
+      WAHA_PRINT_QR: "false"
     volumes:
-      - evolution_data:/evolution/instances
+      - waha_sessions:/app/.sessions
 
 volumes:
+  waha_sessions:
   postgres_data:
   upload_temp_data:
   minio_data:
-  evolution_data:

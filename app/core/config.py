@@ -39,18 +39,28 @@ class Settings(BaseSettings):
     # Arquivos maiores que este limite exigem volume compartilhado entre API e worker. Default: 5 MB.
     UPLOAD_INLINE_MAX_BYTES: int = 5 * 1024 * 1024
 
-    # WhatsApp (resumo diário) via Evolution API auto-hospedada. Sem as três
-    # primeiras, a feature fica indisponível em vez de quebrar.
-    # EVOLUTION_WEBHOOK_TOKEN autentica o caminho de volta (o SAIR).
-    EVOLUTION_URL: Optional[str] = None
-    EVOLUTION_API_KEY: Optional[str] = None
-    EVOLUTION_INSTANCIA: Optional[str] = None
-    EVOLUTION_WEBHOOK_TOKEN: Optional[str] = None
-    # Travas anti-banimento: intervalo entre mensagens e teto por rodada.
+    # WhatsApp via WAHA auto-hospedado (waha.devlike.pro, engine GOWS) —
+    # substituiu a Evolution API em 25/08 (RAM ~60MB/sessão vs 300-500MB, e a
+    # Evolution 2.4 passou a exigir ativação com telemetria). Sem as duas
+    # primeiras, toda feature de WhatsApp fica indisponível em vez de quebrar.
+    WAHA_URL: Optional[str] = None
+    WAHA_API_KEY: Optional[str] = None
+    # Sessão global do RESUMO DIÁRIO (o número do MarketDash). As sessões das
+    # afiliadas são por-usuária e vivem em whatsapp_instancias.
+    WAHA_SESSAO_RESUMO: Optional[str] = None
+    # Autentica o caminho de volta (webhook). Vai como customHeader
+    # X-Webhook-Token e como chave HMAC nas sessões.
+    WAHA_WEBHOOK_TOKEN: Optional[str] = None
+    # URL PÚBLICA do webhook (ex.: https://api.hml.marketdash.com.br/api/v1/whatsapp/webhook).
+    # Nunca derivar de url_for: atrás do proxy sai http:// e falha em silêncio.
+    WAHA_WEBHOOK_URL: Optional[str] = None
+    # Travas anti-banimento do resumo diário: intervalo entre mensagens e teto.
     WHATSAPP_INTERVALO_MIN_S: float = 3.0
     WHATSAPP_INTERVALO_MAX_S: float = 8.0
     WHATSAPP_TETO_DIARIO: int = 300
     WHATSAPP_FALHAS_PARA_PARAR: int = 5
+    # Cap global de sessões de afiliadas — proteção de RAM do servidor WAHA.
+    WHATSAPP_MAX_INSTANCIAS_GLOBAL: int = 60
 
     # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.

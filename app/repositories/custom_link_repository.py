@@ -43,6 +43,37 @@ class CustomLinkRepository:
             links.append(link)
         return links
 
+    def ids_de_links_de_grupo(self, user_id: int) -> set:
+        """Ids de custom_links referenciados por whatsapp_grupos.custom_link_id."""
+        from app.models.whatsapp_grupos import WhatsappGrupo
+
+        linhas = (
+            self.db.query(WhatsappGrupo.custom_link_id)
+            .filter(
+                WhatsappGrupo.user_id == user_id,
+                WhatsappGrupo.custom_link_id.isnot(None),
+            )
+            .all()
+        )
+        return {i for (i,) in linhas}
+
+    def criar_link_de_grupo(self, user_id: int, nome: str, slug: str) -> CustomLink:
+        """Link interno de grupo de WhatsApp: add + flush SEM commit (transação
+        do sync). Fora do fluxo/limite de Meus Links — a exclusão é pela FK
+        whatsapp_grupos.custom_link_id, não pela tag (tag é texto livre da
+        usuária e colidiria)."""
+        link = CustomLink(
+            user_id=user_id,
+            name=nome[:120],
+            original_url="https://shopee.com.br/",
+            slug=slug,
+            tag="whatsapp",
+            is_active=True,
+        )
+        self.db.add(link)
+        self.db.flush()
+        return link
+
     def create(self, user_id: int, obj_in: CustomLinkCreate) -> CustomLink:
         db_obj = CustomLink(
             user_id=user_id,
