@@ -11,6 +11,40 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-26 (O sync de grupos: 499 viravam zero)
+
+A sincronização de grupos vinha terminando "com sucesso" e gravando nada. O log
+de homologação deu a causa exata: `100 de 100 itens sem JID reconhecível (chaves
+do 1º: ['AddressingMode', 'AnnounceVersionID', 'CreatorCountryCode', ...])`.
+
+São os campos de `types.GroupInfo` do **whatsmeow**. O engine **GOWS serializa a
+struct Go como ela é** — `JID`, `Name`, `Participants`, `IsAdmin`, `IsAnnounce`,
+com as structs embutidas achatadas — enquanto NOWEB e WEBJS usam `id`, `subject`,
+`participants`, `role`, `announce`. A documentação do WAHA diz apenas "a resposta
+depende do engine", sem mostrar a diferença. Nosso parser lia só `id` minúsculo,
+então descartava **todos** os grupos: 5 páginas, 499 grupos, zero gravado.
+
+O que mudou:
+
+- **Leitura tolerante à caixa** (`waha_client.campo`/`tem_campo`), no sync e no
+  webhook de participantes. `types.JID` implementa `MarshalText`, então o JID
+  chega como string simples — não como objeto.
+- **Identidade própria via LID.** Em grupo com endereçamento LID o participante
+  vem como `…@lid` e o telefone fica em `PhoneNumber`; comparar só o telefone
+  fazia o número não se reconhecer e todo grupo nascia "não sou admin", travando
+  envio e convite.
+- **Convites saíram de dentro do laço.** É uma chamada HTTP por grupo: com 499
+  grupos o request estourava o tempo, o proxy cortava a conexão (o "Failed to
+  fetch" da tela) e, como o commit só vinha no fim, o sync inteiro se perdia.
+  Agora grava os grupos primeiro e busca convites dentro de um orçamento de
+  tempo; o resto entra no próximo sync.
+
+E a lição virou código: página com itens e **nenhum** reconhecido agora sobe
+erro em vez de terminar `success` com `vistos=0`. Foi o sucesso silencioso que
+escondeu isto — a tela dizia "nenhum grupo ainda" e não havia como distinguir
+"a conta não tem grupos" de "vieram 499 e não entendemos nenhum". `ignorados`
+passou a viajar na resposta e a aparecer na tela.
+
 ## [Não versionado] - 2026-08-26 (Documentação de promoção + o proxy que apontava para produção)
 
 Documento único de promoção para produção — `docs/PROMOCAO_PARA_PRODUCAO.md` —
