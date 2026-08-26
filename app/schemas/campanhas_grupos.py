@@ -157,6 +157,9 @@ class ResumoDeCampanhaOut(BaseModel):
 class ResumoConsolidadoOut(BaseModel):
     periodo: PeriodoOut
     campanhas_ativas: int
+    # > 0 quando o teto do bloco cortou campanhas: a tela avisa que o total não
+    # é de tudo. Corte silencioso lê-se como "somei todas" quando não somou.
+    campanhas_omitidas: int = 0
     totais: TotaisDeResultadoOut
     investimento: float
     investimento_com_imposto: float

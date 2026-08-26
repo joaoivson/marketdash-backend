@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["campanhas-grupos"])
 
+# Teto do bloco consolidado do Dashboard. Ver `resumo_consolidado`.
+MAX_CAMPANHAS_NO_RESUMO = 20
+
 
 def _servico(db: Session, user: User | None = None) -> CampanhaGruposService:
     """`user` só no caminho que CRIA (o único que lê o limite do plano)."""
@@ -107,6 +110,14 @@ def resumo_consolidado(
     d_ini, d_fim = _periodo(inicio, fim)
     campanhas, _contagens = _servico(db).listar(current_user.id, incluir_arquivadas=False)
     ativas = [c for c in campanhas if c.status != "arquivada"]
+    # O plano MAX não limita campanhas e cada uma custa uma volta de queries.
+    # O corte protege o Dashboard, mas NÃO é silencioso: `campanhas_omitidas`
+    # vai na resposta para a tela poder dizer que não somou tudo.
+    total_ativas = len(ativas)
+    ativas = ativas[:MAX_CAMPANHAS_NO_RESUMO]
+    if total_ativas > len(ativas):
+        logger.info("resumo de grupos truncado: %d de %d campanhas (user=%s)",
+                    len(ativas), total_ativas, current_user.id)
 
     servico = CampanhaResultadoService(db)
     repo_anuncio = CampanhaAnuncioRepository(db)
@@ -145,7 +156,8 @@ def resumo_consolidado(
     investimento_com_imposto = round(gasto_com_imposto, 2)
     return {
         "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},
-        "campanhas_ativas": len(ativas),
+        "campanhas_ativas": total_ativas,
+        "campanhas_omitidas": total_ativas - len(ativas),
         "totais": totais,
         "investimento": round(gasto_bruto, 2),
         "investimento_com_imposto": investimento_com_imposto,
