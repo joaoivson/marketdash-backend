@@ -9,6 +9,7 @@
 
 | Data | Decisão | Por quê |
 |---|---|---|
+| 2026-08-26 | **Monitoramento NÃO ganha item de menu — vive como aba dentro da campanha** | O menu foi enxugado de propósito na F0 (10 itens, sem scroll em 768px) e o monitoramento é sempre "o que alimenta ESTA campanha". Por isso não há `menuKey` novo em `plans.py`/`plans.ts`: o gating é o da própria campanha (`campanhas_grupos`, MAX-only) |
 | 2026-08-26 | **Link capturado é guardado como APARECEU no texto; normalizar só para resolver o marketplace** | Guardar normalizado e usar essa forma para casar contra o texto original fazia o `replace` virar no-op quando o link vinha sem `https://` — e a mensagem saía com o link do CONCORRENTE, marcada "replicada". Representação normalizada nunca casa com o original |
 | 2026-08-26 | **Sobrando um link não convertido, a replicação FALHA em vez de enviar** | Link que não é dela nos grupos dela é propaganda para outra pessoa. Quem quiser replicar cru desliga `converter_links` de propósito — a escolha existe, mas é explícita |
 | 2026-08-26 | **Regex sobre texto de terceiro tem teste de TEMPO, não só de resultado** | `(?:www\.\|[a-z0-9-]+\.)+` dava backtracking exponencial (1,1s em 89 chars). O texto vem de um grupo de terceiro: qualquer membro travava o threadpool da API sem ter conta aqui |
