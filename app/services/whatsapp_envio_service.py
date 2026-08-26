@@ -103,6 +103,17 @@ class WhatsappEnvioService:
                 r.pulados += 1
                 continue
 
+            # Blacklist manda mais que opt-in: "não quero mais nada de você" é
+            # um pedido mais forte do que uma preferência ligada em algum
+            # momento — e é a lista que ela usa como prova se alguém reclamar.
+            from app.services.blacklist_service import BlacklistService
+
+            if BlacklistService(self.db).bloqueado(optin.user_id, optin.numero):
+                r.pulados += 1
+                logger.info("Resumo diário: número na blacklist, pulado (user %s)",
+                            optin.user_id)
+                continue
+
             try:
                 resumo = self.resumo_svc.montar(
                     optin.user_id, self._primeiro_nome(optin.user_id), dia

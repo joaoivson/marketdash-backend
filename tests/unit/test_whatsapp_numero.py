@@ -204,15 +204,21 @@ def test_qrcode_vira_data_uri():
 
 # --- URL do webhook atrás de proxy ------------------------------------------
 
-def test_url_do_webhook_respeita_o_proto_do_proxy():
+def test_url_do_webhook_respeita_o_proto_do_proxy(monkeypatch):
     """
     Bug real em homologação (era Evolution, o risco é o mesmo no WAHA): o
     webhook recebeu `http://api.hml...`, que responde 301, e o provedor não
     segue redirecionamento. O SAIR nunca chegou — falha silenciosa, do tipo
     que só aparece como denúncia.
+
+    `WAHA_WEBHOOK_URL` é zerada de propósito: este teste cobre o FALLBACK que
+    deriva da request. Sem zerar, o resultado passava a depender do `.env` da
+    máquina de quem roda — o teste quebrou no dia em que a env foi definida.
     """
     from types import SimpleNamespace
-    from app.api.v1.routes.whatsapp import url_do_webhook
+    from app.api.v1.routes.whatsapp import settings, url_do_webhook
+
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_URL", None, raising=False)
 
     def req(headers):
         return SimpleNamespace(
@@ -272,3 +278,91 @@ def test_numero_de_jid_e_o_inverso_de_chat_id():
     assert numero_de_jid("5511999998888@c.us") == "5511999998888"
     assert numero_de_jid("5511999998888:12@c.us") == "5511999998888"
     assert numero_de_jid(None) == ""
+
+
+def test_url_configurada_tem_precedencia_sobre_a_request(monkeypatch):
+    """O outro lado da moeda: com a env definida, ela manda — é o caminho de
+    produção, onde a request chega do proxy e não sabe a URL pública."""
+    from types import SimpleNamespace
+    from app.api.v1.routes.whatsapp import settings, url_do_webhook
+
+    monkeypatch.setattr(settings, "WAHA_WEBHOOK_URL",
+                        "https://api.exemplo.com/api/v1/whatsapp/webhook", raising=False)
+    req = SimpleNamespace(headers={}, url_for=lambda nome: "http://qualquer/coisa")
+    assert url_do_webhook(req) == "https://api.exemplo.com/api/v1/whatsapp/webhook"
+
+
+# --- formato da resposta de /groups ------------------------------------------
+#
+# A documentação do WAHA diz que a resposta "depende do engine". A versão
+# anterior fazia `dados if isinstance(dados, list) else []`: qualquer formato
+# diferente virava ZERO grupos com o sync marcado como SUCESSO. Foi o que
+# aconteceu em homologação — quatro sincronizações "bem-sucedidas" com
+# `vistos=0` e nenhum log dizendo por quê.
+
+
+def test_lista_crua_passa_direto():
+    from app.services.waha_client import _lista_de_grupos
+
+    dados = [{"id": "120363111@g.us"}]
+    assert _lista_de_grupos(dados) == dados
+
+
+@pytest.mark.parametrize("chave", ["groups", "data", "items", "results"])
+def test_envelope_conhecido_e_desembrulhado(chave):
+    from app.services.waha_client import _lista_de_grupos
+
+    grupos = [{"id": "120363111@g.us"}]
+    assert _lista_de_grupos({chave: grupos, "total": 1}) == grupos
+
+
+@pytest.mark.parametrize("dados", [None, {}, {"erro": "x"}, "texto", 42])
+def test_formato_desconhecido_e_ERRO_nunca_lista_vazia(dados):
+    """Zero grupos tem que ser um fato do WhatsApp, nunca um formato que não
+    soubemos ler. Devolver [] aqui é o que produziu o sync 'bem-sucedido' com
+    nenhum grupo."""
+    from app.services.waha_client import ErroWhatsapp, _lista_de_grupos
+
+    with pytest.raises(ErroWhatsapp) as e:
+        _lista_de_grupos(dados)
+    assert e.value.motivo == "grupos"
+
+
+def test_lista_vazia_de_verdade_continua_vazia():
+    """O caso legítimo: a conta não tem grupo nenhum."""
+    from app.services.waha_client import _lista_de_grupos
+
+    assert _lista_de_grupos([]) == []
+    assert _lista_de_grupos({"groups": []}) == []
+
+
+def test_resposta_embrulhada_chega_ao_chamador():
+    """Fio completo pelo cliente, não só pelo helper."""
+    def responder(req):
+        return httpx.Response(200, json={"groups": [{"id": "120363111@g.us"}], "total": 1})
+
+    assert _cliente(responder).listar_grupos()[0]["id"] == "120363111@g.us"
+
+
+def test_resposta_em_formato_ilegivel_sobe_erro_pelo_cliente():
+    def responder(req):
+        return httpx.Response(200, json={"inesperado": True})
+
+    with pytest.raises(ErroWhatsapp):
+        _cliente(responder).listar_grupos()
+
+
+@pytest.mark.parametrize("bruto,esperado", [
+    ("120363111@g.us", "120363111@g.us"),
+    ({"_serialized": "120363111@g.us"}, "120363111@g.us"),
+    ({"server": "g.us", "user": "120363111"}, "120363111@g.us"),
+    ({"user": "120363111"}, "120363111@g.us"),
+    ("5511999998888@c.us", None),          # conversa, não grupo
+    (None, None), ({}, None), (123, None),
+])
+def test_jid_do_grupo_aceita_string_e_objeto(bruto, esperado):
+    """`str(dict)` nunca termina em `@g.us`: com o id em forma de objeto, TODO
+    grupo era descartado em silêncio e o sync terminava com zero."""
+    from app.services.whatsapp_grupo_sync_service import jid_do_grupo
+
+    assert jid_do_grupo({"id": bruto}) == esperado

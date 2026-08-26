@@ -17,7 +17,8 @@ from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
 from app.schemas.whatsapp_conexoes import (
-    GrupoOut, InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
+    BlacklistCriar, BlacklistOut, ConviteAtivoOut, ConviteOut, GrupoOut,
+    InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
 )
 from app.services.waha_client import ErroWhatsapp, mascarar
 from app.services.whatsapp_grupo_sync_service import WhatsappGrupoSyncService
@@ -203,3 +204,101 @@ def listar_grupos(
         )
         for g in grupos
     ]
+
+
+# --- item 17: blacklist de números -------------------------------------------
+
+
+@router.get("/blacklist", response_model=list[BlacklistOut])
+def listar_blacklist(
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.blacklist_service import BlacklistService
+
+    return BlacklistService(db).listar(current_user.id)
+
+
+@router.post("/blacklist", response_model=BlacklistOut, status_code=201)
+def adicionar_na_blacklist(
+    payload: BlacklistCriar,
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.blacklist_service import BlacklistService, NumeroInvalido
+
+    try:
+        item = BlacklistService(db).adicionar(
+            current_user.id, payload.numero, payload.motivo,
+            payload.remover_dos_grupos,
+        )
+    except NumeroInvalido as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    db.commit()
+    return item
+
+
+@router.delete("/blacklist/{item_id}", status_code=204)
+def remover_da_blacklist(
+    item_id: int,
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.blacklist_service import BlacklistService
+
+    if not BlacklistService(db).remover(current_user.id, item_id):
+        raise HTTPException(status_code=404, detail="Número não encontrado na lista.")
+    db.commit()
+    return None
+
+
+# --- item 18: link de conexão externa ----------------------------------------
+
+
+@router.get("/instancias/{instancia_id}/convites", response_model=list[ConviteAtivoOut])
+def convites_ativos(
+    instancia=Depends(instancia_do_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.conexao_convite_service import ConexaoConviteService
+
+    return ConexaoConviteService(db).ativos_da_instancia(current_user.id, instancia.id)
+
+
+@router.post("/instancias/{instancia_id}/convites", response_model=ConviteOut,
+             status_code=201)
+def criar_convite(
+    request: Request,
+    instancia=Depends(instancia_do_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """
+    Link temporário para OUTRA pessoa escanear o QR deste número.
+
+    Criar um novo revoga os anteriores desta sessão: dois links vivos para o
+    mesmo número significam que o primeiro — que ela talvez tenha mandado no
+    grupo errado — continua funcionando.
+    """
+    from app.services.conexao_convite_service import ConexaoConviteService
+
+    servico = ConexaoConviteService(db)
+    convite, token = servico.criar(current_user.id, instancia.id)
+    db.commit()
+    return ConviteOut(id=convite.id, url=servico.url_publica(token),
+                      expira_em=convite.expira_em)
+
+
+@router.delete("/convites/{convite_id}", status_code=204)
+def revogar_convite(
+    convite_id: int,
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.conexao_convite_service import ConexaoConviteService
+
+    if not ConexaoConviteService(db).revogar(current_user.id, convite_id):
+        raise HTTPException(status_code=404, detail="Link não encontrado.")
+    db.commit()
+    return None

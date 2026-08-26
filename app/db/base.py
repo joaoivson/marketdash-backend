@@ -16,6 +16,12 @@ def _apply_safe_migrations(engine, logger):
         "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS whatsapp_envio_config JSONB",
         # 065 (grupos F7): Leads do Meta por dia.
         "ALTER TABLE campaign_daily_insights ADD COLUMN IF NOT EXISTS leads INTEGER",
+        # 067 (grupos, item 17): a tabela nasceu na 060 e ganhou colunas depois.
+        # `create_all` NÃO altera tabela existente — sem isto, todo ambiente que
+        # já tinha `blacklist_numeros` quebra ao consultá-la.
+        "ALTER TABLE blacklist_numeros ADD COLUMN IF NOT EXISTS numero_mascarado VARCHAR(24)",
+        "ALTER TABLE blacklist_numeros ADD COLUMN IF NOT EXISTS "
+        "remover_dos_grupos BOOLEAN NOT NULL DEFAULT TRUE",
     ]
     from sqlalchemy import text
     try:

@@ -11,6 +11,42 @@
 
 ---
 
+## 2026-08-26 — O sync que dizia "sucesso" e trazia zero
+
+João conectou o dispositivo dele em homologação, sincronizou e não veio grupo
+nenhum. A tela então mandou ele **conectar um número** — o que ele acabara de
+fazer. Dois defeitos, e os dois do mesmo tipo.
+
+**`dados if isinstance(dados, list) else []`.** A documentação do WAHA diz, com
+essas palavras, que a resposta de `/groups` "depende do engine". O código
+respondia a essa incerteza convertendo qualquer formato inesperado em lista
+vazia — e `sync_runs` registrou quatro execuções `success` com `vistos=0`, sem
+uma linha de log. **Um `else []` diante de um contrato que a própria
+documentação diz ser variável não é robustez; é apagar a evidência.** Agora
+envelope conhecido é desembrulhado e formato irreconhecível levanta erro.
+
+O mesmo padrão aparecia no `id` do grupo: `str(dados.get("id"))` comparado com
+`@g.us`. Se o engine devolve o id como objeto, `str(dict)` nunca casa e TODO
+grupo é descartado — de novo, em silêncio. E uma página cheia de itens sem
+nenhum grupo reconhecido agora loga as chaves recebidas: se o formato mudar de
+novo, dá para descobrir em um minuto em vez de uma tarde.
+
+**O segundo defeito é de leitura de estado.** A tela de campanha decidia o que
+mostrar olhando para GRUPOS e concluindo sobre CONEXÃO. Com zero grupos, ela
+afirmava "conecte um número". São dois estados diferentes — "sem dispositivo" e
+"dispositivo conectado, sem grupos" — e cada um tem uma ação diferente. Colapsar
+dois estados num só é o jeito mais rápido de mandar a usuária fazer o que ela já
+fez.
+
+**Nota de ambiente:** no meio disso o `.env` foi migrado para as chaves novas do
+Supabase e o app parou de subir — `Settings` recusa variável não declarada, e
+quatro novas derrubaram a API e a suíte junto. Passou a ignorar desconhecidas.
+Em produção esse padrão é pior: env acrescentada no Coolify viraria crash-loop.
+Um teste também dependia do `.env` da máquina (`WAHA_WEBHOOK_URL` ausente) e
+quebrou quando a variável foi definida — agora ele controla a config.
+
+---
+
 ## 2026-08-26 — Auditoria final: o que sobrevive a um teste não é o que sobrevive a um ataque
 
 Seis auditorias independentes sobre o módulo pronto, cada uma seguida de uma

@@ -43,3 +43,42 @@ class SincronizarOut(BaseModel):
     novos: int
     atualizados: int
     desativados: int
+
+
+# --- item 17: blacklist de números -------------------------------------------
+
+
+class BlacklistCriar(BaseModel):
+    numero: str = Field(min_length=8, max_length=24)
+    motivo: Optional[str] = Field(default=None, max_length=500)
+    # "Não quero que receba" e "quero fora dos meus grupos" são pedidos
+    # diferentes; por isso a escolha é por entrada.
+    remover_dos_grupos: bool = True
+
+
+class BlacklistOut(BaseModel):
+    id: int
+    # Mascarado ("+55 11 ****-4321"): o suficiente para ela reconhecer, e não o
+    # suficiente para virar lista de telefones se vazar. O número em claro não
+    # existe no banco.
+    numero_mascarado: Optional[str]
+    motivo: Optional[str]
+    remover_dos_grupos: bool
+    criado_em: datetime
+
+
+# --- item 18: link de conexão externa ----------------------------------------
+
+
+class ConviteOut(BaseModel):
+    id: int
+    url: str
+    expira_em: datetime
+
+
+class ConviteAtivoOut(BaseModel):
+    """Sem a URL: o token em claro só existe no momento em que é criado. Depois
+    disso nem nós conseguimos remontá-lo — o banco guarda só o hash."""
+    id: int
+    expira_em: datetime
+    criado_em: datetime

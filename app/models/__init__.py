@@ -43,6 +43,7 @@ from app.models.roteiro import (
     TemplateMensagem, TemplateVariacao, BlacklistNumero,
 )
 from app.models.monitoramento import Monitoramento, MonitoramentoCaptura
+from app.models.conexao_convite import ConexaoConvite
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
@@ -58,6 +59,6 @@ __all__ = [
     "CampanhaLink", "CampanhaLinkEvento", "GrupoEvento", "GrupoSnapshot",
     "CampanhaAnuncio",
     "Roteiro", "RoteiroPasso", "RoteiroExecucao", "RoteiroMensagem",
-    "TemplateMensagem", "TemplateVariacao", "BlacklistNumero", "Monitoramento", "MonitoramentoCaptura",
+    "TemplateMensagem", "TemplateVariacao", "BlacklistNumero", "Monitoramento", "MonitoramentoCaptura", "ConexaoConvite",
 ]
 

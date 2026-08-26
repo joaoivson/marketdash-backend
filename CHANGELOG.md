@@ -11,6 +11,63 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-26 (Grupos: itens 17 e 18 da spec + o sync que trazia zero grupos)
+
+Fecha os dois itens que faltavam do módulo e conserta o bug que os testes de
+homologação expuseram: dispositivo conectado, sincronização "bem-sucedida" e
+nenhum grupo.
+
+### Fixed — o sync trazia zero grupos e dizia que deu certo
+
+- **Formato de resposta desconhecido virava lista vazia, em silêncio.** A
+  documentação do WAHA diz que a resposta de `/groups` **depende do engine**, e
+  o código fazia `dados if isinstance(dados, list) else []`: qualquer envelope
+  diferente resultava em zero grupos com o sync marcado como SUCESSO. Foi
+  exatamente o que aconteceu — quatro sincronizações seguidas com `vistos=0` e
+  nenhum log dizendo por quê. Agora envelope conhecido é desembrulhado e
+  formato irreconhecível vira **erro**: zero grupos precisa ser um fato do
+  WhatsApp, nunca um formato que não soubemos ler.
+- **`id` de grupo em forma de objeto descartava tudo.** O identificador vem como
+  texto em alguns engines e como objeto em outros; o filtro comparava
+  `str(objeto)` com `@g.us` e nunca casava. Passa a aceitar as duas formas, e
+  uma página com itens e nenhum grupo reconhecido agora **registra um aviso**
+  com as chaves recebidas, para o próximo caso ser diagnosticável.
+
+### Fixed — a tela dizia para conectar um dispositivo já conectado
+
+Campanhas e a lista de grupos tratavam "sem dispositivo" e "dispositivo
+conectado, mas sem grupos" como o mesmo estado. Com a sincronização vazia, a
+afiliada era mandada conectar um número que ela acabara de conectar — e a ação
+que resolvia (sincronizar) ficava escondida. Os dois estados agora têm texto e
+botão próprios.
+
+### Added
+
+- **Blacklist de números (item 17).** Nova seção em Configurações. Bloqueia o
+  resumo diário e, quando o número entra num grupo, remove — só onde a afiliada
+  é administradora. O número **não é guardado em claro**: vai como HMAC
+  irreversível e a lista mostra `+55 11 ****-4321`, com a explicação na tela.
+  "Não quero que receba" e "quero fora dos meus grupos" são escolhas separadas,
+  por entrada. A tabela existia desde a migration 060 e estava inerte.
+- **Link de conexão externa (item 18).** A afiliada gera um link temporário para
+  quem está com o celular escanear o QR, sem acesso à conta dela. A tela é
+  pública, então o token é tratado como senha: 32 bytes aleatórios, só o hash no
+  banco, 15 minutos, **morre ao conectar** (não no fim do prazo) e gerar outro
+  invalida o anterior. A página não revela nada além do QR, e link inválido,
+  expirado, usado ou revogado mostram o mesmo texto.
+
+### Changed
+
+- "WhatsApp" virou **"Dispositivos"** na navegação das Configurações.
+- A lista de grupos passa a mostrar **qual dispositivo** cada grupo pertence, em
+  vez da contagem — "1" não responde "esse grupo está em qual dos meus números?".
+- Grade de **Ofertas com 6 por linha** a partir de 1280px.
+- **Variável de ambiente desconhecida passa a ser ignorada, não recusada.** O
+  padrão do pydantic derrubava o app inteiro no boot: uma migração das chaves do
+  Supabase acrescentou quatro variáveis ao `.env` e a API parou de subir, junto
+  com a suíte de testes. Em produção o efeito seria pior — qualquer env
+  acrescentada no Coolify viraria crash-loop.
+
 ## [Não versionado] - 2026-08-26 (Auditoria final do Módulo de Grupos — F0 a F8)
 
 Antes de dar o módulo por concluído, seis auditorias independentes varreram os

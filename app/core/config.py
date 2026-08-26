@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # TERCEIROS e a finalidade — replicar uma oferta — é efêmera: passada a
     # janela, guardar não serve a nada e só amplia o que temos de terceiro.
     MONITORAMENTO_RETENCAO_DIAS: int = 30
+    # Vida do link de conexão externa (item 18): o tempo de mandar a
+    # mensagem e a pessoa escanear. A tela é pública, então o token é a
+    # única barreira — prazo curto é parte da proteção.
+    CONEXAO_CONVITE_MINUTOS: int = 15
 
     # --- IA (F4): SÓ gera variações de template na tela de Templates. Nunca no
     # caminho do envio — variação sorteada tem custo zero, latência zero e não
@@ -319,6 +323,18 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        # Variável de ambiente desconhecida é IGNORADA, não rejeitada.
+        #
+        # O padrão do pydantic-settings é recusar, e recusar aqui derruba o app
+        # inteiro no boot: em 26/08/2026 uma migração das chaves do Supabase
+        # acrescentou quatro variáveis novas ao `.env` e a API parou de subir —
+        # e a suíte de testes parou de importar junto. Em produção o efeito é
+        # pior: qualquer env acrescentada no Coolify vira crash-loop.
+        #
+        # O que se perde é a checagem de nome errado (`SUPABSE_KEY=`), que não
+        # protegia de muita coisa: variável obrigatória ausente já falha onde é
+        # usada, com mensagem melhor do que "extra_forbidden".
+        extra = "ignore"
 
 
 settings = Settings()

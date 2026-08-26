@@ -47,6 +47,29 @@ def sub_id_do_grupo(grupo_id: int) -> str:
     return f"wg{base36(grupo_id)}"
 
 
+def jid_do_grupo(dados: Dict[str, Any]) -> Optional[str]:
+    """
+    JID do grupo, aceitando as formas que os engines do WAHA usam.
+
+    O `id` vem como string (`"1203…@g.us"`) em alguns engines e como objeto
+    (`{"_serialized": …}` ou `{"server": "g.us", "user": "1203…"}`) em outros.
+    A versão anterior fazia `str(dados.get("id"))` e testava o sufixo `@g.us`:
+    com a forma de objeto, `str(dict)` nunca casa e **todo grupo era descartado
+    em silêncio** — o sync terminava "com sucesso" e zero grupos.
+    """
+    bruto = dados.get("id")
+    if isinstance(bruto, str):
+        jid = bruto
+    elif isinstance(bruto, dict):
+        jid = str(bruto.get("_serialized") or "")
+        if not jid and bruto.get("user"):
+            jid = f"{bruto['user']}@{bruto.get('server') or 'g.us'}"
+    else:
+        jid = ""
+    jid = jid.strip()
+    return jid if jid.endswith("@g.us") else None
+
+
 def _extrair_agregados(dados: Dict[str, Any], meu_numero: Optional[str]) -> Dict[str, Any]:
     """Conta participantes e descobre o papel do nosso número — em memória."""
     participantes = dados.get("participants") or []
@@ -131,9 +154,11 @@ class WhatsappGrupoSyncService:
         offset = 0
         while True:
             pagina = cliente.listar_grupos(limite=PAGINA, offset=offset)
+            ignorados_na_pagina = 0
             for dados in pagina:
-                jid = str(dados.get("id") or "")
-                if not jid.endswith("@g.us"):
+                jid = jid_do_grupo(dados)
+                if not jid:
+                    ignorados_na_pagina += 1
                     continue
                 vistos += 1
                 agregados = _extrair_agregados(dados, meu_numero)
@@ -154,6 +179,16 @@ class WhatsappGrupoSyncService:
                     vinculo=vinculos.get(grupo.id),
                 )
                 grupo_ids_vistos.append(grupo.id)
+            if ignorados_na_pagina:
+                # Página com itens e nenhum reconhecido como grupo é sintoma de
+                # formato novo, não de conta sem grupos. Sem este log, o sync
+                # termina "com sucesso" e ninguém descobre por quê.
+                logger.warning(
+                    "Sync de grupos: %s de %s itens sem JID reconhecível "
+                    "(chaves do 1º: %s)",
+                    ignorados_na_pagina, len(pagina),
+                    sorted(pagina[0].keys())[:8] if pagina else [],
+                )
             if len(pagina) < PAGINA:
                 break
             offset += PAGINA

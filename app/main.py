@@ -262,6 +262,164 @@ display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 </div></body></html>"""
 
 
+@app.get("/conectar/{token}", response_class=HTMLResponse, include_in_schema=False)
+def pagina_de_conexao_externa(token: str, db: Session = Depends(get_db)):
+    """
+    Tela pública de pareamento (item 18 da spec).
+
+    A afiliada gera o link e manda para quem está com o celular. A pessoa abre,
+    escaneia o QR e o número conecta — sem login, sem acesso a nada da conta.
+
+    Servida pelo BACKEND, como o `/g/{slug}`: é uma página avulsa, sem sessão,
+    e passar pelo SPA obrigaria o bundle inteiro a carregar para mostrar uma
+    imagem. O token é a única barreira, então a página **não revela nada** além
+    do QR: nem nome, nem número, nem a qual conta pertence.
+    """
+    from app.services.conexao_convite_service import (
+        ConexaoConviteService, ConviteInvalido,
+    )
+
+    try:
+        ConexaoConviteService(db).resolver(token)
+    except ConviteInvalido:
+        # Mesma mensagem para inexistente, expirado, usado e revogado: dizer
+        # QUAL deles é ajudar quem está tentando adivinhar.
+        return HTMLResponse(_pagina_simples(
+            "Link expirado",
+            "Peça um link novo para quem te enviou este.",
+        ), status_code=404)
+    return HTMLResponse(_pagina_de_qr(token))
+
+
+@app.get("/api/conectar/{token}/qr", include_in_schema=False)
+def qr_da_conexao_externa(token: str, db: Session = Depends(get_db)):
+    """
+    QR da sessão do convite. Público, e de propósito enxuto: devolve só a
+    imagem e o estado, nunca dados da conta.
+    """
+    from app.repositories.whatsapp_instancia_repository import (
+        WhatsappInstanciaRepository,
+    )
+    from app.services.conexao_convite_service import (
+        ConexaoConviteService, ConviteInvalido,
+    )
+    from app.services.waha_client import ErroWhatsapp
+    from app.services.whatsapp_instancia_service import WhatsappInstanciaService
+
+    servico_convite = ConexaoConviteService(db)
+    try:
+        convite = servico_convite.resolver(token)
+    except ConviteInvalido:
+        return {"estado": "expirado"}
+
+    repo = WhatsappInstanciaRepository(db)
+    instancia = repo.por_id(convite.user_id, convite.instancia_id)
+    if not instancia:
+        return {"estado": "expirado"}
+
+    # `plan_limit_numeros` é inerte aqui: só o caminho que CRIA número lê o
+    # limite, e este endpoint apenas mostra o QR de uma sessão que já existe.
+    servico = WhatsappInstanciaService(repo, plan_limit_numeros=-1,
+                                      webhook_url=_webhook_publico())
+    try:
+        dados = servico.qr(instancia)
+    except ErroWhatsapp:
+        return {"estado": "indisponivel"}
+
+    estado = str(dados.get("estado") or "")
+    if estado == "conectada":
+        # Conectou: o link morre AGORA, não no fim do prazo. Um link de
+        # pareamento ainda válido depois de pareado é um convite para outra
+        # pessoa trocar o número no lugar.
+        servico_convite.marcar_usado(convite)
+        return {"estado": "conectado"}
+    if estado.startswith("erro"):
+        # O motivo fica no log; a página pública não recebe diagnóstico nosso.
+        logger.warning("Conexão externa: %s", estado)
+        return {"estado": "indisponivel"}
+    # A chave é `qrcode`, o mesmo contrato de `InstanciaQrOut` — foi lendo
+    # `qr` que a primeira versão nunca mostrou o código.
+    return {"estado": "aguardando", "qr": dados.get("qrcode")}
+
+
+def _webhook_publico() -> str:
+    """Base pública configurada, nunca `url_for`: atrás do proxy o `url_for`
+    gera `http`, toma 301 e o webhook falha em silêncio."""
+    from app.core.config import settings
+
+    return settings.WAHA_WEBHOOK_URL or ""
+
+
+def _pagina_de_qr(token: str) -> str:
+    from html import escape
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Conectar WhatsApp</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0b1220;color:#e5e7eb;
+margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center">
+<div style="text-align:center;padding:24px;max-width:380px">
+  <h1 style="font-size:20px;margin:0 0 4px">Conectar WhatsApp</h1>
+  <p style="color:#9ca3af;margin:0 0 20px;font-size:14px">
+    No WhatsApp: <b>Aparelhos conectados</b> &rsaquo; <b>Conectar aparelho</b>.
+  </p>
+  <div id="alvo" style="background:#fff;border-radius:12px;padding:12px;
+       min-height:280px;display:flex;align-items:center;justify-content:center">
+    <span style="color:#6b7280;font-size:14px">Carregando…</span>
+  </div>
+  <p id="aviso" style="color:#9ca3af;margin:16px 0 0;font-size:13px">
+    O código muda sozinho a cada poucos segundos.
+  </p>
+</div>
+<script>
+const TOKEN = {escape(repr(token))};
+const alvo = document.getElementById('alvo');
+const aviso = document.getElementById('aviso');
+let parar = false;
+
+function texto(msg, cor) {{
+  alvo.innerHTML = '<span style="color:' + cor + ';font-size:14px;padding:16px">'
+    + msg + '</span>';
+}}
+
+async function tick() {{
+  if (parar) return;
+  try {{
+    const r = await fetch('/api/conectar/' + TOKEN + '/qr', {{cache: 'no-store'}});
+    const d = await r.json();
+    if (d.estado === 'conectado') {{
+      parar = true;
+      texto('Pronto! Número conectado.', '#059669');
+      aviso.textContent = 'Pode fechar esta página.';
+      return;
+    }}
+    if (d.estado === 'expirado') {{
+      parar = true;
+      texto('Este link expirou.', '#b91c1c');
+      aviso.textContent = 'Peça um link novo para quem te enviou este.';
+      return;
+    }}
+    if (d.estado === 'indisponivel' || !d.qr) {{
+      texto('Preparando o código…', '#6b7280');
+      return;
+    }}
+    alvo.innerHTML = '<img alt="QR Code" style="width:100%;max-width:260px" src="'
+      + d.qr + '">';
+  }} catch (e) {{
+    texto('Sem conexão. Tentando de novo…', '#6b7280');
+  }}
+}}
+const timer = setInterval(() => {{
+  if (parar) {{ clearInterval(timer); return; }}
+  tick();
+}}, 4000);
+tick();
+</script>
+</body></html>"""
+
+
 @app.get("/health")
 def health_check():
     """

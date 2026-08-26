@@ -27,6 +27,7 @@ from app.models.campanha_link import (
 )
 from app.repositories.campanha_link_repository import CampanhaLinkRepository
 from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
+from app.services.waha_client import ErroWhatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -125,4 +126,71 @@ class GrupoEventoService:
         self.db.add(grupo)
         self.db.commit()
         logger.info("Grupo %s: %s %s participante(s)", grupo.id, tipo, gravados)
+
+        if tipo == EVENTO_ENTRADA:
+            self._expulsar_bloqueados(user_id, grupo, jids_participantes)
         return gravados
+
+    def _expulsar_bloqueados(self, user_id: int, grupo,
+                             jids_participantes: List[str]) -> None:
+        """
+        Número na blacklist que entra num grupo dela sai na hora.
+
+        Roda DEPOIS do commit do evento de propósito: a entrada aconteceu e tem
+        que constar no histórico mesmo que a remoção falhe — apagar o rastro
+        deixaria a evasão e o "entraram e ficaram" mentindo.
+
+        Só age quando ela é admin do grupo. Sem isso, o WAHA devolve 403 a cada
+        entrada e enche o log com um erro que não é erro.
+        """
+        from app.services.blacklist_service import BlacklistService, numero_de_jid
+
+        if not getattr(grupo, "sou_admin", False):
+            return
+        servico = BlacklistService(self.db)
+        # Uma query para o lote todo: uma entrada em massa (link divulgado)
+        # traz dezenas de JIDs de uma vez, e consultar um a um seria N+1 no
+        # caminho do webhook.
+        por_numero = {numero_de_jid(j or ""): j for j in jids_participantes}
+        por_numero.pop(None, None)
+        bloqueados = servico.bloqueados_entre(user_id, por_numero.keys())
+        if not bloqueados:
+            return
+        for numero in bloqueados:
+            jid = por_numero[numero]
+            item = servico.bloqueado(user_id, numero)
+            if not item or not item.remover_dos_grupos:
+                continue
+            try:
+                self._cliente_do_grupo(user_id, grupo).remover_participante(
+                    grupo.jid, jid
+                )
+                logger.info("Blacklist: participante removido do grupo %s", grupo.id)
+            except ErroWhatsapp as e:
+                # Nunca propaga: isto roda dentro do handler do webhook, e uma
+                # exceção aqui faria o WAHA reenviar o evento em laço.
+                logger.warning("Blacklist: falha ao remover do grupo %s (%s)",
+                               grupo.id, e.motivo)
+            except Exception:
+                logger.exception("Blacklist: falha inesperada ao remover do grupo %s",
+                                 grupo.id)
+
+    def _cliente_do_grupo(self, user_id: int, grupo):
+        """Sessão conectada que é membro deste grupo."""
+        from app.models.whatsapp_grupos import (
+            INSTANCIA_CONECTADA, WhatsappGrupoInstancia, WhatsappInstancia,
+        )
+        from app.services.whatsapp_instancia_service import cliente_da_sessao
+
+        instancia = (
+            self.db.query(WhatsappInstancia)
+            .join(WhatsappGrupoInstancia,
+                  WhatsappGrupoInstancia.instancia_id == WhatsappInstancia.id)
+            .filter(WhatsappGrupoInstancia.grupo_id == grupo.id,
+                    WhatsappInstancia.user_id == user_id,
+                    WhatsappInstancia.status == INSTANCIA_CONECTADA)
+            .first()
+        )
+        if not instancia:
+            raise ErroWhatsapp("sem_instancia", "nenhuma sessão conectada no grupo")
+        return cliente_da_sessao(instancia.nome_instancia)

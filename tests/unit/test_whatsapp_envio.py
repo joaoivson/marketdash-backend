@@ -158,9 +158,30 @@ def test_sair_desliga_todas_as_contas_com_aquele_numero():
 
 # --- lote diário ------------------------------------------------------------
 
+
+class _DbSemBlacklist:
+    """Banco mínimo para o caminho do resumo: nenhuma entrada na blacklist.
+
+    O teste que cobre o BLOQUEIO usa um fake próprio — este aqui existe para
+    que os outros continuem exercitando o caminho feliz sem montar um banco.
+    """
+
+    def query(self, *_a, **_k):
+        return self
+
+    def filter(self, *_a, **_k):
+        return self
+
+    def first(self):
+        return None
+
+
 def _envio(repo, cliente, dormir=None):
     return WhatsappEnvioService(
-        db=None, repo=repo, cliente=cliente,
+        # `db` deixou de ser opcional: o envio consulta a blacklist de números
+        # antes de mandar o resumo. Passar None aqui esconderia essa checagem
+        # justamente dos testes que cobrem o envio.
+        db=_DbSemBlacklist(), repo=repo, cliente=cliente,
         buscar_usuario=lambda uid: SimpleNamespace(name="Maria Silva"),
         dormir=dormir or (lambda s: None),
     )
@@ -177,7 +198,7 @@ class _EnvioComResumoFixo(WhatsappEnvioService):
 
 def _servico(repo, cliente, dormir=None):
     return _EnvioComResumoFixo(
-        db=None, repo=repo, cliente=cliente,
+        db=_DbSemBlacklist(), repo=repo, cliente=cliente,
         buscar_usuario=lambda uid: SimpleNamespace(name="Maria Silva"),
         dormir=dormir or (lambda s: None),
     )

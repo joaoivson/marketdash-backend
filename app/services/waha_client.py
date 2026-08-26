@@ -104,6 +104,34 @@ def validar_jid_de_grupo(jid: str) -> str:
     return jid
 
 
+def _lista_de_grupos(dados: Any) -> List[Dict[str, Any]]:
+    """
+    Normaliza a resposta de `/groups` para uma lista.
+
+    A documentação do WAHA diz, com todas as letras, que a resposta **depende do
+    engine**. A versão anterior fazia `dados if isinstance(dados, list) else []`:
+    qualquer formato diferente virava zero grupos, com o sync marcado como
+    SUCESSO. Foi exatamente o que aconteceu — quatro sincronizações seguidas
+    "bem-sucedidas" com `vistos=0` e nenhum log dizendo por quê.
+
+    Aqui: lista é lista; envelope conhecido é desembrulhado; e qualquer outra
+    coisa vira ERRO, não vazio. Zero grupos precisa ser um fato do WhatsApp,
+    nunca um formato que não soubemos ler.
+    """
+    if isinstance(dados, list):
+        return dados
+    if isinstance(dados, dict):
+        for chave in ("groups", "data", "items", "results"):
+            valor = dados.get(chave)
+            if isinstance(valor, list):
+                logger.info("Grupos vieram embrulhados em %r — desembrulhado", chave)
+                return valor
+    raise ErroWhatsapp(
+        "grupos",
+        f"formato inesperado de /groups: {type(dados).__name__} "
+        f"{str(dados)[:120]}",
+    )
+
 class WahaClient:
     def __init__(self, base_url: Optional[str], api_key: Optional[str],
                  sessao: Optional[str], timeout: float = 20.0):
@@ -264,7 +292,8 @@ class WahaClient:
             if any(p in detalhe.lower() for p in ("not working", "stopped", "scan_qr", "starting")):
                 raise ErroWhatsapp("desconectado", detalhe)
             raise ErroWhatsapp("grupos", f"status {status}: {detalhe}")
-        return dados if isinstance(dados, list) else []
+        return _lista_de_grupos(dados)
+
 
     def convite_do_grupo(self, jid: str) -> Optional[str]:
         """Link de convite (só funciona quando o número é admin do grupo)."""
@@ -304,6 +333,32 @@ class WahaClient:
             raise ErroWhatsapp("grupo_invalido", detalhe)
         # 5xx / erro transitório NÃO é grupo inválido: classificar assim
         # desativaria grupos bons em lote (um passo, N grupos).
+        raise ErroWhatsapp("acao", f"status {status}: {detalhe}")
+
+    def remover_participante(self, jid_grupo: str, jid_participante: str) -> None:
+        """
+        POST /api/{sessao}/groups/{id}/participants/remove — só como admin.
+
+        Usado pela blacklist quando um número bloqueado entra num grupo. Mesma
+        classificação de erro do `renomear_grupo`: 403 é "não sou admin DESTE
+        grupo", nunca credencial inválida — tratar como `auth` desconectaria o
+        número inteiro por causa de um grupo em que ela não manda.
+        """
+        status, dados = self._pedir(
+            "POST",
+            f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid_grupo)}"
+            "/participants/remove",
+            {"participants": [{"id": jid_participante}]},
+            auth_em_403=False,
+        )
+        if status < 400:
+            return
+        detalhe = str(dados)[:150]
+        d = detalhe.lower()
+        if status == 403 or any(p in d for p in ("admin", "forbidden", "not authorized")):
+            raise ErroWhatsapp("sem_permissao", detalhe)
+        if any(p in d for p in ("not exist", "not found", "jid", "no longer")):
+            raise ErroWhatsapp("grupo_invalido", detalhe)
         raise ErroWhatsapp("acao", f"status {status}: {detalhe}")
 
     # --- envio -------------------------------------------------------------
