@@ -11,6 +11,31 @@
 
 ---
 
+## 2026-08-26 — Grupos F5: Ofertas (productOfferV2) e integracoes
+
+**A limitação da API define o produto, não o contrário.** `productOfferV2`
+exige `keyword` na prática (sem ela devolve vazio mesmo com categoria) e
+ignora `sortType` quando a busca é por categoria. Insistir num "catálogo
+navegável por categoria + ordenação" seria construir uma tela que a API não
+sustenta. A tela virou busca por termo — e quando a afiliada escolhe só
+categoria, mandamos o nome dela como keyword.
+
+**Filtro honesto.** Comissão/preço/desconto são aplicados por nós sobre a
+página retornada, porque a API não filtra por eles. A tela diz isso em uma
+linha em vez de fingir que filtrou o catálogo inteiro.
+
+**Migração de credencial em dois deploys.** `integracoes` nasceu com backfill
+e escrita dupla; a leitura só vira no próximo ciclo, e `shopee_integrations`
+não é dropada. O `credenciais_de` lê os dois formatos (JSON do backfill com
+campo interno cifrado, e JSON cifrado inteiro) — é isso que permite os dois
+conviverem sem migração big-bang.
+
+**Achado de revisão que valia ouro:** o upsert é por (usuária, marketplace,
+nome), então adicionar uma SEGUNDA conta sem nome sobrescrevia a primeira em
+silêncio, com toast de sucesso.
+
+---
+
 ## 2026-08-26 — Grupos F4: roteiros, templates e a IA no lugar certo
 
 **`payload: list` sem genérico é uma armadilha do FastAPI.** A rota de salvar
