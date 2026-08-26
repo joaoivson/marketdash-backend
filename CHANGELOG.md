@@ -45,6 +45,33 @@ escondeu isto — a tela dizia "nenhum grupo ainda" e não havia como distinguir
 "a conta não tem grupos" de "vieram 499 e não entendemos nenhum". `ignorados`
 passou a viajar na resposta e a aparecer na tela.
 
+
+### Desdobramento: o convite chegava e era jogado fora
+
+Com os 499 grupos entrando, o sync real mostrou **169 grupos de admin e zero
+links de convite**. A falha era silenciosa — `convite_do_grupo` devolvia `None`
+em qualquer 4xx e quem chamava engolia a exceção, o mesmo padrão que tinha
+acabado de custar dias. Instrumentado, o motivo apareceu na primeira execução,
+gravado em `sync_runs.details`:
+
+```
+convite: resposta sem código: {'texto': 'https://chat.whatsapp.com/FG7Oij…'}
+```
+
+O WAHA devolve o **link inteiro em texto puro**, não JSON — e por isso caía no
+invólucro `{"texto": …}` que o `_pedir` usa para corpo não-JSON. `dados.get("code")`
+dava `None`. O link estava chegando o tempo todo.
+
+E o teste dessa correção descobriu algo pior: **403 no `invite-code` era
+classificado como `auth`, que é motivo FATAL**. Um único grupo onde não somos
+admin — ou que simplesmente não permite convite — marcaria o **número inteiro**
+como desconectado, e o sync passa por centenas de grupos de uma vez.
+`renomear_grupo` já tratava isso com `auth_em_403=False`; o convite tinha ficado
+de fora. Com 169 grupos de admin, era questão de tempo.
+
+O diagnóstico agora fica em `sync_runs.details` e é auditável em
+`/admin/sincronizacoes`, sem precisar de acesso ao log do container.
+
 ## [Não versionado] - 2026-08-26 (Documentação de promoção + o proxy que apontava para produção)
 
 Documento único de promoção para produção — `docs/PROMOCAO_PARA_PRODUCAO.md` —
