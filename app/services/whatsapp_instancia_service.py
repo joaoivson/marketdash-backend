@@ -26,7 +26,10 @@ logger = logging.getLogger(__name__)
 # Sessão de aluna nasce SÓ com o evento de estado — nenhum conteúdo de mensagem
 # chega ao backend (anti webhook-storm + LGPD). `group.v2.participants` entra
 # na F6; `message` só em sessão com monitoramento ativo (F8).
-EVENTOS_DE_ALUNA = ["session.status"]
+# `group.v2.participants` entra na F6: é a ÚNICA forma de saber quem entrou e
+# quem saiu (diff de snapshot só dá contagem líquida e inviabiliza "entraram e
+# ficaram"). Continua sem `message`: conteúdo de grupo não chega ao backend.
+EVENTOS_DE_ALUNA = ["session.status", "group.v2.participants"]
 
 
 class LimiteDeNumeros(Exception):

@@ -228,6 +228,8 @@ async def webhook(
         _tratar_status(db, nome_sessao, evento, payload)
     elif tipo == "message":
         _tratar_mensagem(db, nome_sessao, payload)
+    elif tipo in ("group.v2.participants", "group.participants"):
+        _tratar_participantes(db, nome_sessao, payload)
     return {"ok": True}
 
 
@@ -246,6 +248,40 @@ def _tratar_status(db: Session, nome_sessao: str, evento: dict, payload: dict) -
     me = (evento or {}).get("me") or {}
     numero = numero_de_jid(me.get("id")) or None
     aplicar_evento_de_status(repo, instancia, status_waha, numero)
+
+
+def _tratar_participantes(db: Session, nome_sessao: str, payload: dict) -> None:
+    """
+    Entradas e saídas de grupo (F6). Só sessões DESTE ambiente, e só de quem
+    conhecemos — evento de sessão alheia é descartado em silêncio.
+
+    O JID do participante vira hash no service, antes de qualquer persistência.
+    """
+    if not pertence_a_este_ambiente(nome_sessao):
+        return
+    repo = WhatsappInstanciaRepository(db)
+    instancia = repo.por_nome(nome_sessao)
+    if not instancia:
+        return
+
+    grupo_jid = str(((payload.get("group") or {}).get("id")) or "")
+    acao = str(payload.get("type") or "")
+    participantes = [
+        str((p or {}).get("id") or "")
+        for p in (payload.get("participants") or [])
+    ]
+    if not grupo_jid or not participantes:
+        return
+
+    from app.services.grupo_evento_service import GrupoEventoService
+
+    try:
+        GrupoEventoService(db).registrar(instancia.user_id, grupo_jid, acao,
+                                         participantes)
+    except Exception:
+        db.rollback()
+        # Webhook nunca propaga exceção: o WAHA reenviaria o evento em loop.
+        logger.exception("Falha ao registrar evento de participantes")
 
 
 def _tratar_mensagem(db: Session, nome_sessao: str, payload: dict) -> None:

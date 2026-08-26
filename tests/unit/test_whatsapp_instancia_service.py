@@ -76,8 +76,10 @@ def test_criar_provisiona_sessao_no_waha(monkeypatch):
     assert inst.nome_exibicao == "Meu número"
     assert inst.user_id == 7
     assert len(criadas) == 1
-    # Sessão de aluna nasce SÓ com session.status — sem conteúdo de mensagem.
-    assert criadas[0][0]["events"] == ["session.status"]
+    # Sessão de aluna assina estado + entradas/saídas de participantes (F6).
+    # NUNCA `message`: conteúdo de grupo não chega ao backend (LGPD).
+    assert criadas[0][0]["events"] == ["session.status", "group.v2.participants"]
+    assert "message" not in criadas[0][0]["events"]
     assert criadas[0][0]["url"] == "https://api/x/webhook"
 
 

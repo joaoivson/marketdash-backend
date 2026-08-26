@@ -21,6 +21,7 @@ from app.schemas.campanhas_grupos import (
 from app.services.campanha_grupos_service import (
     CampanhaGruposService, GrupoInvalido, LimiteDeCampanhas,
 )
+from app.services.campanha_link_service import CampanhaLinkService
 
 logger = logging.getLogger(__name__)
 
@@ -142,3 +143,66 @@ def definir_grupos(
     grupos = _grupos_out(servico, campanha)
     base = _out(campanha, len(grupos))
     return CampanhaDetalheOut(**base.model_dump(), grupos=grupos)
+
+
+# --- link de entrada (F6) ----------------------------------------------------
+
+
+@router.get("/{campanha_id}/link")
+def obter_link(campanha=Depends(campanha_da_usuaria), db: Session = Depends(get_db)):
+    """Cria na primeira visita — a afiliada não precisa 'gerar' nada."""
+    from app.core.config import settings
+
+    link = CampanhaLinkService(db).obter_ou_criar(campanha)
+    base = (settings.FRONTEND_URL or "https://marketdash.com.br").rstrip("/")
+    return {
+        "id": link.id,
+        "slug": link.slug,
+        "url": f"{base}/g/{link.slug}",
+        "url_teste": f"{base}/g/preview/{link.slug}",
+        "titulo_previa": link.titulo_previa,
+        "descricao_previa": link.descricao_previa,
+        "banner_previa_url": link.banner_previa_url,
+        "pixel_facebook_id": link.pixel_facebook_id,
+        "pixel_eventos": link.pixel_eventos,
+        "ativo": link.ativo,
+    }
+
+
+@router.patch("/{campanha_id}/link")
+def atualizar_link(
+    payload: dict,
+    campanha=Depends(campanha_da_usuaria),
+    db: Session = Depends(get_db),
+):
+    servico = CampanhaLinkService(db)
+    link = servico.obter_ou_criar(campanha)
+    servico.atualizar(link, payload or {})
+    return obter_link(campanha=campanha, db=db)
+
+
+@router.get("/{campanha_id}/atividade")
+def atividade(
+    limite: int = 50,
+    campanha=Depends(campanha_da_usuaria),
+    db: Session = Depends(get_db),
+):
+    """Feed de entradas e saídas dos grupos da campanha (sem dado pessoal)."""
+    from app.repositories.campanha_link_repository import CampanhaLinkRepository
+
+    servico = CampanhaGruposService(db)
+    pares = servico.grupos_da_campanha(campanha)
+    nomes = {g.id: g.nome for _v, g in pares}
+    eventos = CampanhaLinkRepository(db).atividade(list(nomes), min(int(limite or 50), 200))
+    return {
+        "eventos": [
+            {
+                "tipo": e.tipo,
+                "origem": e.origem,
+                "grupo_id": e.grupo_id,
+                "grupo": nomes.get(e.grupo_id),
+                "quando": e.criado_em.isoformat() if e.criado_em else None,
+            }
+            for e in eventos
+        ]
+    }

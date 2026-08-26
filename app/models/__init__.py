@@ -34,6 +34,9 @@ from app.models.whatsapp import WhatsappOptin, WhatsappEnvio
 from app.models.whatsapp_grupos import WhatsappInstancia, WhatsappGrupo, WhatsappGrupoInstancia
 from app.models.campanha_grupos import Campanha, CampanhaGrupo
 from app.models.integracao import Integracao
+from app.models.campanha_link import (
+    CampanhaLink, CampanhaLinkEvento, GrupoEvento, GrupoSnapshot,
+)
 from app.models.roteiro import (
     Roteiro, RoteiroPasso, RoteiroExecucao, RoteiroMensagem,
     TemplateMensagem, TemplateVariacao, BlacklistNumero,
@@ -50,6 +53,7 @@ __all__ = [
     "WhatsappOptin", "WhatsappEnvio",
     "WhatsappInstancia", "WhatsappGrupo", "WhatsappGrupoInstancia",
     "Campanha", "CampanhaGrupo", "Integracao",
+    "CampanhaLink", "CampanhaLinkEvento", "GrupoEvento", "GrupoSnapshot",
     "Roteiro", "RoteiroPasso", "RoteiroExecucao", "RoteiroMensagem",
     "TemplateMensagem", "TemplateVariacao", "BlacklistNumero",
 ]

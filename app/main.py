@@ -1,4 +1,4 @@
-from fastapi import FastAPI, status, Depends
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -152,6 +152,114 @@ def custom_link_og(slug: str, db: Session = Depends(get_db)):
 <body></body>
 </html>"""
     return HTMLResponse(content=html)
+
+
+@app.get("/g/{slug}", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/g/preview/{slug}", response_class=HTMLResponse, include_in_schema=False)
+def link_de_entrada(slug: str, request: Request, db: Session = Depends(get_db)):
+    """
+    Link de entrada da campanha de grupos (F6).
+
+    Servido pelo BACKEND, não pelo frontend, por dois motivos que não são
+    negociáveis: o crawler do WhatsApp não executa JS (a prévia customizada só
+    existe com OG tags server-side) e o pixel do Facebook precisa disparar
+    ANTES do redirecionamento para o convite.
+
+    `/g/preview/{slug}` roteia igual, mas o clique nasce `is_teste` e não entra
+    em métrica nenhuma — a afiliada testa o próprio link sem sujar o número.
+    """
+    from html import escape
+
+    from app.services.campanha_link_service import (
+        CampanhaLinkService, LinkInvalido, SemVaga,
+    )
+
+    is_preview = request.url.path.startswith("/g/preview/")
+    servico = CampanhaLinkService(db)
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (
+        request.client.host if request.client else None
+    )
+    try:
+        link, convite = servico.rotear(
+            slug, ip=ip,
+            user_agent=request.headers.get("user-agent"),
+            referer=request.headers.get("referer"),
+            is_preview=is_preview,
+        )
+    except SemVaga:
+        return HTMLResponse(status_code=200, content=_pagina_simples(
+            "Vagas esgotadas",
+            "Todos os grupos estão cheios no momento. Tente de novo mais tarde.",
+        ))
+    except LinkInvalido:
+        return HTMLResponse(status_code=404, content=_pagina_simples(
+            "Link indisponível", "Este link não está mais ativo."
+        ))
+
+    previa = servico.dados_da_previa(link)
+    titulo = escape(previa["titulo"] or "", quote=True)
+    descricao = escape(previa["descricao"] or "", quote=True)
+    imagem = escape(previa["imagem"] or "", quote=True)
+    destino = escape(convite, quote=True)
+
+    eventos = link.pixel_eventos or {}
+    pixel_js = ""
+    if link.pixel_facebook_id:
+        pixel_id = escape(link.pixel_facebook_id, quote=True)
+        disparos = []
+        if eventos.get("pageview", True):
+            disparos.append("fbq('track','PageView');")
+        if eventos.get("lead", True):
+            disparos.append("fbq('track','Lead');")
+        pixel_js = f"""<script>
+!function(f,b,e,v,n,t,s){{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)}};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}}(window,
+document,'script','https://connect.facebook.net/en_US/fbevents.js');
+fbq('init','{pixel_id}');{''.join(disparos)}
+</script>"""
+
+    # 1,2s de folga para o pixel sair antes do redirect; o link também é
+    # clicável, para quem tiver JS/refresh bloqueado.
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta property="og:title" content="{titulo}">
+<meta property="og:description" content="{descricao}">
+<meta property="og:image" content="{imagem}">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<title>{titulo}</title>
+{pixel_js}
+<meta http-equiv="refresh" content="1;url={destino}">
+</head>
+<body style="font-family:system-ui,sans-serif;background:#0b1220;color:#e5e7eb;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<div style="text-align:center;padding:24px">
+<p style="font-size:18px;margin:0 0 12px">Entrando no grupo…</p>
+<a href="{destino}" style="color:#7CB8F2">Toque aqui se não abrir sozinho</a>
+</div>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+def _pagina_simples(titulo: str, mensagem: str) -> str:
+    from html import escape
+
+    return f"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape(titulo)}</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0b1220;color:#e5e7eb;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<div style="text-align:center;padding:24px">
+<h1 style="font-size:20px;margin:0 0 8px">{escape(titulo)}</h1>
+<p style="color:#9ca3af;margin:0">{escape(mensagem)}</p>
+</div></body></html>"""
 
 
 @app.get("/health")

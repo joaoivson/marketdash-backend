@@ -246,6 +246,54 @@ def cron_roteiros(
     return {"enfileiradas": ids, "resgatadas": resgatadas}
 
 
+@router.post("/cron/grupos-snapshot", status_code=status.HTTP_202_ACCEPTED)
+def cron_grupos_snapshot(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """
+    Retrato diário dos grupos (F6) + reconciliação de sessões órfãs no WAHA.
+    1×/dia: sync pesado de hora em hora foi o que derrubou o banco em 20/07.
+    """
+    caller_ip = request.client.host if request.client else None
+    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
+    background_tasks.add_task(_rodar_snapshot_de_grupos)
+    return {"status": "agendado"}
+
+
+def _rodar_snapshot_de_grupos() -> None:
+    from app.db.session import SessionLocal
+    from app.models.whatsapp_grupos import INSTANCIA_CONECTADA, WhatsappInstancia
+    from app.services.grupo_snapshot_service import reconciliar_orfas, snapshot_do_usuario
+
+    db = SessionLocal()
+    try:
+        user_ids = [
+            uid for (uid,) in db.query(WhatsappInstancia.user_id)
+            .filter(WhatsappInstancia.status == INSTANCIA_CONECTADA)
+            .distinct().all()
+        ]
+        total = {"usuarias": 0, "grupos": 0, "erros": 0}
+        for user_id in user_ids:
+            try:
+                r = snapshot_do_usuario(db, user_id)
+                total["usuarias"] += 1
+                total["grupos"] += r["grupos"]
+                total["erros"] += r["erros"]
+            except Exception:
+                db.rollback()
+                total["erros"] += 1
+                logger.exception("Snapshot falhou para user %s", user_id)
+        orfas = reconciliar_orfas(db)
+        logger.info("Snapshot diário: %s | sessões órfãs removidas: %s", total, orfas)
+    except Exception:
+        logger.exception("Snapshot diário de grupos falhou por inteiro")
+    finally:
+        db.close()
+
+
 @router.get("/cron/health", status_code=status.HTTP_200_OK)
 def cron_health(
     request: Request,

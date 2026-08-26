@@ -11,6 +11,26 @@
 
 ---
 
+## 2026-08-26 — Grupos F6: link de entrada, eventos e o hash de terceiro
+
+**Página no backend, não no SPA.** O crawler do WhatsApp não executa JS: a
+prévia customizada só existe com OG tags server-side, e o pixel tem que
+disparar antes do redirect. O frontend passou a encaminhar `/g/*` por proxy
+(nginx + vite) para o domínio continuar sendo o da spec — a revisão pegou que
+sem isso TODO link cairia no NotFound.
+
+**Diff de snapshot não substitui o evento.** Contagem líquida não diz quem
+entrou nem quem saiu, e "entraram e ficaram" (o denominador do custo por
+permanência) exige casar as duas pontas por identificador. Daí o
+`group.v2.participants` — com o número virando `sha256(jid+salt)` no handler,
+antes de qualquer persistência.
+
+**Uma transação para escolher e registrar.** `FOR UPDATE SKIP LOCKED` no
+vínculo campanha↔grupo: dois cliques simultâneos nunca recebem o mesmo último
+lugar do grupo que está lotando.
+
+---
+
 ## 2026-08-26 — Grupos F5: Ofertas (productOfferV2) e integracoes
 
 **A limitação da API define o produto, não o contrário.** `productOfferV2`
