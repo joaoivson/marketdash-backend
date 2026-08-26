@@ -29,9 +29,11 @@ class _FakeRepoInstancias:
         return instancia
 
 
-def _instancia(nome="mkdXXXXu1xabcd", status=INSTANCIA_CRIADA, numero=None):
+def _instancia(nome="mkdXXXXu1xabcd", status=INSTANCIA_CRIADA, numero=None,
+               user_id=1):
     return _FakeInstancia(nome_instancia=nome, status=status, numero=numero,
-                          falhas_seguidas=3, ultima_conexao_em=None)
+                          falhas_seguidas=3, ultima_conexao_em=None,
+                          user_id=user_id, id=1)
 
 
 @pytest.fixture
@@ -161,3 +163,89 @@ def test_evento_atrasado_nao_ressuscita_instancia_removida(ambiente, monkeypatch
     _tratar_status(None, "mkdXXXXu1xabcd", {}, {"status": "STOPPED"})
     assert inst.status == INSTANCIA_REMOVIDA
     assert repo.salvas == []
+
+
+# --- F8: mensagem de grupo em sessão de aluna -------------------------------
+
+
+class _DbFalso:
+    """Só o suficiente para provar o que o handler faz ANTES de tocar no banco."""
+    def __init__(self, grupo=None):
+        self.grupo = grupo
+        self.consultas = 0
+        self.commits = 0
+        self.rollbacks = 0
+
+    def query(self, *_a, **_k):
+        self.consultas += 1
+        return self
+
+    def filter(self, *_a, **_k):
+        return self
+
+    def first(self):
+        return self.grupo
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def _payload_de_grupo(texto="Oferta https://shopee.com.br/x",
+                      de="120363000000000001@g.us", from_me=False):
+    return {"from": de, "body": texto, "fromMe": from_me}
+
+
+def test_conversa_privada_em_sessao_de_aluna_nao_entra_no_monitoramento(
+        ambiente, monkeypatch):
+    """Monitoramento é de GRUPO. Mensagem direta no número da afiliada não pode
+    sequer chegar a consultar o banco."""
+    repo = _FakeRepoInstancias([_instancia()])
+    _com_repo(monkeypatch, repo)
+    db = _DbFalso()
+
+    _tratar_mensagem(db, "mkdXXXXu1xabcd", _payload_de_grupo(de="5511999@c.us"))
+    assert db.consultas == 0
+
+
+def test_mensagem_propria_nao_e_capturada(ambiente, monkeypatch):
+    """Sem isso, o próprio envio da afiliada voltaria como captura e ela
+    replicaria a si mesma em loop."""
+    repo = _FakeRepoInstancias([_instancia()])
+    _com_repo(monkeypatch, repo)
+    db = _DbFalso()
+
+    _tratar_mensagem(db, "mkdXXXXu1xabcd", _payload_de_grupo(from_me=True))
+    assert db.consultas == 0
+
+
+def test_mensagem_de_grupo_vazia_e_ignorada(ambiente, monkeypatch):
+    """Mídia sem legenda não tem o que replicar."""
+    repo = _FakeRepoInstancias([_instancia()])
+    _com_repo(monkeypatch, repo)
+    db = _DbFalso()
+
+    _tratar_mensagem(db, "mkdXXXXu1xabcd", _payload_de_grupo(texto="   "))
+    assert db.consultas == 0
+
+
+def test_sessao_de_outro_ambiente_nao_captura(ambiente, monkeypatch):
+    """hml e produção podem dividir o mesmo servidor WAHA."""
+    repo = _FakeRepoInstancias([_instancia()])
+    _com_repo(monkeypatch, repo)
+    db = _DbFalso()
+
+    _tratar_mensagem(db, "mkdZZZZu1xabcd", _payload_de_grupo())
+    assert db.consultas == 0
+
+
+def test_grupo_desconhecido_nao_captura(ambiente, monkeypatch):
+    """Grupo que não é da usuária desta sessão: nada a fazer, e nada gravado."""
+    repo = _FakeRepoInstancias([_instancia()])
+    _com_repo(monkeypatch, repo)
+    db = _DbFalso(grupo=None)
+
+    _tratar_mensagem(db, "mkdXXXXu1xabcd", _payload_de_grupo())
+    assert db.commits == 0

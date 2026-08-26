@@ -60,7 +60,10 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "limites": {"paginas_captura": -1, "links": -1, "whatsapp_numeros": 3, "whatsapp_grupos": -1, "campanhas_grupos": -1,
                     # 240 (=3×80/instância) — decisão João 25/08; o teto por
                     # instância é quem manda na prática, este é o do PLANO.
-                    "whatsapp_msgs_dia": 240},
+                    "whatsapp_msgs_dia": 240,
+                    # Monitoramento (F8): cada um faz a sessão assinar o evento
+                    # `message`. O teto é de RAM e de privacidade, não comercial.
+                    "monitoramentos": 3},
         "label": "Max",
     },
 }

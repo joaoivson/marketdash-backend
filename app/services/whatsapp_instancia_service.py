@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 EVENTOS_DE_ALUNA = ["session.status", "group.v2.participants"]
 
 
+EVENTO_DE_MONITORAMENTO = "message"
+
+
+class EnvioEmAndamento(Exception):
+    """Reconfigurar a sessão agora derrubaria um lote no meio."""
+
+
 class LimiteDeNumeros(Exception):
     """A afiliada bateu no limite do plano."""
 
@@ -55,6 +62,120 @@ def nome_de_instancia(user_id: int) -> str:
 
 def cliente_da_sessao(nome_instancia: str) -> WahaClient:
     return WahaClient(settings.WAHA_URL, settings.WAHA_API_KEY, nome_instancia)
+
+
+def eventos_desejados(precisa_de_message: bool) -> List[str]:
+    """Lista de eventos que a sessão DEVE ter assinado agora."""
+    eventos = list(EVENTOS_DE_ALUNA)
+    if precisa_de_message and EVENTO_DE_MONITORAMENTO not in eventos:
+        eventos.append(EVENTO_DE_MONITORAMENTO)
+    return eventos
+
+
+def _precisa_reconfigurar(instancia, desejados: List[str]) -> bool:
+    """A sessão está com uma lista de eventos diferente da desejada?
+
+    None-safe: sessão fora do ar responde "não precisa" — quem repara é o cron
+    diário de reconciliação, não o clique da afiliada.
+    """
+    try:
+        info = cliente_da_sessao(instancia.nome_instancia).sessao_info() or {}
+    except ErroWhatsapp:
+        return False
+    for wh in (((info.get("config") or {}).get("webhooks")) or []):
+        return sorted(list(wh.get("events") or [])) != sorted(desejados)
+    return True     # sessão sem webhook configurado: reconfigurar é o certo
+
+
+def _ha_envio_em_andamento(db, user_id: int) -> bool:
+    from app.models.roteiro import EXEC_ENVIANDO, RoteiroExecucao
+
+    return (
+        db.query(RoteiroExecucao)
+        .filter(RoteiroExecucao.user_id == user_id,
+                RoteiroExecucao.status == EXEC_ENVIANDO)
+        .first()
+    ) is not None
+
+
+def sincronizar_eventos(db, instancia, precisa_de_message: bool,
+                        webhook_url: str, verificar_envio: bool = True) -> bool:
+    """
+    Alinha os eventos assinados da sessão com o estado do monitoramento.
+
+    Devolve True se reconfigurou. Não faz nada quando já está alinhado — o
+    `PUT /api/sessions/{sessao}` **reinicia a sessão**, e reiniciar à toa
+    derruba a conexão de um número por nada.
+
+    Levanta `EnvioEmAndamento` se houver execução enviando para esta usuária:
+    o restart mataria o lote no meio. As linhas não duplicam (o claim garante
+    isso), mas o envio pararia sem a afiliada entender por quê — melhor recusar
+    com uma frase clara do que fazer o estrago e explicar depois.
+
+    `verificar_envio=False` é para quem já checou ANTES de mexer em qualquer
+    sessão (ver `sincronizar_todas`): com várias sessões, checar por sessão
+    deixaria a primeira reconfigurada e a segunda recusada.
+    """
+    if not (webhook_url or "").strip():
+        # Guarda dura: `config_de_webhook("")` gravaria `url: ""` na sessão e ela
+        # perderia TODO o webhook — `session.status` (o número cairia e a tela
+        # continuaria "conectada"), `group.v2.participants` (F6) e o próprio
+        # `message` que o toggle acabou de pedir.
+        logger.error("Sem URL de webhook: sessão %s não reconfigurada",
+                     getattr(instancia, "nome_instancia", "?"))
+        return False
+    desejados = eventos_desejados(precisa_de_message)
+    if not _precisa_reconfigurar(instancia, desejados):
+        return False
+    if verificar_envio and _ha_envio_em_andamento(db, instancia.user_id):
+        raise EnvioEmAndamento(
+            "Há um envio em andamento neste número. Tente de novo quando ele "
+            "terminar — mudar isso agora reiniciaria a conexão e pararia o envio."
+        )
+    cliente_da_sessao(instancia.nome_instancia).atualizar_sessao(
+        config_de_webhook(webhook_url, desejados)
+    )
+    logger.info("Sessão %s reconfigurada: eventos=%s",
+                instancia.nome_instancia, desejados)
+    return True
+
+
+def sincronizar_todas(db, instancias, precisa_por_instancia: Dict[int, bool],
+                      webhook_url: str) -> int:
+    """
+    Alinha VÁRIAS sessões como uma operação só: ou todas as que precisam mudam,
+    ou nenhuma muda.
+
+    Reconfigurar sessão por sessão deixaria a primeira reiniciada e a segunda
+    recusada por envio em andamento — e aí o banco diverge do que as sessões
+    realmente escutam, que é o pior estado possível para este módulo.
+    """
+    if not (webhook_url or "").strip():
+        logger.error("Sem URL de webhook: nenhuma sessão reconfigurada")
+        return 0
+    pendentes = [
+        i for i in instancias
+        if _precisa_reconfigurar(i, eventos_desejados(
+            precisa_por_instancia.get(i.id, False)))
+    ]
+    if not pendentes:
+        return 0
+    if any(_ha_envio_em_andamento(db, i.user_id) for i in pendentes):
+        raise EnvioEmAndamento(
+            "Há um envio em andamento. Tente de novo quando ele terminar — "
+            "mudar isso agora reiniciaria a conexão e pararia o envio."
+        )
+    # Aplica direto: `pendentes` já foi filtrado por `_precisa_reconfigurar`, e
+    # re-perguntar chamaria `GET /api/sessions/{s}` uma segunda vez por número.
+    feitas = 0
+    for i in pendentes:
+        cliente_da_sessao(i.nome_instancia).atualizar_sessao(
+            config_de_webhook(webhook_url,
+                              eventos_desejados(precisa_por_instancia.get(i.id, False)))
+        )
+        logger.info("Sessão %s reconfigurada", i.nome_instancia)
+        feitas += 1
+    return feitas
 
 
 def config_de_webhook(url: str, eventos: Optional[List[str]] = None) -> List[Dict[str, Any]]:

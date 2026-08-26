@@ -254,7 +254,8 @@ def cron_grupos_snapshot(
     x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
 ):
     """
-    Retrato diário dos grupos (F6) + reconciliação de sessões órfãs no WAHA.
+    Retrato diário dos grupos (F6) + reconciliação de sessões órfãs no WAHA
+    + realinhamento dos eventos assinados por sessão (F8).
     1×/dia: sync pesado de hora em hora foi o que derrubou o banco em 20/07.
     """
     caller_ip = request.client.host if request.client else None
@@ -266,7 +267,9 @@ def cron_grupos_snapshot(
 def _rodar_snapshot_de_grupos() -> None:
     from app.db.session import SessionLocal
     from app.models.whatsapp_grupos import INSTANCIA_CONECTADA, WhatsappInstancia
-    from app.services.grupo_snapshot_service import reconciliar_orfas, snapshot_do_usuario
+    from app.services.grupo_snapshot_service import (
+        reconciliar_eventos_de_sessao, reconciliar_orfas, snapshot_do_usuario,
+    )
 
     db = SessionLocal()
     try:
@@ -287,7 +290,19 @@ def _rodar_snapshot_de_grupos() -> None:
                 total["erros"] += 1
                 logger.exception("Snapshot falhou para user %s", user_id)
         orfas = reconciliar_orfas(db)
-        logger.info("Snapshot diário: %s | sessões órfãs removidas: %s", total, orfas)
+        # Rede de segurança do monitoramento (F8): o alinhamento normal é no
+        # toggle, mas ele pode falhar com a sessão fora do ar. Sessão que segue
+        # assinando `message` sem monitoramento ativo entrega conteúdo de grupo
+        # que ninguém pediu.
+        eventos = reconciliar_eventos_de_sessao(db)
+        # Captura presa em `replicando` (worker morto entre o claim e o fim)
+        # ficaria invisível para sempre — nem replica, nem aparece como erro.
+        from app.services.monitoramento_service import MonitoramentoService
+
+        destravadas = MonitoramentoService(db).destravar_replicando()
+        logger.info("Snapshot diário: %s | órfãs removidas: %s | sessões "
+                    "realinhadas: %s | capturas destravadas: %s",
+                    total, orfas, eventos, destravadas)
     except Exception:
         logger.exception("Snapshot diário de grupos falhou por inteiro")
     finally:

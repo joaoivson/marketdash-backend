@@ -11,7 +11,7 @@ from typing import Dict
 
 from sqlalchemy.orm import Session
 
-from app.models.whatsapp_grupos import INSTANCIA_CONECTADA
+from app.models.whatsapp_grupos import INSTANCIA_CONECTADA, WhatsappInstancia
 from app.repositories.campanha_link_repository import CampanhaLinkRepository
 from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
 from app.services.janela_envio_service import BRT
@@ -89,3 +89,46 @@ def reconciliar_orfas(db: Session) -> int:
             except ErroWhatsapp as e:
                 logger.warning("Falha ao remover órfã %s: %s", nome, e.motivo)
     return removidas
+
+
+def reconciliar_eventos_de_sessao(db: Session) -> int:
+    """
+    Alinha os eventos assinados de cada sessão com o estado do monitoramento.
+
+    O alinhamento normal acontece no toggle, mas ele pode falhar (sessão fora
+    do ar, envio em andamento). O caso que importa é o assimétrico: uma sessão
+    que continua assinando `message` depois de a afiliada desligar o
+    monitoramento seguiria entregando conteúdo de grupo ao backend — que é
+    exatamente o que a política de privacidade diz que não acontece.
+
+    Devolve quantas sessões foram reconfiguradas.
+    """
+    from app.core.config import settings
+    from app.models.whatsapp_grupos import INSTANCIA_REMOVIDA
+    from app.services.monitoramento_service import MonitoramentoService
+    from app.services.whatsapp_instancia_service import (
+        EnvioEmAndamento, sincronizar_todas,
+    )
+
+    if not (settings.WAHA_URL and settings.WAHA_API_KEY):
+        return 0
+    repo = WhatsappInstanciaRepository(db)
+    servico = MonitoramentoService(db)
+    ajustadas = 0
+    user_ids = [
+        uid for (uid,) in
+        db.query(WhatsappInstancia.user_id)
+        .filter(WhatsappInstancia.status != INSTANCIA_REMOVIDA)
+        .distinct().all()
+    ]
+    for user_id in user_ids:
+        precisa = servico.sessoes_que_precisam_de_message(user_id)
+        try:
+            ajustadas += sincronizar_todas(db, repo.por_usuario(user_id), precisa,
+                                           settings.WAHA_WEBHOOK_URL or "")
+        except EnvioEmAndamento:
+            continue            # tenta de novo amanhã; o envio é prioritário
+        except ErroWhatsapp as e:
+            logger.warning("Reconciliação de eventos falhou (user %s): %s",
+                           user_id, e.motivo)
+    return ajustadas

@@ -80,6 +80,7 @@ celery_app.conf.include = [
     "app.tasks.facebook_tasks",
     "app.tasks.instagram_tasks",
     "app.tasks.roteiro_tasks",
+    "app.tasks.monitoramento_tasks",
 ]
 
 # Auto-discover any other tasks under app.tasks

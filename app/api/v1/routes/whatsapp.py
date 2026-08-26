@@ -285,10 +285,19 @@ def _tratar_participantes(db: Session, nome_sessao: str, payload: dict) -> None:
 
 
 def _tratar_mensagem(db: Session, nome_sessao: str, payload: dict) -> None:
-    """Só a sessão do resumo recebe `message` — e só para o SAIR."""
-    if nome_sessao != settings.WAHA_SESSAO_RESUMO:
-        return
+    """
+    `message` chega em dois casos, e só nesses dois:
+
+      * sessão do resumo → palavra SAIR (opt-out);
+      * sessão de aluna COM monitoramento ativo (F8) → captura de oferta.
+
+    Sessão de aluna sem monitoramento sequer assina o evento, então o conteúdo
+    dos grupos dela não chega aqui.
+    """
     if payload.get("fromMe"):
+        return
+    if nome_sessao != settings.WAHA_SESSAO_RESUMO:
+        _tratar_mensagem_de_monitoramento(db, nome_sessao, payload)
         return
     remetente = str(payload.get("from") or "")
     if remetente.endswith("@g.us"):
@@ -311,3 +320,65 @@ def _tratar_mensagem(db: Session, nome_sessao: str, payload: dict) -> None:
                 )
             except ErroWhatsapp:
                 pass   # já desligamos; a confirmação é cortesia
+
+
+def _tratar_mensagem_de_monitoramento(db: Session, nome_sessao: str,
+                                      payload: dict) -> None:
+    """
+    Mensagem de grupo numa sessão de aluna com monitoramento ativo.
+
+    O filtro roda ANTES de persistir: o que não é oferta é descartado na
+    memória. Gravar-para-depois-filtrar tornaria falsa a promessa da política
+    de privacidade sobre conteúdo de grupo de terceiro.
+    """
+    if not pertence_a_este_ambiente(nome_sessao):
+        return
+    remetente = str(payload.get("from") or "")
+    if not remetente.endswith("@g.us"):
+        return          # conversa privada nunca entra no monitoramento
+    texto = str(payload.get("body") or "").strip()
+    if not texto:
+        return          # mídia sem legenda não tem o que replicar
+
+    repo = WhatsappInstanciaRepository(db)
+    instancia = repo.por_nome(nome_sessao)
+    if not instancia:
+        return
+
+    from app.models.whatsapp_grupos import WhatsappGrupo
+    from app.services.monitoramento_service import MonitoramentoService
+
+    # Tudo que toca o banco fica dentro do try: exceção que escapa de um
+    # webhook faz o WAHA reenviar o evento em loop.
+    try:
+        grupo = (
+            db.query(WhatsappGrupo)
+            .filter(WhatsappGrupo.jid == remetente,
+                    WhatsappGrupo.user_id == instancia.user_id)
+            .first()
+        )
+        if not grupo:
+            return
+
+        servico = MonitoramentoService(db)
+        for m in servico.ativos_do_grupo(grupo.id, instancia.user_id):
+            passa, link = servico.interessa(m, texto)
+            if not passa:
+                continue
+            captura = servico.capturar(m, texto, link)
+            if captura is None:
+                continue        # repost da mesma oferta — dedup por constraint
+            db.commit()
+            if m.replicar_automaticamente:
+                from app.tasks.monitoramento_tasks import replicar_captura
+                # priority 0: a oferta tem validade e a afiliada está esperando.
+                replicar_captura.apply_async(args=[captura.id], priority=0)
+    except Exception as e:
+        db.rollback()
+        # Webhook nunca propaga exceção: o WAHA reenviaria o evento em loop.
+        #
+        # SEM traceback de propósito: o `str` de um erro do SQLAlchemy embute o
+        # SQL **com os parâmetros**, ou seja, o texto da mensagem de terceiro
+        # iria parar no log da aplicação — exatamente o que este módulo promete
+        # que não acontece.
+        logger.error("Falha ao capturar mensagem monitorada (%s)", type(e).__name__)

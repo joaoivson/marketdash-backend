@@ -11,6 +11,60 @@
 
 ---
 
+## 2026-08-26 — Grupos F8: monitoramento, e por que a promessa de privacidade precisou ser reescrita
+
+**O achado que mais assusta é o mais banal.** `extrair_link` normalizava a URL
+(`https://` na frente) e era essa forma que ia para `link_original`. Só que
+`texto_para_envio` fazia `replace(link_original, meu_link)` contra o texto
+**cru**. Quando o dono do grupo cola sem esquema — que a própria regex existe
+para aceitar — o `replace` não casa com nada e é um no-op. A conversão do link
+tinha dado certo, então não caía em erro: a mensagem saía para TODOS os grupos
+da afiliada com o link do CONCORRENTE, marcada como "replicada". A lição é
+sobre representação: **guardar a forma normalizada e usá-la para casar contra o
+original é sempre um bug esperando o dia certo**. Agora o link é guardado como
+apareceu, e a normalização existe só para descobrir o marketplace.
+
+**ReDoS de graça no caminho quente.** `(?:www\.|[a-z0-9-]+\.)+` — as duas
+alternativas casam `www.`, então cada segmento ganhava dois caminhos e a falha
+no fim explorava todos. Medido: `"www."×22` = 1,1s; ×30 seriam minutos. E o
+texto vem de um grupo de TERCEIRO: qualquer membro do grupo monitorado podia
+travar o threadpool inteiro do FastAPI sem ter conta aqui. Remover a alternativa
+redundante deixou linear. Regex sobre entrada de terceiro merece um teste de
+tempo, não só de resultado — ficou um.
+
+**A moldura da privacidade estava mais estreita do que a realidade.** O evento
+`message` do WAHA é por **sessão**, não por chat: com um monitoramento ligado, o
+conteúdo de todas as conversas daquele número trafega até o nosso webhook, e é o
+nosso primeiro `if` que descarta o que não é do grupo monitorado. Isso é
+verdade operacional que a política precisava dizer — o texto anterior ("não
+recebemos conteúdo de mensagem") sugeria um recorte por grupo que o gateway não
+oferece. Mitigamos escolhendo UMA sessão ouvinte por monitoramento (antes,
+todas as sessões no grupo passavam a escutar), mas a assimetria continua e está
+declarada.
+
+**Estado tem que ser restaurado, não invertido.** O rollback do toggle fazia
+`m.ativo = not m.ativo`. Isso só acerta quando o PATCH mudou o campo — e havia
+um caminho real (deletar com envio em andamento, depois salvar outro formulário)
+em que o "desfazer" LIGAVA um monitoramento desligado, e o cron do dia seguinte
+começava a capturar sem ninguém ter pedido. Guardar o valor anterior antes do
+`setattr` custa uma linha.
+
+**Claim atômico não basta sem o destravamento.** `capturada→replicando` resolveu
+a corrida de dois workers, mas `task_acks_late` reentrega a task quando o worker
+morre — e a reentrega não consegue reivindicar de novo. A captura ficava presa
+para sempre: nem replicava, nem aparecia como erro. Todo claim precisa do par:
+quem destrava o que ficou pelo caminho. Entrou no cron diário.
+
+**`erro` não pode ser terminal quando a causa é passageira.** Shopee fora do ar
+marcava a captura como erro; o repost da mesma oferta caía na deduplicação; a
+oferta morria em definitivo. Agora replicar de novo reabre.
+
+**Pendente:** a suíte do módulo depende do Postgres local (5434) e **pula em
+verde** onde ele não existe; o teto de captura por mensagem com URL qualquer é
+largo por padrão (mitigação é de produto: palavras-chave, retenção).
+
+---
+
 ## 2026-08-26 — Grupos F7: os números do ciclo, e o bug que quase passou
 
 **O achado da rodada: a tela de Resultados divergia do Dashboard em 294%.**

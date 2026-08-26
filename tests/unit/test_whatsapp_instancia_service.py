@@ -1,4 +1,6 @@
 """Provisionamento de sessão: nome com prefixo do ambiente, limite do plano e cap global."""
+from types import SimpleNamespace
+
 import pytest
 
 from app.services.waha_client import ErroWhatsapp
@@ -133,3 +135,152 @@ def test_config_de_webhook_nao_emite_chaves_none(monkeypatch):
     assert wh["hmac"] == {"key": "segredo"}
     assert wh["customHeaders"] == [{"name": "X-Webhook-Token", "value": "segredo"}]
     assert wh["events"] == ["message"]
+
+
+# --- F8: alinhamento dos eventos da sessão ----------------------------------
+
+
+class _ClienteDeSessao:
+    """Fake do WahaClient para o caminho de reconfiguração."""
+
+    def __init__(self, eventos_atuais, registro):
+        self.eventos_atuais = eventos_atuais
+        self.registro = registro
+
+    def sessao_info(self):
+        return {"config": {"webhooks": [{"url": "https://api/x/webhook",
+                                         "events": list(self.eventos_atuais)}]}}
+
+    def atualizar_sessao(self, webhooks):
+        self.registro.append(webhooks[0]["events"])
+        return {}
+
+
+class _DbSemEnvio:
+    """Sem execução `enviando` — o caminho normal."""
+
+    def query(self, *_a, **_k):
+        return self
+
+    def filter(self, *_a, **_k):
+        return self
+
+    def first(self):
+        return None
+
+
+class _DbComEnvio(_DbSemEnvio):
+    def first(self):
+        return object()          # há execução enviando
+
+
+def _com_cliente(monkeypatch, cliente):
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: cliente)
+
+
+def test_ligar_monitoramento_faz_a_sessao_assinar_message(monkeypatch):
+    from app.services.whatsapp_instancia_service import sincronizar_eventos
+
+    feitas = []
+    _com_cliente(monkeypatch, _ClienteDeSessao(
+        ["session.status", "group.v2.participants"], feitas))
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+
+    assert sincronizar_eventos(_DbSemEnvio(), inst, True, "https://api/x/webhook") is True
+    assert feitas == [["session.status", "group.v2.participants", "message"]]
+
+
+def test_desligar_monitoramento_remove_message_da_sessao(monkeypatch):
+    """O caminho que importa para a privacidade: sem ele a sessão continuaria
+    entregando conteúdo de grupo depois de a afiliada desligar."""
+    from app.services.whatsapp_instancia_service import sincronizar_eventos
+
+    feitas = []
+    _com_cliente(monkeypatch, _ClienteDeSessao(
+        ["session.status", "group.v2.participants", "message"], feitas))
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+
+    assert sincronizar_eventos(_DbSemEnvio(), inst, False, "https://api/x/webhook") is True
+    assert feitas == [["session.status", "group.v2.participants"]]
+
+
+def test_sessao_ja_alinhada_nao_e_reiniciada(monkeypatch):
+    """O PUT REINICIA a sessão. Reconfigurar à toa derruba a conexão de um
+    número por nada."""
+    from app.services.whatsapp_instancia_service import sincronizar_eventos
+
+    feitas = []
+    _com_cliente(monkeypatch, _ClienteDeSessao(
+        ["group.v2.participants", "session.status"], feitas))   # ordem diferente
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+
+    assert sincronizar_eventos(_DbSemEnvio(), inst, False, "https://api/x/webhook") is False
+    assert feitas == []
+
+
+def test_envio_em_andamento_recusa_a_reconfiguracao(monkeypatch):
+    """Reiniciar a sessão no meio de um lote pararia o envio. As linhas não
+    duplicam (o claim garante), mas a afiliada veria o envio morrer sem
+    entender por quê — melhor recusar com uma frase clara."""
+    from app.services.whatsapp_instancia_service import (
+        EnvioEmAndamento, sincronizar_eventos,
+    )
+
+    feitas = []
+    _com_cliente(monkeypatch, _ClienteDeSessao(
+        ["session.status", "group.v2.participants"], feitas))
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+
+    with pytest.raises(EnvioEmAndamento):
+        sincronizar_eventos(_DbComEnvio(), inst, True, "https://api/x/webhook")
+    assert feitas == [], "reconfigurou apesar do envio em andamento"
+
+
+def test_sessao_fora_do_ar_nao_derruba_o_toggle(monkeypatch):
+    """Sessão inacessível não pode impedir a afiliada de mexer na configuração;
+    o cron diário de reconciliação repara o desalinhamento."""
+    from app.services.waha_client import ErroWhatsapp
+    from app.services.whatsapp_instancia_service import sincronizar_eventos
+
+    class _Fora:
+        def sessao_info(self):
+            raise ErroWhatsapp("conexao", "sessão fora do ar")
+
+    _com_cliente(monkeypatch, _Fora())
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+    assert sincronizar_eventos(_DbSemEnvio(), inst, True, "https://api/x/webhook") is False
+
+
+def test_com_dois_numeros_ou_reconfigura_os_dois_ou_nenhum(monkeypatch):
+    """
+    Com envio em andamento, reconfigurar o primeiro número e recusar o segundo
+    deixaria o banco divergindo do que as sessões realmente escutam — o pior
+    estado possível: a tela diria "monitorando" e nada chegaria (ou o contrário).
+    """
+    from app.services.whatsapp_instancia_service import (
+        EnvioEmAndamento, sincronizar_todas,
+    )
+
+    feitas = []
+    clientes = {
+        "a": _ClienteDeSessao(["session.status", "group.v2.participants"], feitas),
+        "b": _ClienteDeSessao(["session.status", "group.v2.participants"], feitas),
+    }
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: clientes[nome[-1]])
+    instancias = [
+        SimpleNamespace(nome_instancia="mkdaaau1xbba", user_id=1, id=1),
+        SimpleNamespace(nome_instancia="mkdaaau1xbbb", user_id=1, id=2),
+    ]
+
+    with pytest.raises(EnvioEmAndamento):
+        sincronizar_todas(_DbComEnvio(), instancias, {1: True, 2: True},
+                          "https://api/x/webhook")
+    assert feitas == [], "reconfigurou uma sessão antes de recusar a outra"
+
+    # Sem envio, as duas mudam.
+    assert sincronizar_todas(_DbSemEnvio(), instancias, {1: True, 2: True},
+                             "https://api/x/webhook") == 2
+    assert len(feitas) == 2
+    assert all("message" in ev for ev in feitas)
