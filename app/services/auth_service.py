@@ -58,7 +58,7 @@ class AuthService:
 
         # 1. Tentar login direto no Supabase Auth (caso já migrado)
         try:
-            supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.supabase_chave_publica)
             auth_response = supabase_anon.auth.sign_in_with_password({"email": email, "password": password})
             
             if auth_response and auth_response.session:
@@ -127,10 +127,11 @@ class AuthService:
                     )
 
         # 4. Migração Automática: Criar usuário no Supabase
-        # IMPORTANTE: Requer SUPABASE_SERVICE_KEY para ignorar confirmação de email
+        # IMPORTANTE: exige a chave ADMIN (SUPABASE_SECRET_KEY, ou a antiga
+        # SUPABASE_SERVICE_KEY) para ignorar a confirmação de e-mail.
         try:
             logger.info(f"Iniciando Lazy Migration para {email}")
-            supabase_admin: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+            supabase_admin: Client = create_client(settings.SUPABASE_URL, settings.supabase_chave_admin)
             
             # Criar usuário via Admin API (isso define a senha e confirma o email automaticamente)
             admin_auth_response = supabase_admin.auth.admin.create_user({
@@ -143,7 +144,7 @@ class AuthService:
                 logger.info(f"Usuário {email} migrado para Supabase com sucesso.")
                 
                 # Agora logar como o usuário para obter um token de sessão normal
-                supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+                supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.supabase_chave_publica)
                 auth_data = supabase_anon.auth.sign_in_with_password({"email": email, "password": password})
                 
                 return {

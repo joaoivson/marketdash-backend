@@ -11,6 +11,34 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-26 (Migração das chaves do Supabase)
+
+O Supabase trocou o formato das chaves de API: `anon`/`service_role` deram lugar
+a `sb_publishable_…`/`sb_secret_…`. O código passa a aceitar **as duas formas**,
+preferindo a nova — o que permite rotacionar sem janela de indisponibilidade:
+acrescenta a nova, faz o deploy, confirma, remove a antiga.
+
+Vale para o backend (`SUPABASE_PUBLISHABLE_KEY`/`SUPABASE_SECRET_KEY`) e para o
+frontend (`VITE_SUPABASE_PUBLISHABLE_KEY`). No frontend isso importa mais do que
+parece: a checagem de configuração **lança** antes de qualquer render, então
+configurar só o nome novo dava tela branca.
+
+### O que NÃO precisou mudar, e por quê
+
+A validação de token é `auth.get_user(token)` — uma chamada ao servidor do
+Supabase, sem decodificação local de JWT. Verificado contra o projeto real: as
+duas chaves autenticam e um token obtido com uma é aceito pelo client criado com
+a outra. Por isso a mudança do algoritmo dos tokens para **ES256** não exigiu
+nada do nosso lado. `SUPABASE_JWKS_URL` fica declarada, mas sem uso — só faria
+falta se algum dia validássemos o JWT localmente.
+
+### Fixed
+
+- Nenhum ponto do código lê mais `SUPABASE_KEY`/`SUPABASE_SERVICE_KEY` direto:
+  o acesso passa por `supabase_chave_publica`/`supabase_chave_admin`. Um ponto
+  esquecido quebraria só em ambiente já rotacionado, e quebraria como **401** —
+  o erro mais caro de diagnosticar. Há teste varrendo o código-fonte por isso.
+
 ## [Não versionado] - 2026-08-26 (Grupos: itens 17 e 18 da spec + o sync que trazia zero grupos)
 
 Fecha os dois itens que faltavam do módulo e conserta o bug que os testes de

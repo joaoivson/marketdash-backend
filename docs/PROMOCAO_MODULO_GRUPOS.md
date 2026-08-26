@@ -159,6 +159,28 @@ produção — depois, mudar o valor invalida o histórico.
 > brasileiros cai em ~11 minutos. O "código irreversível" da política de
 > privacidade era reversível.
 
+## 8.2 Chaves do Supabase — as duas formas convivem
+
+O Supabase trocou o formato das chaves: `anon`/`service_role` (JWTs longos)
+deram lugar a `sb_publishable_…`/`sb_secret_…`. O código aceita **as duas** e
+prefere a nova:
+
+| Uso | Nova | Antiga (retaguarda) |
+|---|---|---|
+| client comum | `SUPABASE_PUBLISHABLE_KEY` | `SUPABASE_KEY` |
+| admin / ignora RLS | `SUPABASE_SECRET_KEY` | `SUPABASE_SERVICE_KEY` |
+| frontend | `VITE_SUPABASE_PUBLISHABLE_KEY` | `VITE_SUPABASE_ANON_KEY` |
+
+Isso permite rotacionar sem janela de indisponibilidade: acrescente a nova,
+faça o deploy, confirme, remova a antiga.
+
+Verificado contra o projeto real em 26/08/2026: **as duas chaves autenticam**, e
+um token obtido com uma é aceito pelo client criado com a outra. A validação é
+`auth.get_user(token)` — chamada ao servidor do Supabase, sem decodificação
+local de JWT —, então a mudança do algoritmo dos tokens para **ES256** não
+exigiu nada do nosso lado. `SUPABASE_JWKS_URL` fica declarada mas não é usada:
+só faria falta se algum dia validássemos o JWT localmente.
+
 ## 9. Pendências conhecidas que a promoção não resolve
 
 - **`lead` × `offsite_conversion.fb_pixel_lead` do Meta**: usamos `max()`, que
