@@ -208,6 +208,44 @@ async def cron_whatsapp_resumo(
     return {"status": "accepted", "mode": "background-inline"}
 
 
+@router.post("/cron/roteiros", status_code=status.HTTP_202_ACCEPTED)
+def cron_roteiros(
+    request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """
+    Tick do motor (pg_cron */5min): flip atômico agendada→enviando das
+    execuções due e enfileira UMA task Celery p9 por execução. Dois ticks
+    simultâneos não duplicam — o UPDATE...RETURNING garante. O mesmo tick
+    RESGATA execuções estagnadas em `enviando` (worker que morreu depois do
+    flip, broker fora do ar) — sem isso elas ficariam presas para sempre.
+    """
+    caller_ip = request.client.host if request.client else None
+    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
+    from datetime import datetime, timezone
+
+    from app.db.session import SessionLocal
+    from app.repositories.roteiro_repository import RoteiroRepository
+    from app.tasks.roteiro_tasks import processar_execucao
+
+    agora = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        repo = RoteiroRepository(db)
+        ids = repo.flip_agendadas_para_enviando(agora)
+        resgatadas = repo.enviando_estagnadas(agora)
+    finally:
+        db.close()
+    for execucao_id in ids + resgatadas:
+        processar_execucao.apply_async(args=[execucao_id], priority=9)
+    if resgatadas:
+        logger.warning("Tick resgatou %s execução(ões) estagnada(s): %s",
+                       len(resgatadas), resgatadas)
+    logger.info("Tick de roteiros: %s execução(ões) enfileirada(s)", len(ids))
+    return {"enfileiradas": ids, "resgatadas": resgatadas}
+
+
 @router.get("/cron/health", status_code=status.HTTP_200_OK)
 def cron_health(
     request: Request,

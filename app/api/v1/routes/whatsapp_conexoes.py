@@ -151,6 +151,32 @@ def sincronizar_grupos(
     return SincronizarOut(**resultado)
 
 
+@router.get("/config-envio")
+def obter_config_envio(
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.janela_envio_service import config_da_usuaria
+
+    return config_da_usuaria(db, current_user.id).model_dump(mode="json")
+
+
+@router.put("/config-envio")
+def salvar_config_envio(
+    payload: dict,
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.services.janela_envio_service import salvar_config_da_usuaria
+
+    try:
+        return salvar_config_da_usuaria(db, current_user.id, payload).model_dump(mode="json")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=422, detail="Configuração de janela inválida.")
+
+
 @router.get("/grupos", response_model=list[GrupoOut])
 def listar_grupos(
     # `user_id` é proibido como nome de query param (fetchWithAuth injeta o

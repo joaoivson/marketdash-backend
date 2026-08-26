@@ -79,6 +79,7 @@ celery_app.conf.include = [
     "app.tasks.shopee_tasks",
     "app.tasks.facebook_tasks",
     "app.tasks.instagram_tasks",
+    "app.tasks.roteiro_tasks",
 ]
 
 # Auto-discover any other tasks under app.tasks

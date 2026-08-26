@@ -11,6 +11,9 @@ def _apply_safe_migrations(engine, logger):
     migrations = [
         "ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS facebook_pixel_id VARCHAR",
         "ALTER TABLE facebook_integrations ADD COLUMN IF NOT EXISTS ad_accounts_json TEXT",
+        # 060 (grupos F3): sem esta coluna, TODA query de UserSettings quebra
+        # se o código chegar antes da migration — rede extra do protocolo.
+        "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS whatsapp_envio_config JSONB",
     ]
     from sqlalchemy import text
     try:

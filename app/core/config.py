@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     WHATSAPP_FALHAS_PARA_PARAR: int = 5
     # Cap global de sessões de afiliadas — proteção de RAM do servidor WAHA.
     WHATSAPP_MAX_INSTANCIAS_GLOBAL: int = 60
+    # --- Motor de envio em grupos (F3). Ritmo é config de SISTEMA, nunca UI:
+    # a afiliada não tem como saber o que é seguro, e o número dela é o ativo.
+    WHATSAPP_GRUPO_PAUSA_MIN_S: float = 8.0     # pausa entre RODADAS
+    WHATSAPP_GRUPO_PAUSA_MAX_S: float = 20.0
+    WHATSAPP_GRUPO_JITTER_MIN_S: float = 1.0    # respiro dentro da rodada
+    WHATSAPP_GRUPO_JITTER_MAX_S: float = 3.0
+    WHATSAPP_RODADA_TAMANHO: int = 2            # msgs por rodada (padrão de mercado)
+    WHATSAPP_TETO_POR_INSTANCIA: int = 80       # msgs/dia por número (3×80=240=teto MAX)
+    WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA: int = 5000  # proteção da plataforma
+    WHATSAPP_FATIA_ORCAMENTO_S: int = 900       # ~15min por fatia (< task_time_limit 1200)
+    WHATSAPP_HASH_SALT: Optional[str] = None    # sha256(jid+salt) p/ eventos (F6)
 
     # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.

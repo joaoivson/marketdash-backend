@@ -11,6 +11,32 @@
 
 ---
 
+## 2026-08-26 — Grupos F3: o motor (claim atômico, fatias, janela, tetos)
+
+Raciocínios que o diff não conta:
+
+**Estado terminal é obrigação, não detalhe.** A revisão achou TRÊS formas de
+uma execução ficar viva para sempre sem enviar nada: estagnada em `enviando`
+(worker morto depois do flip — o tick agora resgata), 100% `pulada` com
+`proxima_execucao_em` NULL (invisível ao tick — agora conclui na hora), e
+janela sem nenhum dia ativo (livelock de 5 em 5 min — `proxima_abertura`
+devolve None e o salvar da config recusa). Regra que fica: todo caminho de
+saída do motor precisa terminar em estado terminal OU ter quem o reagende.
+
+**Teto diário ≠ pausa.** Pausada exige clique da afiliada; teto diário reseta
+sozinho. Roteiro de lançamento de vários dias morreria no primeiro teto —
+agora parqueia para a abertura do dia seguinte.
+
+**Datetime naive do cliente é BRT, não UTC.** `.astimezone()` em naive usa o
+fuso do servidor (UTC no container): um agendamento para 15h sairia às 12h.
+
+**Testes do motor precisam de Postgres real** (`SKIP LOCKED` não existe no
+SQLite) e de **janela 24h no cenário** — rodando às 3h da manhã, o motor
+recusava enviar e os 8 testes falhavam com razão. O teste que "falha porque o
+código está certo" é o mais barato de diagnosticar errado.
+
+---
+
 ## 2026-08-25 — Grupos F2: campanhas de grupos (059 antes dos models)
 
 Entidade Campanha + vínculos com posição. O que o diff não conta: a 059 foi
