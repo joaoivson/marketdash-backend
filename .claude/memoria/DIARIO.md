@@ -11,6 +11,40 @@
 
 ---
 
+## 2026-08-26 — O bug que só aparece quando você roda de verdade
+
+`ShopeeIntegrationService(self.db)` — o construtor espera o **repository**, não
+a Session. Passar a Session dá `AttributeError: 'Session' object has no
+attribute 'get_by_user_id'`, e o erro caía **dentro de um `except Exception`**
+nos dois lugares que usam a função:
+
+- `roteiro_envio_service._resolver_short_links` (F3): toda linha de passo de
+  oferta virava `pulado` com erro `"short_link"`. Ou seja, **nenhum envio de
+  oferta jamais teria link em produção** — e a execução terminava "com sucesso",
+  só com linhas puladas.
+- `monitoramento_tasks._converter` (F8): toda replicação virava captura em erro.
+
+**Por que a suíte não pegava:** os testes do motor injetam `short_link_factory`
+e por isso nunca constroem o service. O caminho de produção não tinha teste
+nenhum, e o `except` genérico transformava um erro de programação em "estado de
+negócio plausível" — `pulado` é uma coisa que acontece de verdade, então nada
+parecia errado.
+
+Duas lições que valem mais que o conserto:
+
+1. **`except Exception` largo em volta de uma construção de objeto esconde bug
+   de código como se fosse falha externa.** O `except` ali existe por um motivo
+   legítimo (a Shopee cai, e o lote não pode abortar), mas ele engolia junto uma
+   classe de erro que nunca deveria acontecer.
+2. **Injetar a dependência no teste tira do teste justamente o caminho que
+   quebra.** O teste novo (`test_short_link_construcao.py`) constrói pelo mesmo
+   caminho do código de produção e verifica os call-sites por leitura de fonte —
+   feio, mas é o que teria pego.
+
+Encontrado rodando a replicação de verdade contra hml, não lendo código.
+
+---
+
 ## 2026-08-26 — Grupos F8: monitoramento, e por que a promessa de privacidade precisou ser reescrita
 
 **O achado que mais assusta é o mais banal.** `extrair_link` normalizava a URL
