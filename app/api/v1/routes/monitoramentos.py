@@ -53,23 +53,16 @@ def _do_usuario(
 
 
 def _out(db: Session, m) -> MonitoramentoOut:
-    from app.models.monitoramento import MonitoramentoCaptura
-    from app.models.whatsapp_grupos import WhatsappGrupo
-
-    grupo = db.query(WhatsappGrupo).get(m.grupo_origem_id)
-    total = (
-        db.query(MonitoramentoCaptura)
-        .filter(MonitoramentoCaptura.monitoramento_id == m.id).count()
-    )
+    resumo = MonitoramentoService(db).resumo(m)
     return MonitoramentoOut(
         id=m.id, nome=m.nome, grupo_origem_id=m.grupo_origem_id,
-        grupo_origem=(grupo.nome if grupo else None),
+        grupo_origem=resumo["grupo_origem"],
         instancia_id=m.instancia_id, destino_campanha_id=m.destino_campanha_id,
         destino_grupo_ids=m.destino_grupo_ids, ativo=m.ativo,
         converter_links=m.converter_links, somente_com_link=m.somente_com_link,
         palavras_chave=m.palavras_chave,
         replicar_automaticamente=m.replicar_automaticamente,
-        total_capturas=total, criado_em=m.criado_em,
+        total_capturas=resumo["total_capturas"], criado_em=m.criado_em,
     )
 
 
@@ -206,24 +199,18 @@ def replicar(
 ):
     """Replicação manual — o caminho padrão, já que `replicar_automaticamente`
     nasce desligado."""
-    from app.models.monitoramento import (
-        CAPTURA_CAPTURADA, CAPTURA_ERRO, MonitoramentoCaptura,
-    )
+    from app.models.monitoramento import CAPTURA_CAPTURADA, CAPTURA_ERRO
     from app.tasks.monitoramento_tasks import replicar_captura
 
-    captura = (
-        db.query(MonitoramentoCaptura)
-        .filter(MonitoramentoCaptura.id == captura_id,
-                MonitoramentoCaptura.monitoramento_id == m.id)
-        .first()
-    )
+    servico = MonitoramentoService(db)
+    captura = servico.captura_de(m.id, captura_id)
     if not captura:
         raise HTTPException(status_code=404, detail="Captura não encontrada.")
     if captura.status == CAPTURA_ERRO:
         # Erro é recuperável: a causa costuma ser passageira (Shopee fora do ar,
         # rate limit). Sem reabrir, a oferta morria em definitivo — o repost da
         # mesma mensagem cai na dedup e nunca vira captura nova.
-        MonitoramentoService(db).reabrir(captura)
+        servico.reabrir(captura)
         db.commit()
     elif captura.status != CAPTURA_CAPTURADA:
         raise HTTPException(status_code=409,
@@ -240,7 +227,7 @@ def remover(
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
-    db.delete(m)
+    MonitoramentoService(db).remover(m)
     db.commit()
     # Removido o último monitoramento da sessão, ela para de assinar `message`.
     try:

@@ -389,6 +389,34 @@ class MonitoramentoService:
         captura.motivo = (motivo or "")[:200]
         self.db.add(captura)
 
+    def resumo(self, m: Monitoramento) -> Dict:
+        """Dados de apresentação de um monitoramento (nome do grupo + total)."""
+        from app.models.whatsapp_grupos import WhatsappGrupo
+
+        grupo = (
+            self.db.query(WhatsappGrupo)
+            .filter(WhatsappGrupo.id == m.grupo_origem_id).first()
+        )
+        total = (
+            self.db.query(MonitoramentoCaptura)
+            .filter(MonitoramentoCaptura.monitoramento_id == m.id).count()
+        )
+        return {"grupo_origem": (grupo.nome if grupo else None),
+                "total_capturas": total}
+
+    def captura_de(self, monitoramento_id: int,
+                   captura_id: int) -> Optional[MonitoramentoCaptura]:
+        """Captura por id, presa ao monitoramento — id é sequencial."""
+        return (
+            self.db.query(MonitoramentoCaptura)
+            .filter(MonitoramentoCaptura.id == captura_id,
+                    MonitoramentoCaptura.monitoramento_id == monitoramento_id)
+            .first()
+        )
+
+    def remover(self, m: Monitoramento) -> None:
+        self.db.delete(m)
+
     def capturas(self, monitoramento_id: int, limite: int = 50
                  ) -> List[MonitoramentoCaptura]:
         return (
