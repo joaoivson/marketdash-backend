@@ -84,6 +84,35 @@ def chat_id_de_numero(numero: str) -> str:
     return f"{numero}@c.us"
 
 
+def campo(dados: Any, *nomes: str) -> Any:
+    """
+    Primeiro campo presente no payload, ignorando maiúsculas/minúsculas.
+
+    Existe porque o WAHA **não tem um formato só**: o engine GOWS devolve as
+    structs do whatsmeow como o Go serializa (`JID`, `Name`, `Participants`,
+    `IsAdmin`), enquanto NOWEB/WEBJS usam `id`, `subject`, `participants`,
+    `role`. Em 26/08/2026 essa diferença fez o sync trazer 499 grupos e gravar
+    zero, sem erro nenhum. Ler as duas formas é a defesa barata contra a
+    próxima variação.
+    """
+    if not isinstance(dados, dict):
+        return None
+    indice = {str(k).lower(): v for k, v in dados.items()}
+    for nome in nomes:
+        valor = indice.get(nome.lower())
+        if valor is not None:
+            return valor
+    return None
+
+
+def tem_campo(dados: Any, *nomes: str) -> bool:
+    """Presença do campo (mesmo valendo False/0), sem diferenciar caixa."""
+    if not isinstance(dados, dict):
+        return False
+    presentes = {str(k).lower() for k in dados}
+    return any(n.lower() in presentes for n in nomes)
+
+
 def numero_de_jid(bruto) -> str:
     """
     JID/chatId do WAHA → número cru. Inverso de chat_id_de_numero — fonte

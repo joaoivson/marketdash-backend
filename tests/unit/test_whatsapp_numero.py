@@ -366,3 +366,136 @@ def test_jid_do_grupo_aceita_string_e_objeto(bruto, esperado):
     from app.services.whatsapp_grupo_sync_service import jid_do_grupo
 
     assert jid_do_grupo({"id": bruto}) == esperado
+
+
+# --- engine GOWS: as structs do whatsmeow, em PascalCase ---------------------
+#
+# Em 26/08/2026 o sync trouxe 499 grupos em 5 páginas e gravou ZERO, terminando
+# "com sucesso". O log do backend entregou a causa: `100 de 100 itens sem JID
+# reconhecível (chaves do 1º: ['AddressingMode', 'AnnounceVersionID',
+# 'CreatorCountryCode', 'DefaultMembershipApprovalMode', 'DisappearingTimer',
+# 'GroupCreated', 'IsAnnounce', 'IsDefaultSubGroup'])`.
+#
+# São os campos de `types.GroupInfo` do whatsmeow: o GOWS serializa a struct Go
+# como ela é, com as embutidas achatadas. O parser lia só `id` minúsculo.
+
+def _grupo_gows(jid="120363412019840927@g.us", nome="Achadinhos SP",
+                participantes=None, is_announce=False):
+    """Payload como o GOWS devolve — chaves reais observadas em produção."""
+    return {
+        "JID": jid,                       # types.JID tem MarshalText → string
+        "OwnerJID": "553498557753@s.whatsapp.net",
+        "Name": nome,                     # de GroupName, embutida e achatada
+        "NameSetAt": "2026-08-01T10:00:00Z",
+        "Topic": "",
+        "IsLocked": False,
+        "IsAnnounce": is_announce,
+        "AnnounceVersionID": "1724668800",
+        "IsEphemeral": False,
+        "DisappearingTimer": 0,
+        "IsDefaultSubGroup": False,
+        "GroupCreated": "2026-01-15T12:00:00Z",
+        "CreatorCountryCode": "55",
+        "AddressingMode": "pn",
+        "DefaultMembershipApprovalMode": "",
+        "Participants": participantes if participantes is not None else [
+            {"JID": "553498557753@s.whatsapp.net", "IsAdmin": True,
+             "IsSuperAdmin": False, "DisplayName": "", "Error": 0},
+            {"JID": "5511999998888@s.whatsapp.net", "IsAdmin": False,
+             "IsSuperAdmin": False, "DisplayName": "", "Error": 0},
+        ],
+    }
+
+
+def test_gows_o_grupo_e_reconhecido_pelo_campo_JID():
+    from app.services.whatsapp_grupo_sync_service import jid_do_grupo
+
+    assert jid_do_grupo(_grupo_gows()) == "120363412019840927@g.us"
+
+
+def test_gows_nome_e_participantes_saem_do_PascalCase():
+    from app.services.whatsapp_grupo_sync_service import _extrair_agregados, _valor
+
+    dados = _grupo_gows()
+    assert _valor(dados, "subject", "name") == "Achadinhos SP"
+    ag = _extrair_agregados(dados, {"553498557753"})
+    assert ag["participantes"] == 2
+    assert ag["sou_admin"] is True
+
+
+def test_gows_admin_vem_de_IsAdmin_e_nao_do_papel_em_texto():
+    from app.services.whatsapp_grupo_sync_service import _extrair_agregados
+
+    # o nosso número está no grupo, mas sem ser admin
+    dados = _grupo_gows(participantes=[
+        {"JID": "553498557753@s.whatsapp.net", "IsAdmin": False, "IsSuperAdmin": False},
+    ])
+    assert _extrair_agregados(dados, {"553498557753"})["sou_admin"] is False
+
+    dados = _grupo_gows(participantes=[
+        {"JID": "553498557753@s.whatsapp.net", "IsAdmin": False, "IsSuperAdmin": True},
+    ])
+    assert _extrair_agregados(dados, {"553498557753"})["sou_admin"] is True
+
+
+def test_gows_com_endereçamento_LID_ainda_reconhece_o_nosso_numero():
+    """
+    Grupo em modo LID: o participante vem como `…@lid` e o telefone fica em
+    `PhoneNumber`. Comparar só o JID faria o número não se achar — e todo grupo
+    nasceria "não sou admin", travando envio e convite.
+    """
+    from app.services.whatsapp_grupo_sync_service import _extrair_agregados
+
+    dados = _grupo_gows(participantes=[
+        {"JID": "81273733259337@lid", "LID": "81273733259337@lid",
+         "PhoneNumber": "553498557753@s.whatsapp.net", "IsAdmin": True},
+    ])
+    dados["AddressingMode"] = "lid"
+    assert _extrair_agregados(dados, {"553498557753"})["sou_admin"] is True
+    # e também quando o que conhecemos de nós é o próprio LID
+    assert _extrair_agregados(dados, {"81273733259337"})["sou_admin"] is True
+
+
+def test_gows_IsAnnounce_fecha_o_grupo_para_quem_nao_e_admin():
+    from app.services.whatsapp_grupo_sync_service import _extrair_agregados
+
+    dados = _grupo_gows(is_announce=True, participantes=[
+        {"JID": "553498557753@s.whatsapp.net", "IsAdmin": False},
+    ])
+    ag = _extrair_agregados(dados, {"553498557753"})
+    assert ag["sou_admin"] is False and ag["permite_envio"] is False
+
+    aberto = _grupo_gows(is_announce=False, participantes=[
+        {"JID": "553498557753@s.whatsapp.net", "IsAdmin": False},
+    ])
+    assert _extrair_agregados(aberto, {"553498557753"})["permite_envio"] is True
+
+
+def test_noweb_e_webjs_continuam_funcionando():
+    """A correção do GOWS não pode quebrar os formatos que já vinham."""
+    from app.services.whatsapp_grupo_sync_service import _extrair_agregados, jid_do_grupo
+
+    noweb = {
+        "id": "120363412019840927@g.us",
+        "subject": "Achadinhos SP",
+        "announce": False,
+        "participants": [
+            {"id": "553498557753@s.whatsapp.net", "role": "admin"},
+            {"id": "5511999998888@s.whatsapp.net", "role": "participant"},
+        ],
+    }
+    assert jid_do_grupo(noweb) == "120363412019840927@g.us"
+    ag = _extrair_agregados(noweb, {"553498557753"})
+    assert ag["participantes"] == 2 and ag["sou_admin"] is True
+
+    webjs = {"id": {"_serialized": "120363412019840927@g.us"}, "name": "X"}
+    assert jid_do_grupo(webjs) == "120363412019840927@g.us"
+
+
+def test_participante_de_outro_numero_nao_nos_torna_admin():
+    from app.services.whatsapp_grupo_sync_service import _extrair_agregados
+
+    dados = _grupo_gows(participantes=[
+        {"JID": "5511999998888@s.whatsapp.net", "IsAdmin": True},
+    ])
+    assert _extrair_agregados(dados, {"553498557753"})["sou_admin"] is False

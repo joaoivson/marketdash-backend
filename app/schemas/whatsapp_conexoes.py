@@ -43,6 +43,12 @@ class SincronizarOut(BaseModel):
     novos: int
     atualizados: int
     desativados: int
+    # Itens que o WAHA devolveu e não reconhecemos como grupo. Fica na resposta
+    # de propósito: foi a métrica ausente que deixou o sync "com sucesso e zero
+    # grupos" por dias, em 26/08.
+    ignorados: int = 0
+    # Convites resolvidos nesta rodada (o resto vai no próximo sync).
+    convites: int = 0
 
 
 # --- item 17: blacklist de números -------------------------------------------

@@ -249,3 +249,79 @@ def test_grupo_desconhecido_nao_captura(ambiente, monkeypatch):
 
     _tratar_mensagem(db, "mkdXXXXu1xabcd", _payload_de_grupo())
     assert db.commits == 0
+
+
+# --- leitura tolerante do evento de participantes ----------------------------
+#
+# O schema documentado deste evento é camelCase (`payload.group.id`,
+# `payload.participants[].id`) — mas a doc do REST `/groups` também era, e o
+# engine GOWS devolvia PascalCase. Aquele engano zerou o sync em 26/08 sem
+# nenhum erro. Aqui o preço de errar é o mesmo: nenhuma entrada ou saída
+# registrada, em silêncio, e a F6 inteira sem dado.
+
+@pytest.mark.parametrize("payload,esperado_jid,esperado_participantes", [
+    # forma documentada
+    ({"type": "join", "group": {"id": "120363000000000001@g.us"},
+      "participants": [{"id": "5511999998888@c.us", "role": "participant"}]},
+     "120363000000000001@g.us", ["5511999998888@c.us"]),
+    # PascalCase, como o GOWS faz no REST
+    ({"type": "join", "group": {"JID": "120363000000000001@g.us"},
+      "participants": [{"JID": "5511999998888@s.whatsapp.net"}]},
+     "120363000000000001@g.us", ["5511999998888@s.whatsapp.net"]),
+    # endereçamento LID: sem `id`, só telefone
+    ({"type": "leave", "group": {"id": "120363000000000001@g.us"},
+      "participants": [{"PhoneNumber": "5511999998888@s.whatsapp.net"}]},
+     "120363000000000001@g.us", ["5511999998888@s.whatsapp.net"]),
+])
+def test_participantes_sao_lidos_em_qualquer_caixa(
+    ambiente, monkeypatch, payload, esperado_jid, esperado_participantes
+):
+    from app.api.v1.routes import whatsapp as rota
+
+    repo = _FakeRepoInstancias([_instancia()])
+    _com_repo(monkeypatch, repo)
+
+    capturado = {}
+
+    class _ServicoFake:
+        def __init__(self, db):
+            pass
+
+        def registrar(self, user_id, grupo_jid, acao, participantes):
+            capturado.update(grupo=grupo_jid, acao=acao, participantes=participantes)
+            return len(participantes)
+
+    monkeypatch.setattr(
+        "app.services.grupo_evento_service.GrupoEventoService", _ServicoFake
+    )
+    rota._tratar_participantes(None, "mkdXXXXu1xabcd", payload)
+
+    assert capturado["grupo"] == esperado_jid
+    assert capturado["participantes"] == esperado_participantes
+
+
+def test_participante_sem_identificador_nenhum_nao_vira_string_vazia(
+    ambiente, monkeypatch
+):
+    """Hash de string vazia seria um pseudônimo colidindo entre todo mundo."""
+    from app.api.v1.routes import whatsapp as rota
+
+    _com_repo(monkeypatch, _FakeRepoInstancias([_instancia()]))
+    chamou = []
+
+    class _ServicoFake:
+        def __init__(self, db):
+            pass
+
+        def registrar(self, *a):
+            chamou.append(a)
+            return 0
+
+    monkeypatch.setattr(
+        "app.services.grupo_evento_service.GrupoEventoService", _ServicoFake
+    )
+    rota._tratar_participantes(None, "mkdXXXXu1xabcd", {
+        "type": "join", "group": {"id": "120363000000000001@g.us"},
+        "participants": [{"algumCampoNovo": "x"}],
+    })
+    assert chamou == []   # nada a registrar, e nada de hash vazio

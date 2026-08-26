@@ -91,7 +91,8 @@ def test_grupo_novo_nasce_com_sub_id_e_custom_link(db):
     svc = WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo()]]))
     r = svc.sincronizar(inst)
 
-    assert r == {"vistos": 1, "novos": 1, "atualizados": 0, "desativados": 0}
+    assert r == {"vistos": 1, "novos": 1, "atualizados": 0, "desativados": 0,
+                 "ignorados": 0, "convites": 1}
     grupo = db.query(WhatsappGrupo).one()
     assert grupo.sub_id == sub_id_do_grupo(grupo.id)
     assert grupo.participantes == 2
@@ -196,3 +197,152 @@ def test_link_de_grupo_fica_fora_de_meus_links_pela_fk_nao_pela_tag(db):
     grupo = db.query(WhatsappGrupo).one()
     assert ids_grupo == {grupo.custom_link_id}
     assert pessoal.id not in ids_grupo
+
+
+# --- o formato do engine GOWS, e a falha que ficou invisível -----------------
+
+def _grupo_gows(jid="120363412019840927@g.us", nome="Achadinhos SP", admin=True):
+    """
+    Como o GOWS devolve: structs do whatsmeow serializadas pelo Go, com as
+    embutidas achatadas e tudo em PascalCase. Chaves reais, colhidas do log de
+    homologação em 26/08 — o dia em que 499 grupos viraram zero.
+    """
+    return {
+        "JID": jid,
+        "Name": nome,
+        "IsAnnounce": False,
+        "AnnounceVersionID": "1724668800",
+        "DisappearingTimer": 0,
+        "IsDefaultSubGroup": False,
+        "GroupCreated": "2026-01-15T12:00:00Z",
+        "CreatorCountryCode": "55",
+        "AddressingMode": "pn",
+        "Participants": [
+            {"JID": "5511999998888@s.whatsapp.net", "IsAdmin": admin,
+             "IsSuperAdmin": False},
+            {"JID": "5521888887777@s.whatsapp.net", "IsAdmin": False,
+             "IsSuperAdmin": False},
+        ],
+    }
+
+
+def test_gows_os_grupos_sao_gravados_de_verdade(db):
+    """O caso que falhava: sync 'com sucesso' e nenhuma linha no banco."""
+    inst = _instancia(db)
+    svc = WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo_gows()]]))
+    r = svc.sincronizar(inst)
+
+    assert r["vistos"] == 1 and r["novos"] == 1 and r["ignorados"] == 0
+    grupo = db.query(WhatsappGrupo).one()
+    assert grupo.jid == "120363412019840927@g.us"
+    assert grupo.nome == "Achadinhos SP"      # veio de `Name`, não de `subject`
+    assert grupo.participantes == 2
+    assert grupo.sou_admin is True            # veio de `IsAdmin`, não de `role`
+    assert grupo.sub_id == sub_id_do_grupo(grupo.id)
+
+
+def test_pagina_toda_ignorada_FALHA_em_vez_de_dar_sucesso_com_zero(db):
+    """
+    A regressão que custou dias: o WAHA devolvia 100 itens por página, o parser
+    não reconhecia nenhum, e o sync terminava `success` com `vistos=0`. Nada na
+    tela, nada no `sync_runs` — só uma tela vazia dizendo "nenhum grupo ainda".
+    """
+    from app.services.waha_client import ErroWhatsapp
+
+    inst = _instancia(db)
+    formato_alien = [{"WhateverNovo": "x", "OutroCampo": 1} for _ in range(7)]
+    svc = WhatsappGrupoSyncService(db, cliente=_FakeWaha([formato_alien]))
+
+    with pytest.raises(ErroWhatsapp) as e:
+        svc.sincronizar(inst)
+    assert e.value.motivo == "formato"
+
+    run = db.query(SyncRun).order_by(SyncRun.id.desc()).first()
+    assert run.status == "failed"
+    assert "sem JID reconhecível" in (run.error_message or "")
+
+
+def test_alguns_itens_ilegiveis_no_meio_nao_derrubam_o_sync(db):
+    """Ignorar parcial é tolerável; ignorar tudo é contrato quebrado."""
+    inst = _instancia(db)
+    pagina = [_grupo_gows(), {"CampoDesconhecido": 1}, _grupo_gows("120363000000000002@g.us")]
+    r = WhatsappGrupoSyncService(db, cliente=_FakeWaha([pagina])).sincronizar(inst)
+
+    assert r["vistos"] == 2 and r["ignorados"] == 1
+    assert db.query(WhatsappGrupo).count() == 2
+
+
+def test_convites_respeitam_o_orcamento_e_o_resto_espera_o_proximo_sync(db, monkeypatch):
+    """
+    Convite é UMA chamada HTTP por grupo. Com centenas de grupos isso estourava
+    o tempo do request e o proxy cortava a conexão ("Failed to fetch") — e como
+    o commit vinha só no fim, a afiliada perdia o sync inteiro.
+    """
+    import app.services.whatsapp_grupo_sync_service as mod
+
+    inst = _instancia(db)
+    pagina = [_grupo_gows(f"12036300000000{i:04d}@g.us") for i in range(5)]
+    monkeypatch.setattr(mod, "ORCAMENTO_CONVITES_S", -1)   # orçamento já vencido
+
+    r = WhatsappGrupoSyncService(db, cliente=_FakeWaha([pagina])).sincronizar(inst)
+
+    # os grupos entraram; só o enriquecimento ficou pra depois
+    assert r["vistos"] == 5 and r["novos"] == 5 and r["convites"] == 0
+    assert db.query(WhatsappGrupo).count() == 5
+    assert all(g.link_convite is None for g in db.query(WhatsappGrupo))
+
+
+def test_ponta_a_ponta_499_grupos_do_GOWS_pelo_cliente_real(db, monkeypatch):
+    """
+    Reprodução do incidente de 26/08 com o `WahaClient` de verdade no caminho:
+    5 páginas de 100, PascalCase do whatsmeow, e a última página curta fechando
+    a paginação. Antes da correção este cenário gravava ZERO e reportava sucesso.
+
+    Vai pelo cliente real (MockTransport) de propósito: o bug morava na junção
+    entre `_pedir` → `_lista_de_grupos` → `jid_do_grupo`, e um fake de serviço
+    pularia justamente a costura que falhou.
+    """
+    import httpx
+
+    from app.services.waha_client import WahaClient
+    import app.services.whatsapp_grupo_sync_service as mod
+
+    TOTAL = 499
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        if req.url.path.startswith("/api/sessions/"):
+            return httpx.Response(200, json={
+                "status": "WORKING",
+                "me": {"id": "5511999998888@s.whatsapp.net", "pushName": "Eu"},
+            })
+        if req.url.path.endswith("/invite-code"):
+            return httpx.Response(200, json={"code": "AbCdEf"})
+        # /api/{sessao}/groups
+        offset = int(req.url.params.get("offset", 0))
+        limite = int(req.url.params.get("limit", 100))
+        fatia = range(offset, min(offset + limite, TOTAL))
+        return httpx.Response(200, json=[
+            _grupo_gows(f"1203630000000{i:05d}@g.us", f"Grupo {i}", admin=(i % 50 == 0))
+            for i in fatia
+        ])
+
+    cliente = WahaClient("http://waha:3000", "chave", "mkdtestu1xabcd")
+    cliente._transport = httpx.MockTransport(responder)
+
+    inst = _instancia(db)
+    monkeypatch.setattr(mod, "ORCAMENTO_CONVITES_S", 30)  # tempo de sobra no teste
+    r = WhatsappGrupoSyncService(db, cliente=cliente).sincronizar(inst)
+
+    assert r["vistos"] == TOTAL
+    assert r["novos"] == TOTAL
+    assert r["ignorados"] == 0
+    assert db.query(WhatsappGrupo).count() == TOTAL
+
+    # todo grupo nasce com atribuição — a decisão que não pode regredir
+    assert db.query(WhatsappGrupo).filter(WhatsappGrupo.sub_id.is_(None)).count() == 0
+    assert db.query(CustomLink).count() == TOTAL
+
+    # só os 10 grupos onde somos admin buscam convite
+    admins = db.query(WhatsappGrupo).filter(WhatsappGrupo.sou_admin.is_(True)).all()
+    assert len(admins) == 10 and r["convites"] == 10
+    assert all(g.link_convite for g in admins)

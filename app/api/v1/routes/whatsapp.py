@@ -23,6 +23,7 @@ from app.schemas.whatsapp import (
 )
 from app.services.waha_client import (
     ErroWhatsapp, WahaClient, chat_id_de_numero, numero_de_jid,
+    campo,
 )
 from app.services.whatsapp_instancia_service import (
     aplicar_evento_de_status, config_de_webhook, pertence_a_este_ambiente,
@@ -264,12 +265,17 @@ def _tratar_participantes(db: Session, nome_sessao: str, payload: dict) -> None:
     if not instancia:
         return
 
-    grupo_jid = str(((payload.get("group") or {}).get("id")) or "")
-    acao = str(payload.get("type") or "")
+    # Leitura tolerante à caixa: o schema documentado deste evento é camelCase,
+    # mas a doc do REST /groups também era — e o GOWS devolvia PascalCase, o que
+    # zerou o sync em 26/08 sem erro nenhum. Aqui o preço de errar é o mesmo:
+    # nenhuma entrada/saída registrada, em silêncio, e F6 inteira sem dado.
+    grupo_jid = str(campo(campo(payload, "group") or {}, "id", "JID") or "")
+    acao = str(campo(payload, "type", "action") or "")
     participantes = [
-        str((p or {}).get("id") or "")
-        for p in (payload.get("participants") or [])
+        str(campo(p, "id", "JID", "PhoneNumber", "LID") or "")
+        for p in (campo(payload, "participants") or [])
     ]
+    participantes = [p for p in participantes if p]
     if not grupo_jid or not participantes:
         return
 
