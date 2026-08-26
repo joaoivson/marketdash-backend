@@ -10,9 +10,39 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     
     # Supabase Configuration
+    #
+    # O Supabase trocou o formato das chaves de API: `anon`/`service_role` (JWTs
+    # longos) deram lugar a `sb_publishable_…`/`sb_secret_…`. As duas formas
+    # convivem enquanto a rotação não termina, então as quatro ficam
+    # declaradas e a resolução é feita por `supabase_chave_publica` /
+    # `supabase_chave_admin`.
+    #
+    # O que NÃO muda: a validação de token é `auth.get_user(token)`, uma chamada
+    # ao servidor do Supabase. Verificado contra o projeto real em 26/08/2026 —
+    # as duas chaves autenticam, e um token obtido com uma é aceito pelo client
+    # criado com a outra. Não há decodificação local de JWT aqui, então a
+    # mudança para ES256 não exige nada do nosso lado.
     SUPABASE_URL: Optional[str] = None
-    SUPABASE_KEY: Optional[str] = None
-    SUPABASE_SERVICE_KEY: Optional[str] = None
+    SUPABASE_KEY: Optional[str] = None                  # anon (formato antigo)
+    SUPABASE_SERVICE_KEY: Optional[str] = None          # service_role (antigo)
+    SUPABASE_PUBLISHABLE_KEY: Optional[str] = None      # sb_publishable_… (novo)
+    SUPABASE_SECRET_KEY: Optional[str] = None           # sb_secret_… (novo)
+    # Só é necessária para verificar o JWT LOCALMENTE, o que não fazemos hoje.
+    # Declarada para o `.env` do time não precisar ser podado.
+    SUPABASE_JWKS_URL: Optional[str] = None
+
+    @property
+    def supabase_chave_publica(self) -> Optional[str]:
+        """Chave de client comum. A nova manda; a antiga é retaguarda."""
+        return self.SUPABASE_PUBLISHABLE_KEY or self.SUPABASE_KEY
+
+    @property
+    def supabase_chave_admin(self) -> Optional[str]:
+        """Chave que ignora RLS e faz operações de admin (criar usuária, Storage).
+
+        **Nunca** vai para o frontend nem para log.
+        """
+        return self.SUPABASE_SECRET_KEY or self.SUPABASE_SERVICE_KEY
     
     # JWT
     JWT_SECRET: str

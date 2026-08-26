@@ -24,14 +24,16 @@ def get_supabase_client() -> Client:
     """Gets or initializes the Supabase client."""
     global _supabase
     if _supabase is None:
-        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-            logger.error("SUPABASE_URL ou SUPABASE_KEY não configurados")
+        chave = settings.supabase_chave_publica
+        if not settings.SUPABASE_URL or not chave:
+            logger.error("SUPABASE_URL ou chave pública do Supabase não configuradas "
+                         "(SUPABASE_PUBLISHABLE_KEY ou SUPABASE_KEY)")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Configuração do Supabase ausente no servidor"
             )
         try:
-            _supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            _supabase = create_client(settings.SUPABASE_URL, chave)
         except Exception as e:
             logger.error(f"Falha ao inicializar cliente Supabase: {e}")
             raise HTTPException(
@@ -46,14 +48,16 @@ def get_supabase_service_client() -> Client:
     """Gets or initializes the Supabase service client (bypasses RLS)."""
     global _supabase_service
     if _supabase_service is None:
-        if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
-            logger.error("SUPABASE_URL ou SUPABASE_SERVICE_KEY não configurados")
+        chave = settings.supabase_chave_admin
+        if not settings.SUPABASE_URL or not chave:
+            logger.error("SUPABASE_URL ou chave admin do Supabase não configuradas "
+                         "(SUPABASE_SECRET_KEY ou SUPABASE_SERVICE_KEY)")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Configuração Admin do Supabase ausente no servidor"
             )
         try:
-            _supabase_service = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
+            _supabase_service = create_client(settings.SUPABASE_URL, chave)
         except Exception as e:
             logger.error(f"Falha ao inicializar cliente Supabase Admin: {e}")
             raise HTTPException(
