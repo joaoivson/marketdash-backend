@@ -342,3 +342,168 @@ def test_execucao_estagnada_em_enviando_e_resgatada_pelo_tick(db):
     m.enviado_em = agora
     db.commit()
     assert execucao.id not in RoteiroRepository(db).enviando_estagnadas(agora)
+
+
+# --- ações de grupo (F4) ------------------------------------------------------
+
+def _cenario_acao(db, acao, parametro=None, sou_admin=True, com_campanha=True):
+    """Execução com UM passo de ação sobre UM grupo."""
+    from app.models.campanha_grupos import Campanha, CampanhaGrupo
+
+    suf = uuid.uuid4().hex[:8]
+    user = User(email=f"a-{suf}@x.com", hashed_password="x")
+    db.add(user); db.flush()
+    db.add(Subscription(user_id=user.id, plan="max", is_active=True))
+    db.add(UserSettings(user_id=user.id, whatsapp_envio_config=JANELA_24H))
+    inst = WhatsappInstancia(user_id=user.id, nome_instancia=f"mkdacao{suf}",
+                             status="conectada")
+    db.add(inst); db.flush()
+
+    campanha_id = None
+    if com_campanha:
+        c = Campanha(user_id=user.id, nome=f"c-{suf}")
+        db.add(c); db.flush()
+        campanha_id = c.id
+
+    roteiro = Roteiro(user_id=user.id, nome=f"r-{suf}", campanha_id=campanha_id)
+    db.add(roteiro); db.flush()
+    passo = RoteiroPasso(roteiro_id=roteiro.id, ordem=1, tipo_conteudo="acao_grupo",
+                         acao=acao, acao_parametro=parametro,
+                         tipo_tempo="ancora", hora_fixa=time_t(9, 0))
+    db.add(passo); db.flush()
+
+    g = WhatsappGrupo(user_id=user.id, jid=f"120363{suf}@g.us", nome="Antigo",
+                      ativo=True, permite_envio=True, sou_admin=sou_admin)
+    db.add(g); db.flush()
+    db.add(WhatsappGrupoInstancia(grupo_id=g.id, instancia_id=inst.id))
+    if campanha_id:
+        db.add(CampanhaGrupo(campanha_id=campanha_id, grupo_id=g.id, aberto=True))
+
+    execucao = RoteiroExecucao(roteiro_id=roteiro.id, user_id=user.id,
+                               data_ancora=datetime.now(timezone.utc).date(),
+                               status=EXEC_ENVIANDO)
+    db.add(execucao); db.flush()
+    db.add(RoteiroMensagem(execucao_id=execucao.id, passo_id=passo.id,
+                           grupo_id=g.id, user_id=user.id,
+                           agendado_para=datetime.now(timezone.utc) - timedelta(seconds=60)))
+    db.commit()
+    return user, g, execucao, campanha_id
+
+
+class _WahaComRenome(_FakeWaha):
+    def __init__(self):
+        super().__init__()
+        self.renomeados = []
+
+    def renomear_grupo(self, jid, nome):
+        self.renomeados.append((jid, nome))
+
+
+def test_acao_renomear_grupo_chama_o_waha_e_atualiza_o_nome(db):
+    user, grupo, execucao, _ = _cenario_acao(db, "renomear_grupo", "ABERTO 🔓")
+    cliente = _WahaComRenome()
+    r = _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert cliente.renomeados == [(grupo.jid, "ABERTO 🔓")]
+    assert grupo.nome == "ABERTO 🔓"
+    assert r["enviadas"] == 1 and cliente.enviadas == []   # ação não manda mensagem
+
+
+def test_acao_abrir_entrada_faz_flip_local_sem_tocar_no_whatsapp(db):
+    from app.models.campanha_grupos import CampanhaGrupo
+
+    user, grupo, execucao, campanha_id = _cenario_acao(db, "fechar_entrada")
+    cliente = _WahaComRenome()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    vinculo = (db.query(CampanhaGrupo)
+               .filter(CampanhaGrupo.campanha_id == campanha_id,
+                       CampanhaGrupo.grupo_id == grupo.id).one())
+    assert vinculo.aberto is False
+    assert cliente.renomeados == [] and cliente.enviadas == []
+
+
+def test_renomear_sem_admin_nasce_pulado_no_agendar(db):
+    from app.services.roteiro_service import RoteiroService
+
+    user, grupo, execucao, _ = _cenario_acao(db, "renomear_grupo", "X",
+                                             sou_admin=False)
+    # a materialização acontece no agendar; aqui exercitamos a regra direto
+    roteiro = db.query(Roteiro).filter(Roteiro.user_id == user.id).one()
+    nova, _avisos = RoteiroService(db).agendar(roteiro,
+                                               datetime.now(timezone.utc).date(),
+                                               ignorar_avisos=True)
+    linhas = (db.query(RoteiroMensagem)
+              .filter(RoteiroMensagem.execucao_id == nova.id).all())
+    assert [l.status for l in linhas] == [MSG_PULADA]
+    assert linhas[0].erro_motivo == "sem_admin"
+
+
+def test_acao_de_entrada_sem_campanha_falha_a_linha_sem_derrubar_o_lote(db):
+    user, grupo, execucao, _ = _cenario_acao(db, "abrir_entrada", com_campanha=False)
+    r = _servico(db, _WahaComRenome()).processar_fatia(execucao.id)
+    db.expire_all()
+    assert r["puladas"] == 1        # ValueError vira pulado, não exceção
+    assert execucao.status == EXEC_CONCLUIDA
+
+
+def test_sem_admin_no_grupo_nao_desconecta_o_numero(db):
+    # 403 do WhatsApp em UM grupo é problema DAQUELE grupo: punir a instância
+    # desconectaria o número da afiliada por causa de um rename.
+    user, grupo, execucao, _ = _cenario_acao(db, "renomear_grupo", "NOVO")
+
+    class _WahaSemAdmin(_WahaComRenome):
+        def renomear_grupo(self, jid, nome):
+            raise ErroWhatsapp("sem_permissao", "not an admin")
+
+    r = _servico(db, _WahaSemAdmin()).processar_fatia(execucao.id)
+    db.expire_all()
+    inst = db.query(WhatsappInstancia).filter(WhatsappInstancia.user_id == user.id).one()
+    assert r["puladas"] == 1
+    assert inst.status == "conectada"        # número intacto
+    assert inst.falhas_seguidas == 0         # não conta para o disjuntor
+    assert grupo.ativo is True               # grupo NÃO é desativado
+
+
+def test_erro_transitorio_na_acao_nao_desativa_o_grupo(db):
+    user, grupo, execucao, _ = _cenario_acao(db, "renomear_grupo", "NOVO")
+
+    class _WahaInstavel(_WahaComRenome):
+        def renomear_grupo(self, jid, nome):
+            raise ErroWhatsapp("acao", "status 502: bad gateway")
+
+    r = _servico(db, _WahaInstavel()).processar_fatia(execucao.id)
+    db.expire_all()
+    assert r["puladas"] == 1
+    assert grupo.ativo is True   # 5xx não é "grupo inválido"
+
+
+def test_admin_vem_do_vinculo_por_numero_nao_do_flag_do_grupo(db):
+    """Com 2 números, o flag do grupo é do ÚLTIMO sync — o que vale é o
+    vínculo: basta UM número admin, porque o motor faz failover."""
+    from app.services.roteiro_service import RoteiroService
+
+    user, grupo, execucao, _ = _cenario_acao(db, "renomear_grupo", "X",
+                                             sou_admin=False)
+    # o flag agregado diz "não sou admin", mas o vínculo do número diz que é
+    vinculo = (db.query(WhatsappGrupoInstancia)
+               .filter(WhatsappGrupoInstancia.grupo_id == grupo.id).one())
+    vinculo.sou_admin = True
+    db.commit()
+
+    roteiro = db.query(Roteiro).filter(Roteiro.user_id == user.id).one()
+    nova, _a = RoteiroService(db).agendar(roteiro,
+                                          datetime.now(timezone.utc).date(),
+                                          ignorar_avisos=True)
+    linhas = (db.query(RoteiroMensagem)
+              .filter(RoteiroMensagem.execucao_id == nova.id).all())
+    assert [l.status for l in linhas] == [MSG_PENDENTE]   # não foi pulado
+
+
+def test_flip_local_nao_paga_pausa_anti_ban(db):
+    user, grupo, execucao, _ = _cenario_acao(db, "abrir_entrada")
+    pausas = []
+    _servico(db, _WahaComRenome(), dormir=pausas.append).processar_fatia(execucao.id)
+    assert pausas == []   # abrir/fechar entrada não toca o WhatsApp

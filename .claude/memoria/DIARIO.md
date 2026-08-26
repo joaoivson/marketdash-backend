@@ -11,6 +11,32 @@
 
 ---
 
+## 2026-08-26 — Grupos F4: roteiros, templates e a IA no lugar certo
+
+**`payload: list` sem genérico é uma armadilha do FastAPI.** A rota de salvar
+passos virou `multipart/form-data` no OpenAPI e devolvia 422 com `input: null`
+para qualquer JSON — o cliente não tinha o que fazer. Só apareceu quando a
+tela tentou salvar. Agora tem teste de contrato lendo o OpenAPI das 3 rotas
+que recebem lista: elas TÊM que declarar `application/json`.
+
+**IA em tempo de envio seria o erro caro.** Custo por mensagem, latência no
+meio do lote, risco de inventar preço. Gerar variações uma vez e sortear
+resolve o mesmo problema (texto diferente por grupo = anti-ban) com custo
+zero no disparo. E variação que perde `{link}` é descartada: sem o link do
+grupo não há atribuição de comissão, que é o produto inteiro.
+
+**O prompt que fala de placeholders não pode passar por `.format()`** — as
+chaves que ele manda preservar são exatamente as que o format tenta expandir.
+Quebrava 100% das gerações; o teste pegou antes de qualquer chamada real.
+
+**Erro de ação não é erro de número.** A revisão mostrou que 403 num rename
+(não sou admin daquele grupo) virava `auth` fatal e desconectava a sessão, e
+que 5xx classificava o grupo como inválido — um passo sobre 50 grupos podia
+desativar os 50. Regra que fica: só desative grupo com evidência de que ELE
+sumiu; erro transitório e falta de permissão pulam a linha.
+
+---
+
 ## 2026-08-26 — Grupos F3: o motor (claim atômico, fatias, janela, tetos)
 
 Raciocínios que o diff não conta:

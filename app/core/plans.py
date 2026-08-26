@@ -47,6 +47,8 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "automacoes",
                 # Campanhas de grupos de WhatsApp (Módulo de Grupos F2+).
                 "campanhas_grupos",
+                # Templates de mensagem com variações (F4).
+                "templates",
                 "indique_ganhe",
                 "configuracoes",
                 "planos",
@@ -74,7 +76,7 @@ def is_unlimited(value: int) -> bool:
 PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links"})
 
 # Menus exclusivos do MAX (cadeado no Essencial E no Pro).
-MAX_ONLY_MENUS: FrozenSet[str] = frozenset({"automacoes", "campanhas_grupos"})
+MAX_ONLY_MENUS: FrozenSet[str] = frozenset({"automacoes", "campanhas_grupos", "templates"})
 
 # Checkout Kiwify por (plano, periodo) — product_id preenchido via tabela/env.
 PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {

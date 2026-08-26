@@ -281,6 +281,31 @@ class WahaClient:
             return codigo
         return f"https://chat.whatsapp.com/{codigo}"
 
+    def renomear_grupo(self, jid: str, nome: str) -> None:
+        """
+        PUT /api/{sessao}/groups/{id}/subject — só funciona como admin.
+
+        `auth_em_403=False`: 403 aqui é "não sou admin DESTE grupo", não
+        credencial inválida — subir como `auth` (fatal) desconectaria o número
+        inteiro por causa de um grupo.
+        """
+        status, dados = self._pedir(
+            "PUT", f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid)}/subject",
+            {"subject": (nome or "").strip()[:100]},
+            auth_em_403=False,
+        )
+        if status < 400:
+            return
+        detalhe = str(dados)[:150]
+        d = detalhe.lower()
+        if status == 403 or any(p in d for p in ("admin", "forbidden", "not authorized")):
+            raise ErroWhatsapp("sem_permissao", detalhe)
+        if any(p in d for p in ("not exist", "not found", "jid", "no longer")):
+            raise ErroWhatsapp("grupo_invalido", detalhe)
+        # 5xx / erro transitório NÃO é grupo inválido: classificar assim
+        # desativaria grupos bons em lote (um passo, N grupos).
+        raise ErroWhatsapp("acao", f"status {status}: {detalhe}")
+
     # --- envio -------------------------------------------------------------
 
     def _classificar_erro_envio(self, status: int, detalhe: str,

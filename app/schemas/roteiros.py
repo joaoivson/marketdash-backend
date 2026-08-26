@@ -2,7 +2,7 @@
 from datetime import date, datetime, time
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PassoIn(BaseModel):
@@ -21,6 +21,19 @@ class PassoIn(BaseModel):
     grupos_alvo: str = "todos"              # todos|selecao
     grupos_alvo_ids: Optional[List[int]] = None
     marcar_todos: str = "nunca"
+
+    @model_validator(mode="after")
+    def _acao_coerente(self):
+        """Ação inválida tem que falhar ao SALVAR, não no disparo — lá vira
+        uma linha `pulado` com motivo críptico horas depois."""
+        if self.tipo_conteudo != "acao_grupo":
+            return self
+        acoes = {"renomear_grupo", "abrir_entrada", "fechar_entrada"}
+        if self.acao not in acoes:
+            raise ValueError(f"Ação inválida. Use uma de: {', '.join(sorted(acoes))}")
+        if self.acao == "renomear_grupo" and not (self.acao_parametro or "").strip():
+            raise ValueError("Renomear grupo exige o novo nome.")
+        return self
 
 
 class RoteiroCriar(BaseModel):

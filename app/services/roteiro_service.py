@@ -198,6 +198,7 @@ class RoteiroService:
         )
         self.repo.adicionar(execucao)
 
+        admin_por_grupo = self._admin_por_grupo(roteiro.user_id)
         mensagens: List[RoteiroMensagem] = []
         for passo, momento in resolvidos:
             for grupo in self.grupos_do_passo(roteiro, passo):
@@ -207,10 +208,14 @@ class RoteiroService:
                     status, motivo = MSG_PULADA, "grupo_inativo"
                 elif not grupo.permite_envio and passo.tipo_conteudo != CONTEUDO_ACAO:
                     status, motivo = MSG_PULADA, "sem_permissao"
-                elif passo.tipo_conteudo == CONTEUDO_ACAO:
-                    # Executor de ações entra na F4 — a linha nasce pulada com
-                    # motivo explícito em vez de sumir em silêncio.
-                    status, motivo = MSG_PULADA, "acao_indisponivel"
+                elif (passo.tipo_conteudo == CONTEUDO_ACAO
+                      and passo.acao == "renomear_grupo"
+                      and not admin_por_grupo.get(grupo.id, False)):
+                    # Renomear exige admin — e "ser admin" é POR NÚMERO
+                    # (whatsapp_grupo_instancias), não o flag agregado do
+                    # grupo: com 2 números, o último sync sobrescreveria.
+                    # Basta UM número admin: o motor faz failover entre eles.
+                    status, motivo = MSG_PULADA, "sem_admin"
                 mensagens.append(RoteiroMensagem(
                     execucao_id=execucao.id,
                     passo_id=passo.id,
@@ -238,6 +243,22 @@ class RoteiroService:
             execucao.concluido_em = _dt.now(_tz.utc)
         self.db.commit()
         return execucao, avisos
+
+    def _admin_por_grupo(self, user_id: int) -> Dict[int, bool]:
+        """grupo_id → algum número da afiliada é admin ali (vínculo N:N)."""
+        from app.models.whatsapp_grupos import WhatsappGrupo, WhatsappGrupoInstancia
+
+        linhas = (
+            self.db.query(WhatsappGrupoInstancia.grupo_id,
+                          WhatsappGrupoInstancia.sou_admin)
+            .join(WhatsappGrupo, WhatsappGrupo.id == WhatsappGrupoInstancia.grupo_id)
+            .filter(WhatsappGrupo.user_id == user_id)
+            .all()
+        )
+        mapa: Dict[int, bool] = {}
+        for grupo_id, sou_admin in linhas:
+            mapa[grupo_id] = mapa.get(grupo_id, False) or bool(sou_admin)
+        return mapa
 
     # --- envio rápido -------------------------------------------------------
 

@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.plans import normalize_plan, plan_limit, is_unlimited
 from app.models.roteiro import (
-    CONTEUDO_MIDIA, CONTEUDO_OFERTA, EXEC_AGENDADA, EXEC_CANCELADA,
+    CONTEUDO_ACAO, CONTEUDO_MIDIA, CONTEUDO_OFERTA, EXEC_AGENDADA, EXEC_CANCELADA,
     EXEC_CONCLUIDA, EXEC_ENVIANDO, EXEC_PAUSADA, MSG_ENVIADA, MSG_FALHOU,
     MSG_PENDENTE, MSG_PULADA, RoteiroMensagem,
 )
@@ -287,8 +287,17 @@ class RoteiroEnvioService:
                 r.puladas += 1
                 continue
 
+            # Flip local (abrir/fechar entrada) não toca o WhatsApp: pagar
+            # pausa anti-ban por ele só desperdiça o orçamento da fatia.
+            passo_previa = self._passo_de(mensagem)
+            e_flip_local = (
+                passo_previa.tipo_conteudo == CONTEUDO_ACAO
+                and passo_previa.acao in ("abrir_entrada", "fechar_entrada")
+            )
             # Ritmo: jitter dentro da rodada; pausa longa entre rodadas.
-            if na_rodada >= settings.WHATSAPP_RODADA_TAMANHO:
+            if e_flip_local:
+                pass
+            elif na_rodada >= settings.WHATSAPP_RODADA_TAMANHO:
                 self.dormir(random.uniform(settings.WHATSAPP_GRUPO_PAUSA_MIN_S,
                                            settings.WHATSAPP_GRUPO_PAUSA_MAX_S))
                 na_rodada = 0
@@ -304,7 +313,9 @@ class RoteiroEnvioService:
 
             try:
                 cliente = self._cliente(instancia.nome_instancia)
-                if passo.tipo_conteudo == CONTEUDO_MIDIA and passo.midia_url:
+                if passo.tipo_conteudo == CONTEUDO_ACAO:
+                    self._executar_acao(cliente, passo, grupo)
+                elif passo.tipo_conteudo == CONTEUDO_MIDIA and passo.midia_url:
                     cliente.enviar_imagem(grupo.jid, passo.midia_url, legenda=texto)
                 else:
                     cliente.enviar_texto(grupo.jid, texto)
@@ -319,15 +330,57 @@ class RoteiroEnvioService:
             instancia.falhas_seguidas = 0
             self.repo.marcar(mensagem, MSG_ENVIADA)
             r.enviadas += 1
-            na_rodada += 1
+            if not e_flip_local:
+                na_rodada += 1
 
         self._atualizar_contadores(execucao)
         return r.to_dict()
 
     # --- desfechos ----------------------------------------------------------
 
+    def _executar_acao(self, cliente, passo, grupo) -> None:
+        """Ações do roteiro (spec §4.8): renomear o grupo faz parte da régua de
+        lançamento ("ABRE ÀS 20H" → "ABERTO"); abrir/fechar entrada é flip
+        local em campanha_grupos — não passa pelo WhatsApp."""
+        from app.models.campanha_grupos import CampanhaGrupo
+        from app.models.roteiro import Roteiro
+
+        acao = (passo.acao or "").strip()
+        if acao == "renomear_grupo":
+            novo = (passo.acao_parametro or "").strip()
+            if not novo:
+                raise ValueError("renomear_grupo sem nome")
+            cliente.renomear_grupo(grupo.jid, novo)
+            grupo.nome = novo[:255]
+            self.db.add(grupo)
+            return
+        if acao in ("abrir_entrada", "fechar_entrada"):
+            roteiro = self.db.query(Roteiro).get(passo.roteiro_id)
+            if not roteiro or not roteiro.campanha_id:
+                raise ValueError(f"{acao} exige roteiro vinculado a uma campanha")
+            vinculo = (
+                self.db.query(CampanhaGrupo)
+                .filter(CampanhaGrupo.campanha_id == roteiro.campanha_id,
+                        CampanhaGrupo.grupo_id == grupo.id)
+                .first()
+            )
+            if not vinculo:
+                raise ValueError("grupo fora da campanha do roteiro")
+            vinculo.aberto = acao == "abrir_entrada"
+            self.db.add(vinculo)
+            return
+        raise ValueError(f"ação desconhecida: {acao!r}")
+
+    # Motivos que são problema do GRUPO, não do número: pulam a linha e não
+    # contam para o disjuntor (5 grupos sem admin não podem desconectar a sessão).
+    MOTIVOS_DO_GRUPO = {"grupo_invalido", "sem_permissao", "acao"}
+
     def _tratar_erro(self, execucao, mensagem, instancia, e: ErroWhatsapp,
                      r: ResultadoDaFatia, elegiveis: List) -> None:
+        if e.motivo in ("sem_permissao", "acao"):
+            self.repo.marcar(mensagem, MSG_PULADA, erro=e.motivo)
+            r.puladas += 1
+            return
         if e.motivo == "grupo_invalido":
             grupo = self._grupo_de(mensagem)
             grupo.ativo = False

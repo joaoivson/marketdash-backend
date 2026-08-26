@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     WHATSAPP_FATIA_ORCAMENTO_S: int = 900       # ~15min por fatia (< task_time_limit 1200)
     WHATSAPP_HASH_SALT: Optional[str] = None    # sha256(jid+salt) p/ eventos (F6)
 
+    # --- IA (F4): SÓ gera variações de template na tela de Templates. Nunca no
+    # caminho do envio — variação sorteada tem custo zero, latência zero e não
+    # inventa preço. Chave NOVA: a antiga vazou em 22/08 e foi revogada.
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODELO: str = "gpt-4o-mini"
+
     # Processar CSV na própria requisição (síncrono), sem Celery. Use quando não houver worker (ex.: Coolify sem worker).
     # Os dados ficam disponíveis logo após o upload. Para arquivos muito grandes prefira Celery + worker.
     PROCESS_CSV_SYNC: bool = False

@@ -16,7 +16,7 @@ from app.models.roteiro import (
     EXEC_AGENDADA, EXEC_ENVIANDO, EXEC_PAUSADA, Roteiro, RoteiroPasso,
 )
 from app.schemas.roteiros import (
-    AgendarIn, EnvioRapidoIn, ExecucaoOut, PassoOut, RoteiroCriar,
+    AgendarIn, EnvioRapidoIn, ExecucaoOut, PassoIn, PassoOut, RoteiroCriar,
     RoteiroDetalheOut, RoteiroOut,
 )
 from app.services.janela_envio_service import BRT
@@ -126,14 +126,12 @@ def detalhe(roteiro=Depends(roteiro_da_usuaria), db: Session = Depends(get_db)):
 
 @router.put("/{roteiro_id}/passos", response_model=RoteiroDetalheOut)
 def definir_passos(
-    payload: list,
+    payload: list[PassoIn],
     roteiro=Depends(roteiro_da_usuaria),
     db: Session = Depends(get_db),
 ):
-    from app.schemas.roteiros import PassoIn
-    passos = [PassoIn.model_validate(p) for p in payload]
     servico = RoteiroService(db)
-    servico.definir_passos(roteiro, passos)
+    servico.definir_passos(roteiro, payload)
     base = _roteiro_out(db, roteiro)
     return RoteiroDetalheOut(**base.model_dump(exclude={"total_passos"}),
                              total_passos=base.total_passos,
