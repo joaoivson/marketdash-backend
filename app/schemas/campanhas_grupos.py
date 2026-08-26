@@ -82,7 +82,9 @@ class VinculoDeAnuncioOut(BaseModel):
 
 
 class VinculosDeAnuncioOut(BaseModel):
-    vinculos: Dict[str, VinculoDeAnuncioOut]
+    # Chave int no Python; em JSON vira string ("268"), que é como a tela
+    # indexa. Declarar `str` aqui faz o response_model recusar o dict inteiro.
+    vinculos: Dict[int, VinculoDeAnuncioOut]
 
 
 class PeriodoOut(BaseModel):

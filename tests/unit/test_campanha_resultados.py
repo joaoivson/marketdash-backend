@@ -328,6 +328,20 @@ def test_payloads_batem_com_os_schemas_de_resposta(db):
     ResumoConsolidadoOut.model_validate(resumo_consolidado(
         inicio=ONTEM.isoformat(), fim=HOJE.isoformat(), current_user=user, db=db))
 
+    # As duas de vínculo também: um 500 de response_model só apareceu quando a
+    # rota foi chamada por HTTP de verdade (chave int contra Dict[str, ...]).
+    from app.api.v1.routes.campanhas_grupos import listar_anuncios, vinculos_de_anuncio
+    from app.schemas.campanhas_grupos import AnunciosDaCampanhaOut, VinculosDeAnuncioOut
+
+    anuncio = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
+                       name="A", status="ACTIVE")
+    db.add(anuncio); db.flush()
+    db.add(CampanhaAnuncio(campanha_id=campanha.id, campaign_id=anuncio.id))
+    db.commit()
+    VinculosDeAnuncioOut.model_validate(vinculos_de_anuncio(current_user=user, db=db))
+    AnunciosDaCampanhaOut.model_validate(
+        listar_anuncios(campanha=campanha, current_user=user, db=db))
+
 
 def test_periodo_invalido_da_422_em_vez_de_numero_errado(db):
     """Data quebrada tem que falhar alto. Cair no default de 30 dias faz um bug
@@ -363,7 +377,10 @@ def test_anuncio_ja_vinculado_a_outra_campanha_da_409(db):
     with pytest.raises(HTTPException) as e:
         definir_anuncios(payload=[anuncio.id], campanha=outra, current_user=user, db=db)
     assert e.value.status_code == 409
+    # A mensagem nomeia o anúncio E a campanha que o detém: sem a segunda, a
+    # afiliada não sabe para onde ir desvincular.
     assert "Anúncio disputado" in e.value.detail
+    assert campanha.nome in e.value.detail
 
     # E a lista já avisa antes do clique, com o nome de quem o tem.
     linha = next(a for a in listar_anuncios(campanha=outra, current_user=user,

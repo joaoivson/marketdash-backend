@@ -374,12 +374,19 @@ def definir_anuncios(
     # tem UNIQUE, mas 409 explicado é melhor do que violação de constraint.
     ocupados = repo.vinculos_de_outras_campanhas(campanha.id, list(payload))
     if ocupados:
-        nomes = {c.id: c.name for c in repo.campanhas_de_anuncio(current_user.id)}
-        conflitos = ", ".join(sorted(nomes.get(cid, str(cid)) for cid in ocupados))
+        # A mensagem tem que dizer PARA ONDE ir desvincular — nomear só o
+        # anúncio deixa a afiliada sem o próximo passo.
+        nomes_de_anuncio = {c.id: c.name for c in repo.campanhas_de_anuncio(current_user.id)}
+        nomes_de_campanha = {c.id: c.nome for c in _servico(db).listar(
+            current_user.id, incluir_arquivadas=True)[0]}
+        conflitos = ", ".join(sorted(
+            f'"{nomes_de_anuncio.get(cid, cid)}" (em "{nomes_de_campanha.get(gid, gid)}")'
+            for cid, gid in ocupados.items()
+        ))
         raise HTTPException(
             status_code=409,
-            detail=(f"Já vinculado a outra campanha de grupos: {conflitos}. "
-                    "Desvincule lá antes de vincular aqui."),
+            detail=(f"Estes anúncios já pertencem a outra campanha de grupos: "
+                    f"{conflitos}. Desvincule lá antes de vincular aqui."),
         )
     repo.definir(campanha.id, list(dict.fromkeys(payload)))
     db.commit()
