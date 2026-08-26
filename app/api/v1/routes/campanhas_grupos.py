@@ -169,7 +169,7 @@ def resumo_consolidado(
     totais["gasto_atribuido"] = investimento_com_imposto
     totais["lucro"] = round(totais["comissao_liquida"] - investimento_com_imposto, 2)
     totais["lucro_por_pessoa"] = (round(totais["lucro"] / totais["participantes"], 2)
-                                  if totais["participantes"] else 0.0)
+                                  if totais["participantes"] else None)
     por_campanha.sort(key=lambda l: l["lucro"], reverse=True)
     return {
         "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},

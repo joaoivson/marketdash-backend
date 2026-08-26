@@ -103,9 +103,12 @@ class CampanhaResultadoService:
                 "comissao_liquida": _duas_casas(liquida),
                 "gasto_atribuido": _duas_casas(gasto),
                 "lucro": lucro,
-                # A métrica que decide o investimento. Sem participante, é 0 —
-                # não None: a tela mostra "—" por conta própria quando quiser.
-                "lucro_por_pessoa": _duas_casas(lucro / participantes) if participantes else 0.0,
+                # A métrica que decide o investimento. Sem participante ela NÃO
+                # existe — e 0,00 seria uma afirmação diferente ("cada pessoa
+                # rende zero"), que é o mesmo colapso null-vs-zero que o resto
+                # do módulo evita em `leads` e `cpl`.
+                "lucro_por_pessoa": (_duas_casas(lucro / participantes)
+                                     if participantes else None),
             })
 
         linhas.sort(key=lambda l: l["lucro"], reverse=True)
@@ -220,7 +223,7 @@ class CampanhaResultadoService:
         return {"participantes": 0, "entradas": 0, "saidas": 0, "ficaram": 0,
                 "mensagens": 0, "cliques": 0, "pedidos": 0,
                 "comissao_liquida": 0.0, "gasto_atribuido": 0.0, "lucro": 0.0,
-                "lucro_por_pessoa": 0.0}
+                "lucro_por_pessoa": None}
 
     def _totais(self, linhas: List[Dict]) -> Dict:
         t = self._totais_vazios()
@@ -231,6 +234,6 @@ class CampanhaResultadoService:
             for chave in ("comissao_liquida", "gasto_atribuido", "lucro"):
                 t[chave] = _duas_casas(t[chave] + l[chave])
         t["lucro_por_pessoa"] = (
-            _duas_casas(t["lucro"] / t["participantes"]) if t["participantes"] else 0.0
+            _duas_casas(t["lucro"] / t["participantes"]) if t["participantes"] else None
         )
         return t

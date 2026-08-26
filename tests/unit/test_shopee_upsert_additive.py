@@ -21,13 +21,16 @@ def _fake_response(nodes):
     }
 
 
-def _fake_node(purchase_dt, order_id="order1", item_id="item1", commission=10.0, revenue=100.0):
+def _fake_node(purchase_dt, order_id="order1", item_id="item1", commission=10.0, revenue=100.0,
+               net_commission=None):
+    """`net_commission=None` mantém total == líquida (afiliado sem RM vinculada).
+    Passe um valor menor para simular afiliado com Fee de gestão da RM."""
     return {
         "purchaseTime": int(purchase_dt.timestamp()),
         "conversionId": f"conv-{order_id}-{item_id}",
         "conversionStatus": "COMPLETED",
         "estimatedTotalCommission": commission,
-        "netCommission": commission,
+        "netCommission": commission if net_commission is None else net_commission,
         "utmContent": "",
         "orders": [
             {
@@ -267,3 +270,45 @@ async def test_sync_user_marks_lock_collision_instead_of_running():
     assert result == 0
     fake_run_repo.mark_skipped_lock.assert_called_once_with(42)
     sync_commissions_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_grava_comissao_liquida_do_afiliado_e_nao_a_total():
+    """Regressão do bug real (26/08/2026, aluno com RM vinculada): o sync gravava
+    `estimatedTotalCommission` ("Comissão total do pedido") no lugar de
+    `netCommission` ("Comissão líquida do afiliado"), inflando a comissão na tela
+    pelo Fee de gestão da RM — 902,17 em vez de 830,00 num único dia.
+
+    Os dois campos precisam ter valores DIFERENTES aqui: com total == líquida (o
+    caso de quem não tem rede/hub) o teste passaria com o campo errado, que foi
+    exatamente o que deixou o bug passar despercebido.
+    """
+    from app.repositories.dataset_row_repository import DatasetRowRepository
+    from app.services import shopee_integration_service as svc_mod
+
+    now_brt = datetime.now(BRT)
+    # 10,00 de comissão total; 9,20 líquida (Fee de gestão da RM de 8%).
+    node = _fake_node(now_brt - timedelta(hours=2), commission=10.0, net_commission=9.20)
+    fake_dataset = MagicMock(id=555)
+
+    with patch.object(
+        svc_mod, "_get_or_create_shopee_dataset", return_value=fake_dataset
+    ), patch(
+        "app.services.shopee_graphql_client.execute_graphql",
+        new_callable=AsyncMock,
+        return_value=_fake_response([node]),
+    ), patch.object(
+        svc_mod, "decrypt_value", return_value="fake-password"
+    ), patch.object(
+        DatasetRowRepository, "count_by_date", return_value={}
+    ), patch.object(
+        DatasetRowRepository, "bulk_create"
+    ) as bulk_create_mock:
+        service = svc_mod.ShopeeIntegrationService(_fake_repo_with_integration())
+        await service.sync_commissions(user_id=1, db=MagicMock(), days_back=1)
+
+    (rows_arg,), _ = bulk_create_mock.call_args
+    assert len(rows_arg) == 1
+    assert float(rows_arg[0].commission) == pytest.approx(9.20), (
+        "gravou a comissão TOTAL do pedido em vez da líquida do afiliado"
+    )

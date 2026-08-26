@@ -108,7 +108,9 @@ class LinhaDeResultadoOut(BaseModel):
     comissao_liquida: float
     gasto_atribuido: float
     lucro: float
-    lucro_por_pessoa: float
+    # None quando não há participante: a métrica não existe, e 0,00 diria
+    # "cada pessoa rende zero", que é outra afirmação.
+    lucro_por_pessoa: Optional[float] = None
 
 
 class TotaisDeResultadoOut(BaseModel):
@@ -122,7 +124,9 @@ class TotaisDeResultadoOut(BaseModel):
     comissao_liquida: float
     gasto_atribuido: float
     lucro: float
-    lucro_por_pessoa: float
+    # None quando não há participante: a métrica não existe, e 0,00 diria
+    # "cada pessoa rende zero", que é outra afirmação.
+    lucro_por_pessoa: Optional[float] = None
 
 
 class AnunciosDoPeriodoOut(BaseModel):
@@ -152,7 +156,9 @@ class ResumoDeCampanhaOut(BaseModel):
     entradas: int
     comissao_liquida: float
     lucro: float
-    lucro_por_pessoa: float
+    # None quando não há participante: a métrica não existe, e 0,00 diria
+    # "cada pessoa rende zero", que é outra afirmação.
+    lucro_por_pessoa: Optional[float] = None
 
 
 class ResumoConsolidadoOut(BaseModel):

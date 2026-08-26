@@ -182,6 +182,43 @@ cada pessoa dentro do grupo vale**.
   derrubariam o Dashboard inteiro.
 - Abas da campanha viraram controladas pela URL — `?tab=` não navegava.
 
+## [Não versionado] - 2026-08-26 (Fix: sync Shopee gravava a comissão errada)
+
+Reportado por um aluno com rede/hub (Uno Hub): a Shopee mostrava R$ 830,00 de
+comissão no dia e o MarketDash mostrava R$ 902,17.
+
+### Fixed
+
+- **O sync da Shopee gravava a "Comissão total do pedido" no lugar da
+  "Comissão líquida do afiliado".** O serviço lia
+  `estimatedTotalCommission`, que é a comissão **antes** do Fee de gestão da RM.
+  Quem tem rede/hub vinculado via a comissão inflada pelo fee (8% no caso
+  medido) em todas as telas — Dashboard, Campanhas, lucro e ROAS.
+  - Passou a usar `netCommission`, que já era pedido na query GraphQL e nunca
+    era lido. Validado em produção, pedido a pedido, contra o relatório do
+    afiliado: `netCommission` == "Comissão líquida do afiliado(R$)" e
+    `estimatedTotalCommission` == "Comissão total do pedido(R$)", com as cinco
+    casas decimais batendo.
+  - **Por que passou despercebido:** para afiliado SEM rede/hub os dois campos
+    são idênticos. Só quem tem RM com fee > 0 via a diferença. O comentário no
+    código afirmava que `estimatedTotalCommission` equivalia à líquida — era
+    falso, e agora está corrigido no lugar.
+  - **O upload de CSV sempre usou a coluna certa**
+    (`csv_service.py`: `"commission": {"comissao_liquida_do_afiliado_r"}`), então
+    as duas fontes do mesmo produto discordavam entre si.
+  - Teste de regressão: `test_grava_comissao_liquida_do_afiliado_e_nao_a_total`
+    mocka os dois campos com valores **diferentes** — os mocks antigos usavam o
+    mesmo valor nos dois e passavam com o campo errado.
+
+### Pendente (não incluído neste fix)
+
+- **Histórico já gravado continua inflado** para quem tem RM: a correção só vale
+  para as próximas sincronizações. O backfill depende de saber a taxa de
+  contrato de cada afiliado, que hoje não é persistida.
+- **Pedidos "Não pago"**: o sync grava a comissão estimada deles, enquanto o
+  relatório da Shopee traz zero. Hoje isso não aparece no KPI só porque
+  `UNPAID` está fora da allowlist de status.
+
 ## [Não versionado] - 2026-08-26 (Fix: token do Facebook expirado deslogava a usuária)
 
 Reportado por uma aluna: as campanhas pararam de aparecer e, ao abrir

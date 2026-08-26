@@ -568,3 +568,27 @@ def test_gasto_de_campanha_sem_grupos_entra_no_lucro_do_consolidado(db):
     assert r["investimento"] == pytest.approx(40.0)
     assert r["totais"]["lucro"] == pytest.approx(60.0)   # 100 de comissão − 40
     assert r["totais"]["gasto_atribuido"] == pytest.approx(40.0)
+
+
+def test_lucro_por_pessoa_sem_participante_e_none_nao_zero(db):
+    """
+    Sem participante a métrica NÃO existe. 0,00 diria "cada pessoa rende zero",
+    que é outra afirmação — o mesmo colapso null-vs-zero que o módulo evita em
+    `leads` e `cpl`.
+    """
+    user, campanha, grupos, ds = _cenario(db)
+    for g in grupos:
+        g.participantes = 0
+        db.add(g)
+    db.commit()
+
+    r = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
+    assert all(l["lucro_por_pessoa"] is None for l in r["linhas"])
+    assert r["totais"]["lucro_por_pessoa"] is None
+    # E com participante, volta a existir.
+    grupos[0].participantes = 50
+    db.add(grupos[0]); _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
+    db.commit()
+    r2 = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
+    linha = next(l for l in r2["linhas"] if l["grupo_id"] == grupos[0].id)
+    assert linha["lucro_por_pessoa"] == pytest.approx(2.0)
