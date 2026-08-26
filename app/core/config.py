@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA: int = 5000  # proteção da plataforma
     WHATSAPP_FATIA_ORCAMENTO_S: int = 900       # ~15min por fatia (< task_time_limit 1200)
     WHATSAPP_HASH_SALT: Optional[str] = None    # sha256(jid+salt) p/ eventos (F6)
+    # Retenção das capturas do monitoramento (F8). O texto é escrito por
+    # TERCEIROS e a finalidade — replicar uma oferta — é efêmera: passada a
+    # janela, guardar não serve a nada e só amplia o que temos de terceiro.
+    MONITORAMENTO_RETENCAO_DIAS: int = 30
 
     # --- IA (F4): SÓ gera variações de template na tela de Templates. Nunca no
     # caminho do envio — variação sorteada tem custo zero, latência zero e não

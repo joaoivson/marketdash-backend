@@ -299,10 +299,16 @@ def _rodar_snapshot_de_grupos() -> None:
         # ficaria invisível para sempre — nem replica, nem aparece como erro.
         from app.services.monitoramento_service import MonitoramentoService
 
-        destravadas = MonitoramentoService(db).destravar_replicando()
+        servico_mon = MonitoramentoService(db)
+        destravadas = servico_mon.destravar_replicando()
+        # Retenção: texto escrito por terceiros não fica aqui para sempre.
+        expurgadas = servico_mon.expurgar_antigas(
+            settings.MONITORAMENTO_RETENCAO_DIAS
+        )
         logger.info("Snapshot diário: %s | órfãs removidas: %s | sessões "
-                    "realinhadas: %s | capturas destravadas: %s",
-                    total, orfas, eventos, destravadas)
+                    "realinhadas: %s | capturas destravadas: %s | "
+                    "expurgadas: %s", total, orfas, eventos, destravadas,
+                    expurgadas)
     except Exception:
         logger.exception("Snapshot diário de grupos falhou por inteiro")
     finally:

@@ -643,3 +643,30 @@ def test_patch_com_null_explicito_nao_derruba_a_rota(db):
     assert saida.nome == "M"              # null = "não mexer"
     assert saida.ativo is False
     assert saida.somente_com_link is False
+
+
+def test_expurgo_apaga_captura_antiga_e_preserva_recente(db):
+    """
+    Texto escrito por terceiros não fica aqui para sempre. A finalidade —
+    replicar uma oferta — é efêmera; passada a janela, guardar só amplia o que
+    temos de terceiro sem servir a nada.
+    """
+    from sqlalchemy import text as _sql
+
+    user, _i, origem, _d, campanha = _cenario(db)
+    svc = MonitoramentoService(db, plan_limit_monitoramentos=3)
+    m = svc.criar(user.id, "M", origem.id, destino_campanha_id=campanha.id, ativo=True)
+    db.commit()
+    antiga = svc.capturar(m, "Velha https://shopee.com.br/velha", "https://shopee.com.br/velha")
+    recente = svc.capturar(m, "Nova https://shopee.com.br/nova", "https://shopee.com.br/nova")
+    db.commit()
+    db.execute(_sql("UPDATE monitoramento_capturas SET criado_em = NOW() - INTERVAL "
+                    "'60 days' WHERE id = :id"), {"id": antiga.id})
+    db.commit()
+    id_antiga, id_recente = antiga.id, recente.id
+
+    svc.expurgar_antigas(dias=30)
+    restantes = {c.id for c in db.query(MonitoramentoCaptura).filter(
+        MonitoramentoCaptura.monitoramento_id == m.id).all()}
+    assert id_antiga not in restantes
+    assert id_recente in restantes

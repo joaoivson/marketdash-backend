@@ -361,6 +361,30 @@ class MonitoramentoService:
             logger.warning("%s captura(s) destravadas de `replicando`", len(linhas))
         return len(linhas)
 
+    def expurgar_antigas(self, dias: int = 30) -> int:
+        """
+        Apaga capturas antigas — texto escrito por terceiros não fica aqui para
+        sempre.
+
+        A finalidade é replicar uma oferta, que é efêmera por natureza; passada
+        a janela, guardar o texto não serve mais a nada e só amplia o que temos
+        de terceiro. O que sobrevive é o resultado (o envio já criado), não a
+        mensagem original.
+        """
+        from sqlalchemy import text as _sql
+
+        linhas = self.db.execute(
+            _sql("""DELETE FROM monitoramento_capturas
+                     WHERE criado_em < NOW() - (:dias * INTERVAL '1 day')
+                 RETURNING id"""),
+            {"dias": dias},
+        ).fetchall()
+        self.db.commit()
+        if linhas:
+            logger.info("%s captura(s) expurgadas (retenção de %s dias)",
+                        len(linhas), dias)
+        return len(linhas)
+
     def reabrir(self, captura: MonitoramentoCaptura) -> None:
         """`erro` volta para `capturada` — a tentativa de novo é da afiliada.
 
