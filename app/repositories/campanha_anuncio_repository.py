@@ -96,6 +96,21 @@ class CampanhaAnuncioRepository:
         """Atalho para quem só quer o número; a conta vive em `metricas`."""
         return self.metricas(user_id, campanha_id, inicio, fim)["gasto_com_imposto"]
 
+    def filtrar_por_vinculo(self, user_id: int, campanhas: List,
+                            vinculo: str) -> List:
+        """
+        Filtra campanhas de anúncio por terem (ou não) vínculo com uma campanha
+        de grupos. `vinculo` fora de {com_grupo, sem_grupo} devolve tudo.
+
+        Existe para o EXPORT bater com a tela: exportar com "Vinculadas a grupo"
+        ativo e receber todas as campanhas é pior do que não ter export.
+        """
+        if vinculo not in ("com_grupo", "sem_grupo"):
+            return list(campanhas)
+        vinculadas = set(self.campanha_por_campaign(user_id))
+        quer = vinculo == "com_grupo"
+        return [c for c in campanhas if (c.id in vinculadas) == quer]
+
     def campanhas_de_anuncio(self, user_id: int) -> List[Campaign]:
         return (
             self.db.query(Campaign)

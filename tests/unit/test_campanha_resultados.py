@@ -386,7 +386,9 @@ def test_anuncio_ja_vinculado_a_outra_campanha_da_409(db):
     linha = next(a for a in listar_anuncios(campanha=outra, current_user=user,
                                             db=db)["anuncios"] if a["id"] == anuncio.id)
     assert linha["vinculada"] is False
-    assert linha["vinculada_em_outra"] == campanha.nome
+    # id junto do nome: sem o id a tela só linka para a lista e a afiliada tem
+    # que caçar qual campanha desvincular.
+    assert linha["vinculada_em_outra"] == {"id": campanha.id, "nome": campanha.nome}
 
 
 def _csv_da_exportacao(resposta) -> list[str]:
@@ -486,3 +488,30 @@ def test_quem_saiu_e_voltou_tem_uma_linha_nao_e_outra_sim(db):
         campanha=campanha, current_user=user, db=db))
     marcas = [l.split(",")[-1] for l in linhas[1:]]
     assert marcas == ["nao", "sim"], f"esperava uma saída registrada, veio {marcas}"
+
+
+def test_export_de_anuncios_respeita_o_filtro_de_vinculo(db):
+    """
+    O arquivo tem que bater com a tela. Exportar com "Vinculadas a grupo" ativo
+    e receber TODAS as campanhas é pior do que não ter export: a afiliada leva
+    para a planilha um recorte diferente do que estava vendo.
+    """
+    user, campanha, grupos, ds = _cenario(db)
+    vinculada = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
+                         name="Com vínculo", status="ACTIVE")
+    solta = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
+                     name="Sem vínculo", status="ACTIVE")
+    db.add_all([vinculada, solta]); db.flush()
+    db.add(CampanhaAnuncio(campanha_id=campanha.id, campaign_id=vinculada.id))
+    db.commit()
+
+    repo = CampanhaAnuncioRepository(db)
+    todas = [vinculada, solta]
+    assert [c.id for c in repo.filtrar_por_vinculo(user.id, todas, "all")] == \
+           [vinculada.id, solta.id]
+    assert [c.id for c in repo.filtrar_por_vinculo(user.id, todas, "com_grupo")] == \
+           [vinculada.id]
+    assert [c.id for c in repo.filtrar_por_vinculo(user.id, todas, "sem_grupo")] == \
+           [solta.id]
+    # Valor desconhecido não filtra nada — nunca esconde dado por engano.
+    assert len(repo.filtrar_por_vinculo(user.id, todas, "lixo")) == 2

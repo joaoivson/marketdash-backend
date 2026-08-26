@@ -357,8 +357,13 @@ def listar_anuncios(
                 "status": c.status,
                 "sub_id": c.sub_id,
                 "vinculada": c.id in vinculadas,
-                "vinculada_em_outra": nomes_de_campanha.get(ocupados[c.id])
-                                      if c.id in ocupados else None,
+                # id junto do nome: sem o id a tela só consegue linkar para a
+                # lista, e a afiliada tem que caçar qual campanha desvincular.
+                "vinculada_em_outra": (
+                    {"id": ocupados[c.id],
+                     "nome": nomes_de_campanha.get(ocupados[c.id]) or ""}
+                    if c.id in ocupados else None
+                ),
             }
             for c in anuncios
         ]

@@ -77,12 +77,23 @@ def export_campaigns(
     end_date: date | None = Query(default=None),
     status: str = Query(default="all", description="all | active | paused"),
     search: str | None = Query(default=None),
+    vinculo: str = Query(default="all",
+                         description="all | com_grupo | sem_grupo (vínculo com campanha de grupos)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Exporta a lista de campanhas filtrada (período + status) em Excel."""
+    """Exporta a lista de campanhas filtrada (período + status + vínculo) em Excel."""
     data = _service(db).list_campaigns(
         current_user.id, start_date=start_date, end_date=end_date, status_filter=status, search=search
+    )
+
+    # O arquivo tem que bater com a tela. Sem este filtro, exportar com
+    # "Vinculadas a grupo" ativo devolvia TODAS as campanhas — e um export que
+    # não corresponde ao que está na tela é pior do que não ter export.
+    from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+
+    campanhas_do_export = CampanhaAnuncioRepository(db).filtrar_por_vinculo(
+        current_user.id, data.campaigns, vinculo
     )
 
     has_tax = data.has_tax
@@ -92,7 +103,7 @@ def export_campaigns(
     ws.append(
         ["Campanha", "Sub ID vinculado", "Status", "Orçamento", "Gasto", "Comissão", "Lucro", "ROAS Real", "CPC", "Pedidos"]
     )
-    for c in data.campaigns:
+    for c in campanhas_do_export:
         m = c.metrics
         gasto = m.spend_with_tax if has_tax else m.spend
         comissao = m.commission_net if has_tax else m.commission

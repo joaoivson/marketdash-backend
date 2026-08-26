@@ -61,6 +61,11 @@ class CampanhaDetalheOut(CampanhaOut):
 # --- F7: anúncios × grupos e resultados -------------------------------------
 
 
+class VinculoDeAnuncioOut(BaseModel):
+    id: int
+    nome: str
+
+
 class AnuncioVinculavelOut(BaseModel):
     id: int
     nome: Optional[str]
@@ -68,17 +73,13 @@ class AnuncioVinculavelOut(BaseModel):
     sub_id: Optional[str]
     vinculada: bool
     # Vinculada a OUTRA campanha de grupos: a tela desabilita em vez de deixar
-    # a afiliada clicar e tomar 409.
-    vinculada_em_outra: Optional[str] = None
+    # a afiliada clicar e tomar 409. Traz id além do nome para o link levar
+    # direto à campanha que a detém.
+    vinculada_em_outra: Optional[VinculoDeAnuncioOut] = None
 
 
 class AnunciosDaCampanhaOut(BaseModel):
     anuncios: List[AnuncioVinculavelOut]
-
-
-class VinculoDeAnuncioOut(BaseModel):
-    id: int
-    nome: str
 
 
 class VinculosDeAnuncioOut(BaseModel):
