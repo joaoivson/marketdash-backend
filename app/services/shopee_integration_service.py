@@ -333,12 +333,19 @@ class ShopeeIntegrationService:
 
                     utm_content = str(node.get("utmContent") or "")
                     conversion_status = str(node.get("conversionStatus") or "")
-                    # estimatedTotalCommission é a comissão líquida real do nó,
-                    # equivalente a "Comissão líquida do afiliado(R$)" no CSV Shopee.
-                    # itemCommission no nível do item não contém o valor completo
-                    # (~10% menor). A soma de estimatedTotalCommission de todos os
-                    # nós bate exatamente com o dashboard Shopee.
-                    est_total_comm = float(node.get("estimatedTotalCommission") or 0)
+                    # netCommission = "Comissão líquida do afiliado(R$)" do relatório
+                    # Shopee: já vem com o Fee de gestão da RM descontado (a taxa de
+                    # contrato do afiliado).
+                    #
+                    # NÃO usar estimatedTotalCommission: ele é a "Comissão total do
+                    # pedido". Para afiliado SEM rede/hub as duas são iguais, e foi por
+                    # isso que a troca passou despercebida; para quem tem RM vinculada a
+                    # total é maior (8% no caso medido) e inflava a comissão na tela.
+                    # Validado em 26/08/2026 pedido a pedido contra o relatório do
+                    # afiliado: netCommission == "Comissão líquida do afiliado(R$)",
+                    # e estimatedTotalCommission == "Comissão total do pedido(R$)".
+                    # itemCommission (nível do item) não serve: não traz o valor completo.
+                    net_comm = float(node.get("netCommission") or 0)
 
                     # Coletar itens deste nó para distribuir comissão proporcionalmente
                     node_items = []
@@ -396,12 +403,12 @@ class ShopeeIntegrationService:
                         if ni["order_status"].upper() in ["CANCELLED", "INVALID", "REJECTED"]:
                             revenue = 0.0
 
-                        # Commission: distribui estimatedTotalCommission proporcionalmente
+                        # Commission: distribui a comissão LÍQUIDA do nó proporcionalmente
                         # ao itemCommission de cada item dentro do nó
                         if sum_item_comm > 0:
-                            commission = ni["item_comm_f"] / sum_item_comm * est_total_comm
+                            commission = ni["item_comm_f"] / sum_item_comm * net_comm
                         elif len(node_items) == 1:
-                            commission = est_total_comm
+                            commission = net_comm
                         else:
                             commission = 0.0
 
