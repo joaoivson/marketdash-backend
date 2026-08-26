@@ -11,6 +11,61 @@
 
 ---
 
+## 2026-08-26 — Auditoria final: o que sobrevive a um teste não é o que sobrevive a um ataque
+
+Seis auditorias independentes sobre o módulo pronto, cada uma seguida de uma
+tentativa de refutar os próprios achados. Doze defeitos sobreviveram. **Nenhum
+quebrava teste.** O padrão que se repete é o mesmo das fases anteriores, agora
+com nome: *o defeito se disfarça de estado de negócio plausível.*
+
+**O pior deles era um comentário confessando o bug.** `identificador()` fazia
+`sha256(jid + (salt or ""))` e o próprio docstring dizia: "sem salt ainda
+hasheia... embora seja reversível por força bruta; o salt é o que fecha a porta".
+A env era opcional e não estava definida em ambiente nenhum. Ou seja: alguém
+escreveu a ressalva certa e seguiu em frente. Medir custou 30 segundos —
+1,5 M hash/s em Python puro, número recuperado em 0,4 s, espaço inteiro de
+celulares BR em ~11 min — e transformou "ressalva teórica" em "a política de
+privacidade está mentindo". **Ressalva em comentário não é mitigação; é um bug
+com documentação.** Quando o código precisa avisar que faz algo perigoso, o
+certo é não deixar o caminho perigoso existir: agora, sem segredo, ele recusa.
+
+**Dependência opcional para uma garantia obrigatória é garantir o pior caso.**
+`WHATSAPP_HASH_SALT` ser opcional não foi descuido de configuração — foi um
+desenho que só funciona se alguém lembrar. Trocamos por derivação de um segredo
+que o app já exige para bootar. A regra que fica: se uma promessa depende de uma
+env, ela vai quebrar em algum ambiente.
+
+**O bloco do Dashboard dobrava tudo** com grupo em duas campanhas — e "grupo em
+N campanhas" é decisão explícita da F2, escrita no plano. O agregador foi
+construído somando por campanha, que é a leitura natural de quem olha uma
+campanha por vez. Agregação sobre relação N:N precisa perguntar "o que é a
+unidade?" antes de somar; aqui a unidade é o grupo, não a campanha.
+
+**`template_id` vinha do cliente e ninguém checava dono**, nem ao salvar nem no
+disparo. É o mesmo furo que já tínhamos fechado para `grupo_origem_id` e
+`destino_grupo_ids` na F8 — e passou porque a F4 é mais antiga que a regra.
+Vale varrer TODO id que atravessa a fronteira HTTP quando uma regra nova nasce,
+não só o código novo.
+
+**Grupo sem nome derrubava a página inteira** e o TypeScript não acusava, porque
+o tipo do frontend declarava `nome: string` onde o backend devolve
+`Optional[str]`. Tipo que mente é pior que tipo ausente: ele desliga a única
+ferramenta que pegaria isso. E o grep por `.toLowerCase` achou cinco pontos; o
+sexto (`localeCompare`) só apareceu quando rodei no navegador — **procurar pela
+forma do bug encontra menos do que executar o caminho.**
+
+**"Não deu para saber" não pode virar "nada a fazer".** Desligar o monitoramento
+com o WhatsApp fora do ar respondia 200. No sentido que protege privacidade, o
+silêncio tem que ser um erro alto, não um sucesso otimista.
+
+**Pendência honesta:** a dimensão "operacional" da auditoria não chegou a rodar
+(limite de sessão). Refiz as checagens à mão — crons batem com os endpoints,
+nenhuma prioridade Celery fora de 0/9, nenhum `func.date` em timestamptz, e as
+sete migrations do módulo reaplicam como no-op — mas sem o olhar adversarial
+que as outras dimensões tiveram.
+
+---
+
 ## 2026-08-26 — O bug que só aparece quando você roda de verdade
 
 `ShopeeIntegrationService(self.db)` — o construtor espera o **repository**, não

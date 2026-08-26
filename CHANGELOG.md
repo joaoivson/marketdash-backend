@@ -11,6 +11,59 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-26 (Auditoria final do Módulo de Grupos — F0 a F8)
+
+Antes de dar o módulo por concluído, seis auditorias independentes varreram os
+dois repos (contrato entre backend e frontend, privacidade, dinheiro, isolamento
+por usuário, operação e a UI nova), cada uma seguida de uma tentativa de
+**refutar** os próprios achados. O que sobreviveu está abaixo. Nada disso
+quebrava teste; quase tudo só apareceu rodando de verdade.
+
+### Fixed — privacidade
+
+- **O "código irreversível" da política era reversível em minutos.** De quem
+  entra ou sai dos grupos guardamos um código derivado do número — e o código
+  fazia `sha256(número + salt)` seguindo em frente **sem salt**, que era o caso
+  em todos os ambientes (a env é opcional e nunca esteve definida). Telefone tem
+  espaço de busca minúsculo: medido em Python puro, 1,5 milhão de hashes por
+  segundo, número de teste recuperado em 0,4 s, e o espaço inteiro de celulares
+  brasileiros varrido em ~11 minutos. Quem obtivesse o banco teria a lista de
+  telefones. Agora é `HMAC-SHA256` com segredo garantido — sem a env, derivado
+  de um segredo que o app já exige. O mesmo ataque não recupera mais nada.
+- **Desligar o monitoramento dizia "pronto" sem ter desligado.** Quando o
+  WhatsApp não respondia, o backend tratava como "nada a fazer" e devolvia
+  sucesso — com a conexão possivelmente ainda recebendo as mensagens do grupo.
+  Agora o estado "não deu para saber" é explícito: desligar exige confirmação e,
+  sem ela, avisa que o monitoramento continua ligado.
+- **Retenção**: o texto dizia que as capturas somem em 30 dias sem mencionar que
+  o que ela escolheu enviar continua no histórico de envios dela. Corrigido.
+
+### Fixed — dinheiro
+
+- **O bloco do Dashboard dobrava tudo** quando um grupo estava em duas
+  campanhas (o que o produto permite de propósito): 1 grupo com 100 pessoas e
+  R$ 100 de comissão aparecia como 200 pessoas e R$ 200.
+- **Gasto de campanha sem grupos entrava no "Investimento" e sumia do "Lucro"**.
+- **"Lucro por pessoa" sem participante mostrava R$ 0,00** — que afirma "cada
+  pessoa rende zero", diferente de "a métrica não existe". Agora mostra "—".
+
+### Fixed — isolamento
+
+- **O template de outra afiliada podia ser enviado nos seus grupos.** O
+  `template_id` do passo do roteiro vinha do cliente e ninguém checava dono —
+  nem ao salvar, nem no disparo. Fechado nos dois pontos.
+
+### Fixed — interface
+
+- **Grupo sem nome derrubava a página inteira.** O nome é opcional no backend
+  mas o tipo do frontend dizia que não, então nada acusava. Seis pontos liam o
+  valor direto (cinco buscas e uma ordenação) e, sem barreira de erro no
+  projeto, a tela da campanha inteira ficava em branco — não só o componente.
+- **Trocar de monitoramento rápido mostrava as ofertas do anterior** sob o nome
+  do novo, sem nada indicando o erro.
+- **A lista de capturas cortava em 50 em silêncio** enquanto o card anunciava o
+  total.
+
 ## [Não versionado] - 2026-08-26 (Grupos WhatsApp F8 — Monitoramento de grupos)
 
 Última fase do módulo. A afiliada acompanha um grupo — dela ou de terceiro, desde
