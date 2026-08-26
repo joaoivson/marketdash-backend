@@ -152,9 +152,16 @@ class RoteiroEnvioService:
 
         corpo = passo.texto or ""
         if passo.template_id:
-            from app.models.roteiro import TemplateVariacao
+            from app.models.roteiro import TemplateMensagem, TemplateVariacao
+
+            # JOIN com o dono, não só `template_id`: o id vem do passo, que veio
+            # do cliente. Sem isto, o texto do template de OUTRA usuária sairia
+            # nos grupos de quem copiou o id.
             variacoes = (self.db.query(TemplateVariacao)
-                         .filter(TemplateVariacao.template_id == passo.template_id).all())
+                         .join(TemplateMensagem,
+                               TemplateMensagem.id == TemplateVariacao.template_id)
+                         .filter(TemplateVariacao.template_id == passo.template_id,
+                                 TemplateMensagem.user_id == execucao.user_id).all())
             sorteada = sortear_variacao(variacoes)
             if sorteada:
                 corpo = sorteada.corpo

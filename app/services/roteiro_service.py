@@ -115,6 +115,7 @@ class RoteiroService:
 
     def definir_passos(self, roteiro: Roteiro, passos_in: List) -> None:
         """Substitui os passos (a camada de rota não constrói ORM)."""
+        self._validar_templates(roteiro.user_id, passos_in)
         self.repo.remover_passos(roteiro.id)
         for p in passos_in:
             self.repo.adicionar(RoteiroPasso(
@@ -127,6 +128,26 @@ class RoteiroService:
                 grupos_alvo_ids=p.grupos_alvo_ids, marcar_todos=p.marcar_todos,
             ))
         self.db.commit()
+
+    def _validar_templates(self, user_id: int, passos_in: List) -> None:
+        """
+        `template_id` vem do cliente e o id é sequencial.
+
+        Sem esta checagem, apontar o passo para o template de OUTRA usuária fazia
+        o texto dela sair nos grupos de quem copiou o id — o motor resolvia a
+        variação só por `template_id`. Aqui é a primeira barreira; a segunda
+        está em `roteiro_envio_service._texto_do_passo`, que filtra por dono na
+        hora do disparo.
+        """
+        from app.repositories.template_repository import TemplateRepository
+
+        ids = {p.template_id for p in passos_in if getattr(p, "template_id", None)}
+        if not ids:
+            return
+        repo = TemplateRepository(self.db)
+        for template_id in ids:
+            if repo.por_id(user_id, template_id) is None:
+                raise RoteiroInvalido("Template não encontrado.")
 
     # --- leitura / composição ----------------------------------------------
 
