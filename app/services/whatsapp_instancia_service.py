@@ -82,9 +82,17 @@ def _precisa_reconfigurar(instancia, desejados: List[str]) -> bool:
         info = cliente_da_sessao(instancia.nome_instancia).sessao_info() or {}
     except ErroWhatsapp:
         return False
+    if not info:
+        # `sessao_info()` devolve {} em 404: a sessão não existe no WAHA (foi
+        # removida, ou o registro do banco ficou órfão). Não há webhook para
+        # consertar — quem recria a sessão, já com os eventos certos, é o fluxo
+        # de pareamento. Tentar o PUT aqui só produziria um erro sem saída.
+        logger.info("Sessão %s não existe no WAHA: nada a reconfigurar",
+                    instancia.nome_instancia)
+        return False
     for wh in (((info.get("config") or {}).get("webhooks")) or []):
         return sorted(list(wh.get("events") or [])) != sorted(desejados)
-    return True     # sessão sem webhook configurado: reconfigurar é o certo
+    return True     # sessão existe e está sem webhook: reconfigurar é o certo
 
 
 def _ha_envio_em_andamento(db, user_id: int) -> bool:

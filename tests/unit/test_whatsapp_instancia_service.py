@@ -284,3 +284,27 @@ def test_com_dois_numeros_ou_reconfigura_os_dois_ou_nenhum(monkeypatch):
                              "https://api/x/webhook") == 2
     assert len(feitas) == 2
     assert all("message" in ev for ev in feitas)
+
+
+def test_sessao_inexistente_no_waha_nao_tenta_reconfigurar(monkeypatch):
+    """
+    `sessao_info()` devolve {} em 404. Tratar isso como "sem webhook, precisa
+    reconfigurar" fazia o PUT falhar numa sessão que não existe, e a afiliada
+    recebia "não foi possível falar com o WhatsApp" ao ligar um monitoramento —
+    sem nenhum caminho para resolver. Quem recria a sessão é o pareamento.
+    """
+    from app.services.whatsapp_instancia_service import sincronizar_eventos
+
+    feitas = []
+
+    class _Ausente:
+        def sessao_info(self):
+            return {}
+
+        def atualizar_sessao(self, webhooks):
+            feitas.append(webhooks)
+
+    _com_cliente(monkeypatch, _Ausente())
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+    assert sincronizar_eventos(_DbSemEnvio(), inst, True, "https://api/x/webhook") is False
+    assert feitas == []
