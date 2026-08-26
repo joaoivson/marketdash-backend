@@ -13,6 +13,7 @@ LGPD: a lista de participantes que o WAHA devolve é consumida em memória
 (contagem + "sou admin?") e descartada. Nada de membro individual toca o banco.
 """
 import logging
+import random
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -281,6 +282,12 @@ class WhatsappGrupoSyncService:
         if not grupos:
             return 0
         self._falha_convite = ""
+        # Ordem embaralhada de propósito. A lista chega sempre na mesma ordem
+        # (`sortBy=id`), e alguns grupos falham SEMPRE — o WAHA devolve 500 em
+        # parte deles. Sem embaralhar, esses mesmos grupos consomem o orçamento
+        # em toda rodada e os que funcionariam nunca chegam a ser tentados.
+        grupos = list(grupos)
+        random.shuffle(grupos)
         limite = time.monotonic() + ORCAMENTO_CONVITES_S
         preenchidos = 0
         for grupo in grupos:

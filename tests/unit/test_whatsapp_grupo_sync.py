@@ -346,3 +346,38 @@ def test_ponta_a_ponta_499_grupos_do_GOWS_pelo_cliente_real(db, monkeypatch):
     admins = db.query(WhatsappGrupo).filter(WhatsappGrupo.sou_admin.is_(True)).all()
     assert len(admins) == 10 and r["convites"] == 10
     assert all(g.link_convite for g in admins)
+
+
+def test_convites_nao_ficam_presos_nos_mesmos_grupos_que_falham(db, monkeypatch):
+    """
+    O WAHA devolve 500 em parte dos grupos (medido em hml: 169 de admin, e uma
+    fatia falha sempre). A lista chega sempre na mesma ordem, então sem
+    embaralhar os mesmos grupos quebrados consumiriam o orçamento em toda
+    rodada — e os que funcionariam nunca seriam tentados.
+    """
+    from app.services.waha_client import ErroWhatsapp
+    import app.services.whatsapp_grupo_sync_service as mod
+
+    quebrados = {f"1203630000000{i:05d}@g.us" for i in range(0, 8)}
+
+    class _WahaParcial(_FakeWaha):
+        def __init__(self, paginas):
+            super().__init__(paginas)
+            self.tentados = []
+
+        def convite_do_grupo(self, jid):
+            self.tentados.append(jid)
+            if jid in quebrados:
+                raise ErroWhatsapp("convite", "status 500: boom")
+            return f"https://chat.whatsapp.com/ok-{jid[:8]}"
+
+    pagina = [_grupo_gows(f"1203630000000{i:05d}@g.us", f"G{i}") for i in range(10)]
+    cliente = _WahaParcial([pagina])
+    monkeypatch.setattr(mod, "ORCAMENTO_CONVITES_S", 30)
+
+    r = WhatsappGrupoSyncService(db, cliente=cliente).sincronizar(_instancia(db))
+
+    # os 2 sadios são resolvidos, e os 8 quebrados não derrubam o sync
+    assert r["vistos"] == 10 and r["convites"] == 2
+    assert db.query(WhatsappGrupo).filter(
+        WhatsappGrupo.link_convite.isnot(None)).count() == 2
