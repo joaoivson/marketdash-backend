@@ -79,16 +79,26 @@ def replicar_captura(self, captura_id: int) -> dict:
 
         from datetime import datetime, timezone
 
-        from app.models.roteiro import EXEC_ENVIANDO
-        from app.tasks.roteiro_tasks import processar_execucao
-
         execucao, _avisos = RoteiroService(db).agendar(
             roteiro, datetime.now(timezone.utc).date(), ignorar_avisos=True
         )
-        execucao.status = EXEC_ENVIANDO
-        execucao.iniciado_em = datetime.now(timezone.utc)
+        # A execução fica `agendada` com hora de agora: se o enfileiramento
+        # falhar (Redis fora do ar), o tick de 5 min pega assim mesmo. Marcar
+        # `enviando` antes de enfileirar deixaria o envio preso nesse estado.
+        execucao.proxima_execucao_em = datetime.now(timezone.utc)
         db.commit()
-        processar_execucao.apply_async(args=[execucao.id], priority=0)
+
+        # A partir daqui o trabalho está feito e commitado. Falha de
+        # enfileiramento é atraso, não erro: marcar a captura como `erro`
+        # depois de já ter criado o envio faria a afiliada clicar em "replicar"
+        # de novo e a MESMA oferta sair duas vezes.
+        try:
+            from app.tasks.roteiro_tasks import processar_execucao
+
+            processar_execucao.apply_async(args=[execucao.id], priority=0)
+        except Exception:
+            logger.warning("Captura %s replicada, mas o enfileiramento falhou; "
+                           "o tick de 5 min assume", captura_id)
         logger.info("Captura %s replicada para %s grupo(s)", captura_id, len(destinos))
         return {"replicada": True, "grupos": len(destinos), "execucao": execucao.id}
     except Exception:
@@ -96,8 +106,13 @@ def replicar_captura(self, captura_id: int) -> dict:
         # Devolve o claim: preso em `replicando` a captura ficaria invisível
         # para sempre, sem nem aparecer como erro na tela.
         try:
+            from app.models.monitoramento import CAPTURA_REPLICANDO
+
             presa = db.query(MonitoramentoCaptura).get(captura_id)
-            if presa is not None:
+            # Só marca erro se ainda estiver com o claim: se já virou
+            # `replicada`, o envio existe e chamar de erro convidaria a um
+            # segundo clique — e a MESMA oferta sairia duas vezes.
+            if presa is not None and presa.status == CAPTURA_REPLICANDO:
                 MonitoramentoService(db).marcar_erro(
                     presa, "Falha inesperada ao replicar. Tente de novo."
                 )
@@ -120,6 +135,7 @@ def _converter(db, user_id: int, url: str):
     link é o mesmo para todos. A atribuição por grupo continua sendo do envio
     por oferta, que gera um short link por grupo.
     """
+    from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
     from app.services.integracao_service import provedor_da_url
     from app.services.monitoramento_service import com_esquema
     from app.services.shopee_integration_service import ShopeeIntegrationService
@@ -132,7 +148,9 @@ def _converter(db, user_id: int, url: str):
         return None
     try:
         return asyncio.run(
-            ShopeeIntegrationService(db).generate_short_link(user_id, url, None)
+            ShopeeIntegrationService(
+                ShopeeIntegrationRepository(db)
+            ).generate_short_link(user_id, url, None)
         )
     except Exception as e:
         logger.warning("Conversão de link falhou: %s", str(e)[:150])

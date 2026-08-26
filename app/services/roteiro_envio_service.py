@@ -99,8 +99,16 @@ class RoteiroEnvioService:
         ofertas = [m for m in pendentes if self._passo_de(m).tipo_conteudo == CONTEUDO_OFERTA]
         if not ofertas:
             return
+        from app.repositories.shopee_integration_repository import (
+            ShopeeIntegrationRepository,
+        )
         from app.services.shopee_integration_service import ShopeeIntegrationService
-        svc = ShopeeIntegrationService(self.db)
+
+        # O construtor recebe o REPOSITORY, não a Session. Passar a Session dava
+        # AttributeError, o `except` marcava a linha como `pulado` e TODO passo
+        # de oferta era silenciosamente descartado em produção — os testes não
+        # pegavam porque injetam `short_link_factory`.
+        svc = ShopeeIntegrationService(ShopeeIntegrationRepository(self.db))
         for m in ofertas:
             grupo = self._grupo_de(m)
             passo = self._passo_de(m)
