@@ -122,20 +122,24 @@ def resumo_consolidado(
     servico = CampanhaResultadoService(db)
     repo_anuncio = CampanhaAnuncioRepository(db)
 
-    totais = {"participantes": 0, "entradas": 0, "saidas": 0, "ficaram": 0,
-              "mensagens": 0, "cliques": 0, "pedidos": 0,
-              "comissao_liquida": 0.0, "gasto_atribuido": 0.0, "lucro": 0.0}
     gasto_bruto = 0.0
     gasto_com_imposto = 0.0
     leads_total = None          # None enquanto NENHUMA campanha reportar lead
     por_campanha = []
+    # O MESMO grupo pode estar em N campanhas — é decisão de desenho da F2.
+    # Somar os totais campanha a campanha contava esse grupo (e a comissão, e
+    # os participantes) uma vez por campanha: 1 grupo virava 200 participantes
+    # e R$200 onde havia R$100. Aqui o recorte é por GRUPO, uma vez só.
+    linhas_por_grupo = {}
 
     for c in ativas:
         dados = servico.por_grupo(current_user.id, c, d_ini, d_fim)
         t = dados["totais"]
-        for chave in totais:
-            totais[chave] += t[chave]
+        for linha in dados["linhas"]:
+            linhas_por_grupo.setdefault(linha["grupo_id"], linha)
         m = repo_anuncio.metricas(current_user.id, c.id, d_ini, d_fim)
+        # Gasto NÃO deduplica: cada campanha tem os anúncios dela, e os dois
+        # gastos são reais mesmo quando enchem o mesmo grupo.
         gasto_bruto += m["gasto"]
         gasto_com_imposto += m["gasto_com_imposto"]
         if m["leads"] is not None:
@@ -148,12 +152,25 @@ def resumo_consolidado(
             "lucro_por_pessoa": t["lucro_por_pessoa"],
         })
 
-    for chave in ("comissao_liquida", "gasto_atribuido", "lucro"):
-        totais[chave] = round(totais[chave], 2)
+    investimento_com_imposto = round(gasto_com_imposto, 2)
+    totais = {"participantes": 0, "entradas": 0, "saidas": 0, "ficaram": 0,
+              "mensagens": 0, "cliques": 0, "pedidos": 0,
+              "comissao_liquida": 0.0, "gasto_atribuido": 0.0, "lucro": 0.0}
+    for linha in linhas_por_grupo.values():
+        for chave in ("participantes", "entradas", "saidas", "ficaram",
+                      "mensagens", "cliques", "pedidos"):
+            totais[chave] += linha[chave]
+        totais["comissao_liquida"] += linha["comissao_liquida"]
+    totais["comissao_liquida"] = round(totais["comissao_liquida"], 2)
+    # No consolidado o gasto é o investimento INTEIRO do período, não a soma dos
+    # rateios por grupo: assim o lucro desconta também o que foi gasto em
+    # campanha que ainda não tem grupo — antes esse dinheiro entrava no
+    # "Investimento" e sumia do "Lucro".
+    totais["gasto_atribuido"] = investimento_com_imposto
+    totais["lucro"] = round(totais["comissao_liquida"] - investimento_com_imposto, 2)
     totais["lucro_por_pessoa"] = (round(totais["lucro"] / totais["participantes"], 2)
                                   if totais["participantes"] else 0.0)
     por_campanha.sort(key=lambda l: l["lucro"], reverse=True)
-    investimento_com_imposto = round(gasto_com_imposto, 2)
     return {
         "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},
         "campanhas_ativas": total_ativas,

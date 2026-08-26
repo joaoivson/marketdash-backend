@@ -515,3 +515,56 @@ def test_export_de_anuncios_respeita_o_filtro_de_vinculo(db):
            [solta.id]
     # Valor desconhecido não filtra nada — nunca esconde dado por engano.
     assert len(repo.filtrar_por_vinculo(user.id, todas, "lixo")) == 2
+
+
+def test_grupo_em_duas_campanhas_nao_dobra_o_bloco_do_dashboard(db):
+    """
+    Grupo em N campanhas é decisão de desenho da F2. Somar campanha a campanha
+    contava o mesmo grupo uma vez por campanha: 1 grupo com 100 pessoas e R$100
+    de comissão virava 200 pessoas e R$200 no bloco do Dashboard.
+    """
+    from app.api.v1.routes.campanhas_grupos import resumo_consolidado
+
+    user, campanha, grupos, ds = _cenario(db)
+    _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
+    outra = Campanha(user_id=user.id, nome="Segunda com o MESMO grupo")
+    db.add(outra); db.flush()
+    db.add(CampanhaGrupo(campanha_id=outra.id, grupo_id=grupos[0].id, posicao=0))
+    db.add(CampanhaGrupo(campanha_id=outra.id, grupo_id=grupos[1].id, posicao=1))
+    db.commit()
+
+    r = resumo_consolidado(inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
+                           current_user=user, db=db)
+    assert r["campanhas_ativas"] == 2
+    # Os dois grupos existem uma vez cada, não uma por campanha.
+    assert r["totais"]["participantes"] == 300          # 100 + 200
+    assert r["totais"]["comissao_liquida"] == pytest.approx(100.0)
+    assert r["totais"]["pedidos"] == 1
+
+
+def test_gasto_de_campanha_sem_grupos_entra_no_lucro_do_consolidado(db):
+    """
+    O investimento sempre somou todas as campanhas, mas o lucro vinha do rateio
+    por grupo — e campanha sem grupo não tem rateio. O dinheiro aparecia no
+    "Investimento" e sumia do "Lucro".
+    """
+    from app.api.v1.routes.campanhas_grupos import resumo_consolidado
+
+    user, campanha, grupos, ds = _cenario(db)
+    _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
+
+    vazia = Campanha(user_id=user.id, nome="Sem grupos ainda")
+    db.add(vazia); db.flush()
+    anuncio = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
+                       name="A", status="ACTIVE")
+    db.add(anuncio); db.flush()
+    db.add(CampanhaAnuncio(campanha_id=vazia.id, campaign_id=anuncio.id))
+    db.add(CampaignDailyInsight(user_id=user.id, campaign_id=anuncio.id, date=HOJE,
+                                spend=40.0, clicks=4, impressions=40, leads=None))
+    db.commit()
+
+    r = resumo_consolidado(inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
+                           current_user=user, db=db)
+    assert r["investimento"] == pytest.approx(40.0)
+    assert r["totais"]["lucro"] == pytest.approx(60.0)   # 100 de comissão − 40
+    assert r["totais"]["gasto_atribuido"] == pytest.approx(40.0)
