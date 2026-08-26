@@ -139,6 +139,7 @@ class WhatsappGrupoSyncService:
         self.db = db
         self.repo = WhatsappGrupoRepository(db)
         self.cliente = cliente
+        self._falha_convite = ""
 
     def listar(self, user_id: int, instancia_id=None, busca=None,
                incluir_inativos: bool = False):
@@ -168,8 +169,15 @@ class WhatsappGrupoSyncService:
             self.db.rollback()
             sync_repo.mark_failed(run, error_message=str(e)[:500])
             raise
+        detalhes = {k: resultado[k] for k in ("novos", "atualizados", "desativados",
+                                              "ignorados", "convites")}
+        if self._falha_convite:
+            # Fica no run para ser auditável em /admin/sincronizacoes: "169
+            # grupos de admin e zero convites" precisa de motivo, não de log.
+            detalhes["convites_falha"] = self._falha_convite[:200]
         sync_repo.mark_success(run, records_fetched=resultado["vistos"],
-                               records_upserted=resultado["novos"] + resultado["atualizados"])
+                               records_upserted=resultado["novos"] + resultado["atualizados"],
+                               details=detalhes)
         return resultado
 
     def _sincronizar(self, instancia: WhatsappInstancia, cliente: WahaClient) -> Dict[str, int]:
@@ -272,6 +280,7 @@ class WhatsappGrupoSyncService:
         """
         if not grupos:
             return 0
+        self._falha_convite = ""
         limite = time.monotonic() + ORCAMENTO_CONVITES_S
         preenchidos = 0
         for grupo in grupos:
@@ -285,6 +294,11 @@ class WhatsappGrupoSyncService:
             if link:
                 grupo.link_convite = link
                 preenchidos += 1
+        if self._falha_convite:
+            # Uma linha, não 169: o motivo da PRIMEIRA falha basta para o
+            # diagnóstico e não afoga o log.
+            logger.warning("Convites: %s de %s resolvidos; primeira falha — %s",
+                           preenchidos, len(grupos), self._falha_convite)
         if preenchidos:
             self.db.commit()
         return preenchidos
@@ -338,8 +352,11 @@ class WhatsappGrupoSyncService:
         )
 
     def _convite(self, cliente: WahaClient, jid: str) -> Optional[str]:
+        """Convite é sempre best-effort: falha aqui nunca derruba o sync."""
         try:
             return cliente.convite_do_grupo(jid)
-        except ErroWhatsapp:
+        except ErroWhatsapp as e:
+            if not self._falha_convite:
+                self._falha_convite = f"{e.motivo}: {e.detalhe}"
             return None
 

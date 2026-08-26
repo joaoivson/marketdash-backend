@@ -330,10 +330,14 @@ class WahaClient:
             "GET", f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid)}/invite-code"
         )
         if status >= 400:
-            return None
-        codigo = dados.get("code") if isinstance(dados, dict) else dados
+            # Devolver None calado aqui foi o que escondeu "169 grupos de admin,
+            # zero convites" — quem chama precisa poder dizer POR QUE falhou.
+            raise ErroWhatsapp("convite", f"status {status}: {str(dados)[:120]}")
+        # A doc do WAHA não publica o shape desta resposta, e o GOWS devolve
+        # struct Go em PascalCase — aceitar as duas caixas e a string crua.
+        codigo = campo(dados, "code", "InviteCode", "inviteCode", "Code") if isinstance(dados, dict) else dados
         if not codigo:
-            return None
+            raise ErroWhatsapp("convite", f"resposta sem código: {str(dados)[:120]}")
         codigo = str(codigo)
         if codigo.startswith("http"):
             return codigo
