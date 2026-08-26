@@ -500,23 +500,9 @@ def exportar_leads(
     d_ini, d_fim = _periodo(inicio, fim)
     ini_utc, fim_utc = _intervalo_brt(d_ini, d_fim)
 
-    # As SAÍDAS não são limitadas pela janela: quem entrou no período e saiu
-    # depois dele não continua no grupo. Só as ENTRADAS seguem o filtro.
-    saidas = (
-        db.query(GrupoEvento)
-        .filter(GrupoEvento.grupo_id.in_(list(nomes)),
-                GrupoEvento.tipo == EVENTO_SAIDA)
-        .order_by(GrupoEvento.criado_em)
-        .all()
-    )
-    saidas_por_chave: dict = {}
-    for s_ev in saidas:
-        saidas_por_chave.setdefault(
-            (s_ev.grupo_id, s_ev.identificador_hash), []
-        ).append(s_ev.criado_em)
-
     entradas = (
-        db.query(GrupoEvento)
+        db.query(GrupoEvento.grupo_id, GrupoEvento.identificador_hash,
+                 GrupoEvento.origem, GrupoEvento.criado_em)
         .filter(GrupoEvento.grupo_id.in_(list(nomes)),
                 GrupoEvento.tipo == EVENTO_ENTRADA,
                 GrupoEvento.criado_em >= ini_utc,
@@ -524,6 +510,23 @@ def exportar_leads(
         .order_by(GrupoEvento.criado_em)
         .all()
     )
+
+    # As SAÍDAS não são limitadas pela JANELA — quem entrou no período e saiu
+    # depois dele não continua no grupo —, mas são limitadas aos identificadores
+    # que aparecem nestas entradas. Sem esse recorte, uma campanha madura traz
+    # o histórico de saída inteiro de todos os grupos só para descartá-lo.
+    hashes = {e.identificador_hash for e in entradas}
+    saidas_por_chave: dict = {}
+    if hashes:
+        for gid, h, quando in (
+            db.query(GrupoEvento.grupo_id, GrupoEvento.identificador_hash,
+                     GrupoEvento.criado_em)
+            .filter(GrupoEvento.grupo_id.in_(list(nomes)),
+                    GrupoEvento.tipo == EVENTO_SAIDA,
+                    GrupoEvento.identificador_hash.in_(list(hashes)))
+            .all()
+        ):
+            saidas_por_chave.setdefault((gid, h), []).append(quando)
 
     buffer = io.StringIO()
     escritor = csv.writer(buffer)
