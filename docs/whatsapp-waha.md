@@ -11,7 +11,16 @@
 | Ambiente | Como |
 |---|---|
 | Local | `docker compose --profile whatsapp up waha` (porta **3001**; imagem `devlikeapro/waha:arm` para Mac M-series) |
-| Coolify (hml/prod) | Serviço Docker com `devlikeapro/waha:latest` (amd64) |
+| Coolify hml | App docker-image `waha-hml` (uuid `hw88gc8ocsko04k8wkocs8kc`), projeto App Backend › homologacao, **servidor `localhost`** — NUNCA o registro "busy" (IP malformado `http:31.97.22.173`; todo deploy nele falha com "Server is not functional") |
+| Coolify prod | Criar na promoção, mesmo desenho |
+
+**Configuração real de hml (26/08):** volume `waha-sessions → /app/.sessions`;
+"Consistent Container Names" LIGADO (é o que torna o nome do container estável
+= uuid do app); a API alcança o WAHA pela rede `coolify` interna:
+`WAHA_URL=http://hw88gc8ocsko04k8wkocs8kc:3000` — sem proxy, sem TLS, sem
+porta pública. As credenciais (WAHA_API_KEY etc.) vivem SÓ nas envs dos dois
+apps no Coolify. Pendência anotada: volume `/app/.media` + env
+`WHATSAPP_FILES_FOLDER` quando a F3 começar a mandar mídia.
 
 **Um único servidor WAHA pode atender hml E prod**: as sessões carregam o
 prefixo do ambiente no nome (`mkd{ref4-do-banco}...`), e o webhook ignora
