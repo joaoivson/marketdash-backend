@@ -119,3 +119,78 @@ def test_datas_iso_com_dia_alto_sobrevivem():
     dias = sorted(r.date.day for r in servico.click_repo.criadas)
     assert dias == [28, 29, 30, 31]
     assert all(r.date.month == 7 for r in servico.click_repo.criadas)
+
+
+def test_broker_fora_do_ar_nao_deixa_upload_preso_em_pending(monkeypatch):
+    """Bug real (26/08/2026): o hostname do Redis parou de resolver e o upload de
+    cliques passou a criar o dataset, falhar ao enfileirar e devolver o arquivo
+    para o limbo — 33 uploads de 4 alunas presos em "pending", sem erro nenhum
+    na tela. Elas repetiam o upload achando que era o navegador.
+
+    Arquivo pequeno já processava na request; só quem passava de CSV_SYNC_MAX_BYTES
+    caía na fila e sumia. Com o broker fora, a rota tem que processar inline em vez
+    de fingir que enfileirou.
+    """
+    import kombu.exceptions
+    from fastapi.testclient import TestClient
+
+    from app.api.v1.dependencies import require_active_subscription
+    from app.api.v1.routes import clicks as rota
+    from app.db.session import get_db
+    from app.main import app
+
+    processados = []
+
+    def _fake_inline(dataset_id, user_id, filename, conteudo):
+        processados.append((dataset_id, filename, len(conteudo)))
+
+    class _FakeDataset:
+        id = 4242
+        status = "pending"
+
+    class _FakeDatasetRepo:
+        def __init__(self, db):
+            pass
+
+        def create(self, dataset):
+            return _FakeDataset()
+
+    def _explode(*a, **k):
+        raise kombu.exceptions.OperationalError("Error -3 connecting to redis: name resolution")
+
+    monkeypatch.setattr(rota, "_processar_click_csv_inline", _fake_inline)
+    monkeypatch.setattr(rota, "DatasetRepository", _FakeDatasetRepo)
+    monkeypatch.setattr(rota.process_click_csv_task, "delay", _explode)
+    # força o caminho da fila (acima do limite do processamento síncrono)
+    monkeypatch.setattr(rota.settings, "CSV_SYNC_MAX_BYTES", 10)
+    monkeypatch.setattr(rota.settings, "PROCESS_CSV_SYNC", False)
+    monkeypatch.setattr(rota.settings, "UPLOAD_TEMP_DIR", "")
+
+    class _FakeDb:
+        def commit(self):
+            pass
+
+        def refresh(self, _):
+            pass
+
+        def rollback(self):
+            pass
+
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+    app.dependency_overrides[require_active_subscription] = lambda: SimpleNamespace(id=7)
+    try:
+        client = TestClient(app)
+        conteudo = b"data,canal,sub_id\n" + b"2026-08-26,Instagram,abc\n" * 50
+        resp = client.post(
+            "/api/v1/clicks/upload",
+            files={"file": ("cliques.csv", conteudo, "text/csv")},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 201, resp.text
+    assert processados, (
+        "broker fora do ar e nada foi processado: o dataset ficaria preso em pending"
+    )
+    assert processados[0][0] == 4242
+
