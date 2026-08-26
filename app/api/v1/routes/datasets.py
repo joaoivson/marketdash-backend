@@ -1,11 +1,15 @@
 import base64
+import logging
 from datetime import date
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
+import kombu.exceptions
 import redis.exceptions
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -20,6 +24,36 @@ from app.services.dataset_service import DatasetService
 from app.services.storage import upload_file_obj, is_storage_configured
 from app.tasks.csv_tasks import process_csv_task
 
+logger = logging.getLogger(__name__)
+
+
+def _processar_commission_csv_inline(
+    dataset_id: int, user_id: int, filename: str, conteudo: bytes
+) -> None:
+    """Processa o CSV de comissões no próprio processo da API, com sessão própria.
+
+    Espelha `_processar_click_csv_inline` em routes/clicks.py — mesmo defeito, mesma
+    saída: com o broker fora, enfileirar deixa o dataset preso em "pending" para
+    sempre e o usuário não vê erro nenhum.
+    """
+    from app.db.session import SessionLocal
+    from app.models.dataset import Dataset
+
+    db = SessionLocal()
+    try:
+        service = DatasetService(DatasetRepository(db), DatasetRowRepository(db))
+        service.process_commission_csv(dataset_id, user_id, conteudo, filename)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Falha ao processar CSV de comissões inline (dataset %s)", dataset_id)
+        db.rollback()
+        ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if ds:
+            ds.status = "error"
+            ds.error_message = str(exc)[:500]
+            db.commit()
+    finally:
+        db.close()
+
 router = APIRouter(tags=["datasets"])
 
 
@@ -30,6 +64,7 @@ class AdSpendPayload(BaseModel):
 
 @router.post("/upload", response_model=DatasetTaskResponse, status_code=status.HTTP_201_CREATED)
 async def upload_csv(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
@@ -113,6 +148,20 @@ async def upload_csv(
                 dataset.id, current_user.id, file.filename,
                 file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
             )
+    except (kombu.exceptions.OperationalError, redis.exceptions.ConnectionError) as exc:
+        # Broker inacessível: processa no próprio processo da API em vez de deixar
+        # o dataset preso em "pending" para sempre. Ver routes/clicks.py.
+        logger.warning(
+            "Upload de comissões: broker indisponível (%s) — processando inline (dataset %s)",
+            exc, dataset.id,
+        )
+        await file.seek(0)
+        conteudo = await file.read()
+        background_tasks.add_task(
+            _processar_commission_csv_inline,
+            dataset.id, current_user.id, file.filename, conteudo,
+        )
+        return {"task_id": f"inline-{dataset.id}", "dataset_id": dataset.id, "status": "pending"}
     except redis.exceptions.AuthenticationError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

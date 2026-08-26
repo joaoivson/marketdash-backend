@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
+import kombu.exceptions
 import redis.exceptions
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status,
+)
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import require_active_subscription
@@ -26,8 +29,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["clicks"])
 
 
+def _processar_click_csv_inline(dataset_id: int, user_id: int, filename: str, conteudo: bytes) -> None:
+    """Processa o CSV no próprio processo da API, com sessão própria.
+
+    Usado quando o broker está fora do ar. Sem isto o dataset fica preso em
+    "pending" para sempre: o upload "some" e a tela do usuário gira sem erro
+    nenhum — foi exatamente o que aconteceu em 26/08/2026, quando o hostname do
+    Redis parou de resolver e 33 uploads de 4 alunas viraram órfãos.
+    """
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        repo = DatasetRepository(db)
+        ClickService(repo, ClickRowRepository(db)).process_click_csv(
+            dataset_id, user_id, conteudo, filename
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Estado terminal sempre: "pending" eterno é pior que erro visível.
+        logger.exception("Falha ao processar CSV de cliques inline (dataset %s)", dataset_id)
+        db.rollback()
+        ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if ds:
+            ds.status = "error"
+            ds.error_message = str(exc)[:500]
+            db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/upload", response_model=ClickTaskResponse, status_code=status.HTTP_201_CREATED)
 async def upload_click_csv(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(require_active_subscription),
     db: Session = Depends(get_db),
@@ -142,6 +175,19 @@ async def upload_click_csv(
                 dataset.id, current_user.id, file.filename,
                 file_path=None, file_content_b64=base64.b64encode(file_content).decode("utf-8"),
             )
+    except (kombu.exceptions.OperationalError, redis.exceptions.ConnectionError) as exc:
+        # Broker inacessível (DNS do Redis, rede, container fora). Enfileirar aqui
+        # criaria um dataset "pending" que ninguém processa nunca. Processa no
+        # próprio processo da API, depois de responder.
+        logger.warning(
+            "Upload de cliques: broker indisponível (%s) — processando inline (dataset %s)",
+            exc, dataset.id,
+        )
+        background_tasks.add_task(
+            _processar_click_csv_inline,
+            dataset.id, current_user.id, file.filename, conteudo_pequeno,
+        )
+        return {"task_id": f"inline-{dataset.id}", "dataset_id": dataset.id, "status": "pending"}
     except redis.exceptions.AuthenticationError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
