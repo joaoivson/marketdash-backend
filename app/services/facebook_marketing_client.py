@@ -29,6 +29,10 @@ GRAPH_BASE = "https://graph.facebook.com"
 # Permissões pedidas no OAuth.
 DEFAULT_SCOPES = ["ads_read", "ads_management"]
 
+# Código devolvido no `detail` quando o token do usuário no Facebook não vale mais
+# (code 190 da Graph API). A tela usa esse código para oferecer a reconexão.
+FACEBOOK_TOKEN_INVALIDO = "facebook_token_invalido"
+
 
 def _api_version() -> str:
     return settings.FACEBOOK_API_VERSION or "v25.0"
@@ -58,9 +62,21 @@ def _raise_graph_error(body: dict, http_status: int) -> None:
     msg = err.get("error_user_msg") or err.get("message") or "Erro desconhecido da API do Facebook."
     code = err.get("code")
     logger.warning("Facebook Graph error code=%s http=%s: %s", code, http_status, msg)
-    # 190 = token inválido/expirado → 401 para o frontend reiniciar o OAuth.
+    # 190 = token inválido/expirado → o usuário precisa refazer o OAuth.
+    #
+    # NÃO usar 401 aqui: para o frontend, 401 significa "a SESSÃO do MarketDash morreu" e
+    # dispara logout + redirect pro /login. Como esse erro nasce ao abrir Configurações →
+    # Facebook (listagem de contas de anúncio), o usuário era expulso da própria tela onde
+    # reconectaria a conta — ficando preso sem nunca conseguir consertar.
+    # 409 = conflito de estado da integração, tratado pela tela como "reconecte".
     if code == 190:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token do Facebook expirado ou inválido. Reconecte a conta.")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": FACEBOOK_TOKEN_INVALIDO,
+                "message": "Sua conexão com o Facebook expirou. Clique em Conectar com Facebook para reconectar.",
+            },
+        )
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Facebook: {msg}")
 
 

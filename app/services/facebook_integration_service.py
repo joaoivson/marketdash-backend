@@ -186,12 +186,36 @@ class FacebookIntegrationService:
     #  Conta de anúncios                                                  #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _e_token_invalido(exc: HTTPException) -> bool:
+        """True quando o erro é o token do usuário no Facebook, não uma falha nossa."""
+        detail = exc.detail
+        return isinstance(detail, dict) and detail.get("code") == fb.FACEBOOK_TOKEN_INVALIDO
+
+    def _marcar_desconectado(self, user_id: int) -> None:
+        integration = self.repo.get_by_user_id(user_id)
+        if integration and integration.is_active:
+            integration.is_active = False
+            self.db.commit()
+            logger.info("Integração Facebook marcada como inativa (token inválido) user_id=%s", user_id)
+
     def _access_token(self, user_id: int) -> str:
         integration = self.repo.get_by_user_id(user_id)
-        if not integration or not integration.is_active:
+        if not integration:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Integração Facebook não configurada ou inativa.",
+                detail="Integração Facebook não configurada.",
+            )
+        if not integration.is_active:
+            # Integração existe mas o token venceu (resolve_connection_state já derrubou
+            # is_active). Mesmo código do 409 da Graph API: a tela só precisa saber que o
+            # caminho de volta é refazer o OAuth.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": fb.FACEBOOK_TOKEN_INVALIDO,
+                    "message": "Sua conexão com o Facebook expirou. Clique em Conectar com Facebook para reconectar.",
+                },
             )
         return decrypt_value(integration.encrypted_access_token)
 
@@ -208,7 +232,15 @@ class FacebookIntegrationService:
                 )
             ]
         token = self._access_token(user_id)
-        raw = await fb.list_ad_accounts(token)
+        try:
+            raw = await fb.list_ad_accounts(token)
+        except HTTPException as exc:
+            # Token morto no lado do Facebook (senha trocada, app removido, expirado):
+            # marca a integração como inativa para o status virar "desconectado" e a tela
+            # oferecer o botão de reconectar, em vez de exibir "Conectado" com lista vazia.
+            if self._e_token_invalido(exc):
+                self._marcar_desconectado(user_id)
+            raise
         accounts: list[FacebookAdAccount] = []
         for acc in raw:
             account_id = acc.get("account_id") or (acc.get("id") or "").replace("act_", "")
