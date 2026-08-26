@@ -106,9 +106,19 @@ class OfertaService:
                      desconto_minimo: Optional[float] = None,
                      integracao_id: Optional[int] = None) -> Dict[str, Any]:
         termo = (keyword or "").strip() or (categoria or "").strip()
-        if len(termo) < 2:
-            # Sem termo a API devolve vazio em silêncio — melhor dizer por quê.
-            raise BuscaInvalida("Digite o que você quer buscar (ou escolha uma categoria).")
+        # Sem termo, a `productOfferV2` devolve uma vitrine genérica da conta —
+        # medido contra a API real em 26/08/2026, ao contrário do que o
+        # comentário anterior aqui afirmava. É o que permite a tela abrir já com
+        # ofertas em vez de um campo de busca vazio.
+        # Sem termo NENHUM (ausente ou em branco) = vitrine. Um termo curto
+        # demais é engano de digitação, e aí vale avisar.
+        #
+        # A distinção é por CONTEÚDO, não por `is None`: a tela manda `q=""` ao
+        # abrir, e depender de o parâmetro sumir da query string fazia a vitrine
+        # funcionar por acidente da serialização.
+        vitrine = not termo
+        if not vitrine and len(termo) < 2:
+            raise BuscaInvalida("Digite pelo menos duas letras (ou escolha uma categoria).")
 
         limite = max(1, min(int(limite or 20), LIMITE_MAX))
         pagina = max(1, int(pagina or 1))
@@ -130,8 +140,16 @@ class OfertaService:
             and (preco_max is None or (o["preco"] and o["preco"] <= preco_max))
             and (desconto_minimo is None or o["desconto_pct"] >= desconto_minimo)
         ]
-        logger.info("Busca de ofertas user=%s termo=%r: %s no retorno, %s após filtros",
-                    user_id, termo, len(ofertas), len(filtradas))
+        if ordenacao == "mais_vendidos":
+            # `sortType: 2` da Shopee é RANKING, não ordenação: medido contra a
+            # API real, "fone" com sortType=2 devolve 17253, 11876, 5440, 12209…
+            # E sem termo o sortType não muda nada — relevância e mais vendidos
+            # devolvem a mesma lista. Prometer "mais vendidos" na tela só é
+            # verdade se a gente ordenar de fato.
+            filtradas.sort(key=lambda o: o.get("vendas") or 0, reverse=True)
+        logger.info("Busca de ofertas user=%s termo=%r vitrine=%s: %s no retorno, "
+                    "%s após filtros", user_id, termo or "-", vitrine,
+                    len(ofertas), len(filtradas))
         return {
             "ofertas": filtradas,
             "pagina": int(page_info.get("page") or pagina),
@@ -140,6 +158,9 @@ class OfertaService:
             # o catálogo — a API não filtra por comissão/preço/desconto.
             "total_na_pagina": len(ofertas),
             "termo_usado": termo,
+            # A tela distingue "isto é o que você buscou" de "isto é a vitrine
+            # que abrimos por padrão".
+            "vitrine": vitrine,
         }
 
     async def _executar(self, user_id: int, query: str,

@@ -26,6 +26,10 @@ class BuscaOfertasOut(BaseModel):
     tem_proxima: bool
     total_na_pagina: int
     termo_usado: str
+    # True quando não houve termo: é a vitrine que a tela abre por padrão, não
+    # um resultado de busca. A tela precisa distinguir para não dizer
+    # "nenhum resultado para ''" quando a vitrine vier vazia.
+    vitrine: bool = False
 
 
 class IntegracaoCriar(BaseModel):

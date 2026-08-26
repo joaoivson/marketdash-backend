@@ -61,7 +61,14 @@ botão próprios.
 - "WhatsApp" virou **"Dispositivos"** na navegação das Configurações.
 - A lista de grupos passa a mostrar **qual dispositivo** cada grupo pertence, em
   vez da contagem — "1" não responde "esse grupo está em qual dos meus números?".
-- Grade de **Ofertas com 6 por linha** a partir de 1280px.
+- **Ofertas abre nos mais vendidos, sem precisar buscar.** Medido contra a API
+  real: `productOfferV2` com termo vazio devolve a vitrine da conta — o
+  comentário no código dizia o contrário, e era o que justificava a tela abrir
+  vazia. E o `sortType: 2` da Shopee é RANKING, não ordenação ("fone" devolveu
+  17253, 11876, 5440, 12209…), então "mais vendidos" só é verdade porque
+  passamos a ordenar de fato.
+- Grade de Ofertas sobe **de uma em uma**: 2 → 3 → 4 (1100px) → 5 (1366) → 6
+  (1600).
 - **Variável de ambiente desconhecida passa a ser ignorada, não recusada.** O
   padrão do pydantic derrubava o app inteiro no boot: uma migração das chaves do
   Supabase acrescentou quatro variáveis ao `.env` e a API parou de subir, junto
@@ -291,6 +298,43 @@ cada pessoa dentro do grupo vale**.
 - `num`/`pct` estouravam em `undefined` e, sem ErrorBoundary no projeto,
   derrubariam o Dashboard inteiro.
 - Abas da campanha viraram controladas pela URL — `?tab=` não navegava.
+
+## [Não versionado] - 2026-08-26 (Fix: upload de CSV sumia quando o broker caía)
+
+Alunas relataram que o upload de cliques "não vai". Testaram outro navegador,
+limparam cache, trocaram de arquivo — nada. Do lado de cá: 33 uploads de 4
+alunas presos em `pending`, `row_count` 0, sem mensagem de erro nenhuma.
+
+### Fixed
+
+- **Upload de CSV virava órfão quando o broker estava inacessível.** A rota cria
+  o dataset como `pending`, enfileira no Celery e devolve 201. O `try/except`
+  cobria só Redis com autenticação inválida — com o **hostname do Redis sem
+  resolver** (`Error -3 ... Temporary failure in name resolution`), a task nunca
+  era aceita e o arquivo ficava no limbo: a tela girava para sempre e nada
+  indicava o que houve.
+  - `POST /clicks/upload` e `POST /datasets/upload` agora capturam falha de
+    broker (`kombu.OperationalError`, `redis.ConnectionError`) e processam o CSV
+    **inline num BackgroundTask**, no próprio processo da API — mesmo padrão que
+    o cron da Shopee já usava (`internal.py`, "Celery indisponível — fallback
+    inline"). O upload passa a funcionar com o broker fora do ar.
+  - O processamento inline sempre termina em estado terminal: erro grava
+    `status="error"` + `error_message`, nunca deixa em `pending`.
+  - **Por que só apareceu agora:** arquivo até `CSV_SYNC_MAX_BYTES` (2 MB) já
+    era processado na própria request e funcionava. Só quem passava do limite
+    caía na fila e sumia — daí "ontem foi e hoje não", conforme o tamanho do CSV.
+  - Teste de regressão em `test_click_upload_estado_terminal.py`, ao lado do bug
+    irmão de 04/08 (upload preso em "pending" por arquivo sem linha válida).
+
+### Sabido, não corrigido aqui
+
+- **A causa da queda é de infraestrutura**: a API não resolve o hostname do
+  Redis. Enquanto isso não for arrumado, tudo que depende do Celery segue sem
+  worker — o sync da Shopee cai no fallback inline e outras tasks (roteiros,
+  fan-out) não rodam. Este fix impede o upload de sumir em silêncio; não
+  substitui consertar o broker.
+- **Os 33 datasets já órfãos** continuam em `pending` e precisam ser
+  reprocessados ou marcados como erro.
 
 ## [Não versionado] - 2026-08-26 (Fix: sync Shopee gravava a comissão errada)
 

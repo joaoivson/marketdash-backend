@@ -1,8 +1,9 @@
 """
 F5: busca de ofertas (productOfferV2) e integrações de marketplace.
 
-Dois invariantes: a busca EXIGE termo (a API devolve vazio em silêncio sem
-keyword) e a credencial é sempre da aluna — a comissão segue quem assina.
+Dois invariantes: sem termo a tela abre a VITRINE (medido em 26/08/2026 contra
+a API real — o comentário antigo dizia que vinha vazio, e por isso a tela abria
+sem nada), e a credencial é sempre da aluna: a comissão segue quem assina.
 """
 import json
 
@@ -160,12 +161,47 @@ async def test_busca_normaliza_taxa_em_porcentagem(db):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("termo", [None, "", "   ", "x"])
-async def test_busca_sem_termo_util_e_recusada_com_motivo(db, termo):
+@pytest.mark.parametrize("termo", ["x", " a "])
+async def test_termo_curto_demais_e_recusado_com_motivo(db, termo):
+    """Uma letra é engano de digitação, não pedido de vitrine."""
     svc = _ServicoFake(db, _resposta([]))
     with pytest.raises(BuscaInvalida):
         await svc.buscar(USUARIA, keyword=termo)
     assert svc.queries == []          # nem chega a chamar a Shopee
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termo", [None, "", "   "])
+async def test_sem_termo_nenhum_abre_a_VITRINE_em_vez_de_recusar(db, termo):
+    """
+    Medido contra a API real em 26/08/2026: `productOfferV2` com keyword vazia
+    devolve a vitrine da conta. O comentário antigo dizia que vinha vazio, e por
+    isso a tela abria com um campo de busca e nada mais.
+
+    A distinção é por CONTEÚDO, não por `is None`: a tela manda `q=""`, e
+    depender de o parâmetro sumir da query string fazia a vitrine funcionar por
+    acidente da serialização.
+    """
+    svc = _ServicoFake(db, _resposta([_node()]))
+    r = await svc.buscar(USUARIA, keyword=termo)
+    assert r["vitrine"] is True
+    assert r["termo_usado"] == ""
+    assert len(svc.queries) == 1      # chamou a Shopee, sem termo
+    assert len(r["ofertas"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_mais_vendidos_ordena_de_fato_por_vendas(db):
+    """
+    O `sortType: 2` da Shopee é RANKING, não ordenação — medido contra a API
+    real, "fone" devolveu 17253, 11876, 5440, 12209… Prometer "mais vendidos"
+    na tela só é verdade se a gente ordenar.
+    """
+    nodes = [_node(item_id=1, sales=10), _node(item_id=2, sales=900),
+             _node(item_id=3, sales=50)]
+    svc = _ServicoFake(db, _resposta(nodes))
+    r = await svc.buscar(USUARIA, keyword="fone", ordenacao="mais_vendidos")
+    assert [o["vendas"] for o in r["ofertas"]] == [900, 50, 10]
 
 
 @pytest.mark.asyncio
