@@ -279,9 +279,12 @@ def test_com_dois_numeros_ou_reconfigura_os_dois_ou_nenhum(monkeypatch):
                           "https://api/x/webhook")
     assert feitas == [], "reconfigurou uma sessão antes de recusar a outra"
 
-    # Sem envio, as duas mudam.
-    assert sincronizar_todas(_DbSemEnvio(), instancias, {1: True, 2: True},
-                             "https://api/x/webhook") == 2
+    # Sem envio, as duas mudam. (Devolve também as sessões cujo estado não deu
+    # para confirmar — aqui, nenhuma.)
+    mudadas, desconhecidas = sincronizar_todas(_DbSemEnvio(), instancias,
+                                               {1: True, 2: True},
+                                               "https://api/x/webhook")
+    assert (mudadas, desconhecidas) == (2, [])
     assert len(feitas) == 2
     assert all("message" in ev for ev in feitas)
 
@@ -308,3 +311,44 @@ def test_sessao_inexistente_no_waha_nao_tenta_reconfigurar(monkeypatch):
     inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
     assert sincronizar_eventos(_DbSemEnvio(), inst, True, "https://api/x/webhook") is False
     assert feitas == []
+
+
+def test_sessao_inacessivel_e_reportada_como_desconhecida(monkeypatch):
+    """
+    "Não deu para saber" não pode virar "nada a fazer".
+
+    No sentido DESLIGAR isso é a diferença entre responder "monitoramento
+    desligado" e a sessão seguir assinando `message` — que é justamente o que a
+    política de privacidade promete que não acontece.
+    """
+    from app.services.waha_client import ErroWhatsapp
+    from app.services.whatsapp_instancia_service import sincronizar_todas
+
+    class _Fora:
+        def sessao_info(self):
+            raise ErroWhatsapp("conexao", "WAHA fora do ar")
+
+    _com_cliente(monkeypatch, _Fora())
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+
+    feitas, desconhecidas = sincronizar_todas(_DbSemEnvio(), [inst], {1: False},
+                                              "https://api/x/webhook")
+    assert feitas == 0
+    assert desconhecidas == ["mkdaaau1xbbbb"]
+
+
+def test_sessao_ausente_no_waha_nao_e_desconhecida(monkeypatch):
+    """Sessão que não existe é caso RESOLVIDO para o desligar: sem sessão, não
+    há evento chegando. Confundir com "não deu para saber" faria a afiliada
+    tomar 409 para sempre num número que ela já removeu."""
+    from app.services.whatsapp_instancia_service import sincronizar_todas
+
+    class _Ausente:
+        def sessao_info(self):
+            return {}
+
+    _com_cliente(monkeypatch, _Ausente())
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", user_id=1, id=1)
+
+    assert sincronizar_todas(_DbSemEnvio(), [inst], {1: False},
+                             "https://api/x/webhook") == (0, [])

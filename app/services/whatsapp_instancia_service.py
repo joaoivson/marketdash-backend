@@ -11,7 +11,7 @@ colisão com uma sessão zumbi.
 import logging
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.ambiente import identidade_do_banco
 from app.core.config import settings
@@ -72,16 +72,27 @@ def eventos_desejados(precisa_de_message: bool) -> List[str]:
     return eventos
 
 
-def _precisa_reconfigurar(instancia, desejados: List[str]) -> bool:
-    """A sessão está com uma lista de eventos diferente da desejada?
+def _precisa_reconfigurar(instancia, desejados: List[str]) -> Optional[bool]:
+    """
+    A sessão está com uma lista de eventos diferente da desejada?
 
-    None-safe: sessão fora do ar responde "não precisa" — quem repara é o cron
-    diário de reconciliação, não o clique da afiliada.
+    Três respostas, e a terceira é a que importa:
+      True  — precisa reconfigurar;
+      False — já está alinhada, ou a sessão nem existe no WAHA (sem sessão
+              não há evento chegando, então desligar já está cumprido);
+      None  — **não deu para saber** (WAHA fora do ar). Tratar isso como
+              False fazia o desligar responder 200 com a sessão possivelmente
+              ainda assinando `message`.
     """
     try:
         info = cliente_da_sessao(instancia.nome_instancia).sessao_info() or {}
     except ErroWhatsapp:
-        return False
+        # NÃO é "nada a fazer": é "não deu para saber". A diferença importa no
+        # sentido DESLIGAR — responder sucesso aqui diria à afiliada que o
+        # monitoramento parou quando a sessão pode seguir assinando `message`.
+        logger.warning("Sessão %s inacessível: estado dos eventos desconhecido",
+                       getattr(instancia, "nome_instancia", "?"))
+        return None
     if not info:
         # `sessao_info()` devolve {} em 404: a sessão não existe no WAHA (foi
         # removida, ou o registro do banco ficou órfão). Não há webhook para
@@ -149,10 +160,15 @@ def sincronizar_eventos(db, instancia, precisa_de_message: bool,
 
 
 def sincronizar_todas(db, instancias, precisa_por_instancia: Dict[int, bool],
-                      webhook_url: str) -> int:
+                      webhook_url: str) -> Tuple[int, List[str]]:
     """
     Alinha VÁRIAS sessões como uma operação só: ou todas as que precisam mudam,
     ou nenhuma muda.
+
+    Devolve `(quantas mudaram, nomes das sessões cujo estado não deu para
+    confirmar)`. A segunda parte não é detalhe: quem chama precisa saber que
+    "não mudou nada" pode significar "não consegui falar com o WhatsApp", e não
+    "já estava do jeito certo".
 
     Reconfigurar sessão por sessão deixaria a primeira reiniciada e a segunda
     recusada por envio em andamento — e aí o banco diverge do que as sessões
@@ -160,14 +176,18 @@ def sincronizar_todas(db, instancias, precisa_por_instancia: Dict[int, bool],
     """
     if not (webhook_url or "").strip():
         logger.error("Sem URL de webhook: nenhuma sessão reconfigurada")
-        return 0
-    pendentes = [
-        i for i in instancias
-        if _precisa_reconfigurar(i, eventos_desejados(
-            precisa_por_instancia.get(i.id, False)))
-    ]
+        return 0, [getattr(i, "nome_instancia", "?") for i in instancias]
+    pendentes, desconhecidas = [], []
+    for i in instancias:
+        estado = _precisa_reconfigurar(
+            i, eventos_desejados(precisa_por_instancia.get(i.id, False))
+        )
+        if estado is None:
+            desconhecidas.append(getattr(i, "nome_instancia", "?"))
+        elif estado:
+            pendentes.append(i)
     if not pendentes:
-        return 0
+        return 0, desconhecidas
     if any(_ha_envio_em_andamento(db, i.user_id) for i in pendentes):
         raise EnvioEmAndamento(
             "Há um envio em andamento. Tente de novo quando ele terminar — "
@@ -183,7 +203,7 @@ def sincronizar_todas(db, instancias, precisa_por_instancia: Dict[int, bool],
         )
         logger.info("Sessão %s reconfigurada", i.nome_instancia)
         feitas += 1
-    return feitas
+    return feitas, desconhecidas
 
 
 def config_de_webhook(url: str, eventos: Optional[List[str]] = None) -> List[Dict[str, Any]]:

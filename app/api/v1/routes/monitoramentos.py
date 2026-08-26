@@ -66,7 +66,12 @@ def _out(db: Session, m) -> MonitoramentoOut:
     )
 
 
-def _sincronizar_sessoes(db: Session, user_id: int, request) -> None:
+class NaoDeuParaConfirmar(Exception):
+    """As sessões não responderam — não dá para afirmar o que elas escutam."""
+
+
+def _sincronizar_sessoes(db: Session, user_id: int, request,
+                         exigir_confirmacao: bool = False) -> None:
     """Alinha o que cada sessão escuta com o estado dos monitoramentos.
 
     Deixar de desassinar `message` é o defeito grave aqui: a sessão seguiria
@@ -80,8 +85,18 @@ def _sincronizar_sessoes(db: Session, user_id: int, request) -> None:
     # o banco divergindo do que as sessões realmente escutam.
     # A env é opcional por design; sem ela a URL vem da request, como em
     # whatsapp_conexoes. Passar "" apagaria o webhook inteiro da sessão.
-    sincronizar_todas(db, repo.por_usuario(user_id), precisa,
-                      settings.WAHA_WEBHOOK_URL or url_do_webhook(request))
+    _feitas, desconhecidas = sincronizar_todas(
+        db, repo.por_usuario(user_id), precisa,
+        settings.WAHA_WEBHOOK_URL or url_do_webhook(request),
+    )
+    if desconhecidas and exigir_confirmacao:
+        # Só no sentido DESLIGAR. Responder 200 aqui diria que o monitoramento
+        # parou quando a sessão pode seguir assinando `message` — e a promessa
+        # da política de privacidade depende exatamente disso.
+        raise NaoDeuParaConfirmar(
+            "Não conseguimos falar com o WhatsApp para desligar o monitoramento. "
+            "Ele continua ligado — tente de novo em instantes."
+        )
 
 
 @router.get("", response_model=list[MonitoramentoOut])
@@ -160,8 +175,12 @@ def atualizar(
     # Só o toggle de `ativo` muda o que a sessão escuta.
     if "ativo" in dados:
         try:
-            _sincronizar_sessoes(db, current_user.id, request)
-        except (EnvioEmAndamento, ErroWhatsapp) as e:
+            # Desligar exige confirmação; ligar não: se a sessão não responder,
+            # o monitoramento fica ligado no banco sem capturar nada, o que é
+            # inofensivo e o cron diário conserta.
+            _sincronizar_sessoes(db, current_user.id, request,
+                                 exigir_confirmacao=dados["ativo"] is False)
+        except (EnvioEmAndamento, NaoDeuParaConfirmar, ErroWhatsapp) as e:
             # Restaura os valores ANTERIORES — não `not m.ativo`. Inverter só
             # acerta quando o PATCH mudou o campo; com `ativo: false` mandado
             # sobre um monitoramento já desligado, o "desfazer" o LIGAVA, e o
@@ -172,7 +191,7 @@ def atualizar(
                 setattr(m, campo, valor)
             db.add(m)
             db.commit()
-            motivo = (str(e) if isinstance(e, EnvioEmAndamento)
+            motivo = (str(e) if isinstance(e, (EnvioEmAndamento, NaoDeuParaConfirmar))
                       else "Não foi possível falar com o WhatsApp agora. "
                            "Tente de novo em instantes.")
             raise HTTPException(status_code=409, detail=motivo)
@@ -232,7 +251,7 @@ def remover(
     # Removido o último monitoramento da sessão, ela para de assinar `message`.
     try:
         _sincronizar_sessoes(db, current_user.id, request)
-    except (EnvioEmAndamento, ErroWhatsapp):
+    except (EnvioEmAndamento, NaoDeuParaConfirmar, ErroWhatsapp):
         # O monitoramento já foi embora; a sessão fica com um evento a mais até
         # o próximo alinhamento. O cron de reconciliação repara.
         logger.info("Sessão não reconfigurada agora (envio em andamento)")

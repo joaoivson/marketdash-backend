@@ -124,8 +124,14 @@ def reconciliar_eventos_de_sessao(db: Session) -> int:
     for user_id in user_ids:
         precisa = servico.sessoes_que_precisam_de_message(user_id)
         try:
-            ajustadas += sincronizar_todas(db, repo.por_usuario(user_id), precisa,
-                                           settings.WAHA_WEBHOOK_URL or "")
+            feitas, desconhecidas = sincronizar_todas(
+                db, repo.por_usuario(user_id), precisa,
+                settings.WAHA_WEBHOOK_URL or "",
+            )
+            ajustadas += feitas
+            if desconhecidas:
+                logger.warning("Sessões sem confirmação de eventos (user %s): %s",
+                               user_id, ", ".join(desconhecidas))
         except EnvioEmAndamento:
             continue            # tenta de novo amanhã; o envio é prioritário
         except ErroWhatsapp as e:
