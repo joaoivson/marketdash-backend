@@ -499,3 +499,39 @@ def test_participante_de_outro_numero_nao_nos_torna_admin():
         {"JID": "5511999998888@s.whatsapp.net", "IsAdmin": True},
     ])
     assert _extrair_agregados(dados, {"553498557753"})["sou_admin"] is False
+
+
+@pytest.mark.parametrize("corpo,tipo,esperado", [
+    # medido contra o WAHA real (GOWS) em 26/08: link inteiro em texto puro
+    ("https://chat.whatsapp.com/FG7OijWw40p6pukvb4ZyOB", "text/plain",
+     "https://chat.whatsapp.com/FG7OijWw40p6pukvb4ZyOB"),
+    # só o código, também em texto puro
+    ("FG7OijWw40p6pukvb4ZyOB", "text/plain",
+     "https://chat.whatsapp.com/FG7OijWw40p6pukvb4ZyOB"),
+    # e as formas JSON que outros engines podem usar
+    ('{"code": "FG7OijWw40p6pukvb4ZyOB"}', "application/json",
+     "https://chat.whatsapp.com/FG7OijWw40p6pukvb4ZyOB"),
+    ('{"InviteCode": "FG7OijWw40p6pukvb4ZyOB"}', "application/json",
+     "https://chat.whatsapp.com/FG7OijWw40p6pukvb4ZyOB"),
+])
+def test_convite_de_grupo_em_texto_puro_ou_json(corpo, tipo, esperado):
+    """
+    O link vinha e era descartado: `dados.get("code")` num corpo de texto puro
+    dá None, e o erro era engolido — 169 grupos de admin, zero convites, sem
+    nenhuma pista. O `_pedir` embrulha corpo não-JSON em {"texto": ...}.
+    """
+    def responder(req):
+        return httpx.Response(200, content=corpo.encode(),
+                              headers={"content-type": tipo})
+
+    assert _cliente(responder).convite_do_grupo("120363000000000001@g.us") == esperado
+
+
+def test_falha_de_convite_sobe_o_motivo_em_vez_de_none():
+    """Silêncio aqui foi o que impediu de descobrir o caso acima."""
+    def responder(req):
+        return httpx.Response(403, json={"error": "not admin"})
+
+    with pytest.raises(ErroWhatsapp) as e:
+        _cliente(responder).convite_do_grupo("120363000000000001@g.us")
+    assert e.value.motivo == "convite" and "403" in e.value.detalhe

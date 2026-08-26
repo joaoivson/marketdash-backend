@@ -326,16 +326,25 @@ class WahaClient:
 
     def convite_do_grupo(self, jid: str) -> Optional[str]:
         """Link de convite (só funciona quando o número é admin do grupo)."""
+        # `auth_em_403=False` pelo mesmo motivo de renomear_grupo: 403 aqui é
+        # "não sou admin DESTE grupo" ou "o grupo não permite convite", não
+        # credencial inválida. Como `auth` é motivo FATAL, um único grupo assim
+        # marcaria o número inteiro como desconectado — e o sync passa por
+        # centenas de grupos de uma vez.
         status, dados = self._pedir(
-            "GET", f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid)}/invite-code"
+            "GET", f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid)}/invite-code",
+            auth_em_403=False,
         )
         if status >= 400:
             # Devolver None calado aqui foi o que escondeu "169 grupos de admin,
             # zero convites" — quem chama precisa poder dizer POR QUE falhou.
             raise ErroWhatsapp("convite", f"status {status}: {str(dados)[:120]}")
-        # A doc do WAHA não publica o shape desta resposta, e o GOWS devolve
-        # struct Go em PascalCase — aceitar as duas caixas e a string crua.
-        codigo = campo(dados, "code", "InviteCode", "inviteCode", "Code") if isinstance(dados, dict) else dados
+        # A doc do WAHA não publica o shape desta resposta. Medido contra o
+        # servidor real em 26/08: vem o LINK inteiro em **texto puro**, não JSON
+        # — e cai no invólucro {"texto": ...} do _pedir. `code`/`InviteCode`
+        # ficam aceitos porque outros engines podem devolver JSON.
+        codigo = (campo(dados, "code", "InviteCode", "inviteCode", "Code", "texto")
+                  if isinstance(dados, dict) else dados)
         if not codigo:
             raise ErroWhatsapp("convite", f"resposta sem código: {str(dados)[:120]}")
         codigo = str(codigo)
