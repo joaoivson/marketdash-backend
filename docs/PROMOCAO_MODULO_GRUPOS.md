@@ -140,6 +140,25 @@ contém `marketdash.com.br` como substring.
 - Revisar os tetos (`WHATSAPP_TETO_POR_INSTANCIA`, `whatsapp_msgs_dia`,
   `WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA`) com o número real, não com a estimativa.
 
+## 8.1 `WHATSAPP_HASH_SALT` — opcional, mas defina mesmo assim
+
+O pseudônimo do participante é `HMAC-SHA256(segredo, jid)` e o segredo **nunca é
+vazio**: sem `WHATSAPP_HASH_SALT` ele é derivado de `SHOPEE_ENCRYPTION_KEY`. Ou
+seja, funciona sem configurar nada — mas isso amarra o pseudônimo à chave da
+Shopee: **rotacionar `SHOPEE_ENCRYPTION_KEY` troca todos os pseudônimos** e
+quebra o casamento entrada↔saída dos eventos antigos ("entraram e ficaram" para
+de bater com o histórico).
+
+Definir `WHATSAPP_HASH_SALT` explicitamente (qualquer segredo aleatório longo)
+desacopla as duas coisas. Faça isso ANTES do primeiro evento de participante em
+produção — depois, mudar o valor invalida o histórico.
+
+> Contexto: até 26/08/2026 o código fazia `sha256(jid + (salt or ""))` e seguia
+> sem salt, que era o caso em todos os ambientes. Telefone tem espaço de busca
+> minúsculo — medido em Python puro, 1,5 M hash/s: o espaço inteiro de celulares
+> brasileiros cai em ~11 minutos. O "código irreversível" da política de
+> privacidade era reversível.
+
 ## 9. Pendências conhecidas que a promoção não resolve
 
 - **`lead` × `offsite_conversion.fb_pixel_lead` do Meta**: usamos `max()`, que
