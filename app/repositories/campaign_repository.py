@@ -201,6 +201,7 @@ class CampaignRepository:
                 "cpc": it.cpc,
                 "ctr": it.ctr,
                 "reach": it.reach,
+                "leads": it.leads,
             }
             for it in items
         ]
@@ -214,6 +215,9 @@ class CampaignRepository:
                 "cpc": stmt.excluded.cpc,
                 "ctr": stmt.excluded.ctr,
                 "reach": stmt.excluded.reach,
+                # COALESCE: um dia sem `actions` na resposta não apaga o Lead
+                # que já tínhamos (a Graph API omite o campo às vezes).
+                "leads": func.coalesce(stmt.excluded.leads, CampaignDailyInsight.leads),
                 "fb_campaign_id": stmt.excluded.fb_campaign_id,
                 "updated_at": func.now(),
             },

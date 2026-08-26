@@ -154,22 +154,33 @@ class CampanhaLinkRepository:
         )
         return {gid: int(n) for gid, n in linhas if gid is not None}
 
-    def eventos_por_grupo(self, grupo_ids: List[int]) -> Dict[int, Dict[str, int]]:
+    def eventos_por_grupo(self, grupo_ids: List[int], inicio=None,
+                          fim=None) -> Dict[int, Dict[str, int]]:
         """grupo_id → {entradas, saidas, ficaram}.
 
         "Ficaram" casa entrada e saída do MESMO identificador — é o número que
         sustenta custo por permanência (e a diferença dele para "entradas" é a
         evasão real, não uma estimativa).
+
+        `inicio`/`fim` são datetimes UTC (fim exclusivo) e limitam as ENTRADAS e
+        SAÍDAS à janela. Sem eles, conta tudo desde sempre.
+
+        A saída que anula um "ficaram" NÃO é limitada pela janela de propósito:
+        quem entrou no período e saiu depois dele não ficou. Restringir os dois
+        lados infla a permanência quanto mais curto for o filtro.
         """
         if not grupo_ids:
             return {}
-        linhas = (
+        q = (
             self.db.query(GrupoEvento.grupo_id, GrupoEvento.tipo,
                           func.count(GrupoEvento.id))
             .filter(GrupoEvento.grupo_id.in_(grupo_ids))
-            .group_by(GrupoEvento.grupo_id, GrupoEvento.tipo)
-            .all()
         )
+        if inicio is not None:
+            q = q.filter(GrupoEvento.criado_em >= inicio)
+        if fim is not None:
+            q = q.filter(GrupoEvento.criado_em < fim)
+        linhas = q.group_by(GrupoEvento.grupo_id, GrupoEvento.tipo).all()
         resultado: Dict[int, Dict[str, int]] = {
             gid: {"entradas": 0, "saidas": 0, "ficaram": 0} for gid in grupo_ids
         }
@@ -184,6 +195,8 @@ class CampanhaLinkRepository:
                   FROM grupo_eventos e
                  WHERE e.grupo_id = ANY(:ids)
                    AND e.tipo = :entrada
+                   AND (:inicio IS NULL OR e.criado_em >= :inicio)
+                   AND (:fim IS NULL OR e.criado_em < :fim)
                    AND NOT EXISTS (
                        SELECT 1 FROM grupo_eventos s
                         WHERE s.grupo_id = e.grupo_id
@@ -193,7 +206,8 @@ class CampanhaLinkRepository:
                    )
                  GROUP BY e.grupo_id
             """),
-            {"ids": list(grupo_ids), "entrada": EVENTO_ENTRADA, "saida": EVENTO_SAIDA},
+            {"ids": list(grupo_ids), "entrada": EVENTO_ENTRADA, "saida": EVENTO_SAIDA,
+             "inicio": inicio, "fim": fim},
         ).fetchall()
         for gid, n in ficaram:
             resultado[gid]["ficaram"] = int(n)

@@ -1,4 +1,4 @@
-from sqlalchemy.dialects.postgresql import JSONB
+from app.models.tipos import JSON_PORTATIL
 from sqlalchemy import Column, Integer, Float, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -13,7 +13,7 @@ class UserSettings(Base):
     commission_tax_rate = Column(Float, nullable=False, default=0.0)
     # Janela de envio do módulo de grupos (F3) — shape validado por Pydantic
     # em janela_envio_service; NULL = padrão 08:00-22:00 todos os dias.
-    whatsapp_envio_config = Column(JSONB, nullable=True)
+    whatsapp_envio_config = Column(JSON_PORTATIL, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

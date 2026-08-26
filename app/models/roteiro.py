@@ -8,7 +8,7 @@ from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Integer,
     String, Text, Time, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from app.models.tipos import JSON_PORTATIL
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -100,7 +100,7 @@ class RoteiroPasso(Base):
     acao = Column(String(24), nullable=True)
     acao_parametro = Column(Text, nullable=True)
     grupos_alvo = Column(String(12), nullable=False, default="todos")
-    grupos_alvo_ids = Column(JSONB, nullable=True)
+    grupos_alvo_ids = Column(JSON_PORTATIL, nullable=True)
     marcar_todos = Column(String(8), nullable=False, default="nunca")
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     atualizado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

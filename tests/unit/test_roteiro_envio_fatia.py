@@ -54,6 +54,7 @@ from app.models.user_settings import UserSettings  # noqa: E402
 from app.models.whatsapp_grupos import (  # noqa: E402
     WhatsappGrupo, WhatsappGrupoInstancia, WhatsappInstancia,
 )
+from app.core.config import settings  # noqa: E402
 from app.repositories.roteiro_repository import RoteiroRepository  # noqa: E402
 from app.services.roteiro_envio_service import RoteiroEnvioService  # noqa: E402
 from app.services.waha_client import ErroWhatsapp  # noqa: E402
@@ -81,6 +82,21 @@ def db():
     yield sessao
     sessao.rollback()
     sessao.close()
+
+
+@pytest.fixture(autouse=True)
+def teto_global_fora_do_caminho(monkeypatch):
+    """
+    O teto GLOBAL da plataforma conta `roteiro_mensagens` enviadas no dia
+    inteiro — de TODAS as usuárias. Este banco de teste é compartilhado e
+    acumula: passadas ~5.000 linhas num mesmo dia civil, o motor passa a
+    parquear corretamente e **todos** os testes do arquivo falham com
+    "0 enviadas", parecendo regressão do claim.
+
+    Cada teste que não é sobre o teto global roda com ele fora do caminho;
+    quem testa o teto usa `monkeypatch` com um valor explícito.
+    """
+    monkeypatch.setattr(settings, "WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA", 10 ** 9)
 
 
 JANELA_24H = {"ativo": True, "dias": {str(i): {"ativo": True,
@@ -248,6 +264,24 @@ def test_teto_da_instancia_esvazia_o_pool_e_pausa(db):
     assert r["enviadas"] == 1                      # bateu no teto após a 1ª
     assert execucao.status == EXEC_PAUSADA         # retomável
     assert r["motivo_parada"] == "sem_instancia"
+
+
+def test_teto_global_da_plataforma_parqueia_para_amanha(db, monkeypatch):
+    """
+    O teto global protege a plataforma inteira, não a usuária — e por isso
+    PARQUEIA (volta a `agendada` na próxima abertura) em vez de pausar:
+    pausada exigiria clique da afiliada para um limite que reseta sozinho à
+    meia-noite. Era o único caminho de parada sem teste.
+    """
+    user, _, _, execucao = _cenario(db, n_grupos=3)
+    monkeypatch.setattr(settings, "WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA", 0)
+    r = _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["enviadas"] == 0
+    assert r["motivo_parada"] == "teto_global"
+    assert execucao.status == EXEC_AGENDADA          # volta sozinha, sem clique
+    assert execucao.proxima_execucao_em is not None
 
 
 def test_grupo_invalido_pula_desativa_e_nao_aborta(db):

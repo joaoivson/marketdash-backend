@@ -15,8 +15,9 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.schemas.campanhas_grupos import (
-    CampanhaAtualizar, CampanhaCriar, CampanhaDetalheOut, CampanhaOut,
-    GrupoDaCampanhaItem, GrupoDaCampanhaOut,
+    AnunciosDaCampanhaOut, CampanhaAtualizar, CampanhaCriar, CampanhaDetalheOut,
+    CampanhaOut, GrupoDaCampanhaItem, GrupoDaCampanhaOut, ResultadosOut,
+    ResumoConsolidadoOut, VinculosDeAnuncioOut,
 )
 from app.services.campanha_grupos_service import (
     CampanhaGruposService, GrupoInvalido, LimiteDeCampanhas,
@@ -69,6 +70,90 @@ def _grupos_out(servico: CampanhaGruposService, campanha) -> list[GrupoDaCampanh
         )
         for v, g in servico.grupos_da_campanha(campanha)
     ]
+
+
+@router.get("/vinculos-de-anuncio", response_model=VinculosDeAnuncioOut)
+def vinculos_de_anuncio(
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """campaign_id (Meta) → campanha de grupos vinculada.
+
+    Endpoint separado de propósito: a tela de Anúncios só precisa do SELO, e
+    embutir isso no CampaignResponse mexeria no cálculo de KPIs que já está
+    no ar. Uma request barata contra o risco de regressão na tela principal.
+    """
+    from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+
+    return {"vinculos": CampanhaAnuncioRepository(db).campanha_por_campaign(current_user.id)}
+
+
+@router.get("/resumo", response_model=ResumoConsolidadoOut)
+def resumo_consolidado(
+    inicio: str | None = None,
+    fim: str | None = None,
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """
+    Totais somados de TODAS as campanhas ativas — o bloco do Dashboard.
+
+    Declarada antes de `/{campanha_id}` de propósito: o FastAPI casa na ordem
+    de declaração e "resumo" seria engolido como id (422 em vez de 200).
+    """
+    from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+    from app.services.campanha_resultado_service import CampanhaResultadoService
+
+    d_ini, d_fim = _periodo(inicio, fim)
+    campanhas, _contagens = _servico(db).listar(current_user.id, incluir_arquivadas=False)
+    ativas = [c for c in campanhas if c.status != "arquivada"]
+
+    servico = CampanhaResultadoService(db)
+    repo_anuncio = CampanhaAnuncioRepository(db)
+
+    totais = {"participantes": 0, "entradas": 0, "saidas": 0, "ficaram": 0,
+              "mensagens": 0, "cliques": 0, "pedidos": 0,
+              "comissao_liquida": 0.0, "gasto_atribuido": 0.0, "lucro": 0.0}
+    gasto_bruto = 0.0
+    gasto_com_imposto = 0.0
+    leads_total = None          # None enquanto NENHUMA campanha reportar lead
+    por_campanha = []
+
+    for c in ativas:
+        dados = servico.por_grupo(current_user.id, c, d_ini, d_fim)
+        t = dados["totais"]
+        for chave in totais:
+            totais[chave] += t[chave]
+        m = repo_anuncio.metricas(current_user.id, c.id, d_ini, d_fim)
+        gasto_bruto += m["gasto"]
+        gasto_com_imposto += m["gasto_com_imposto"]
+        if m["leads"] is not None:
+            leads_total = (leads_total or 0) + m["leads"]
+        por_campanha.append({
+            "campanha_id": c.id, "nome": c.nome,
+            "grupos": len(dados["linhas"]),
+            "participantes": t["participantes"], "entradas": t["entradas"],
+            "comissao_liquida": t["comissao_liquida"], "lucro": t["lucro"],
+            "lucro_por_pessoa": t["lucro_por_pessoa"],
+        })
+
+    for chave in ("comissao_liquida", "gasto_atribuido", "lucro"):
+        totais[chave] = round(totais[chave], 2)
+    totais["lucro_por_pessoa"] = (round(totais["lucro"] / totais["participantes"], 2)
+                                  if totais["participantes"] else 0.0)
+    por_campanha.sort(key=lambda l: l["lucro"], reverse=True)
+    investimento_com_imposto = round(gasto_com_imposto, 2)
+    return {
+        "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},
+        "campanhas_ativas": len(ativas),
+        "totais": totais,
+        "investimento": round(gasto_bruto, 2),
+        "investimento_com_imposto": investimento_com_imposto,
+        "leads": leads_total,
+        "custo_por_entrada": (round(investimento_com_imposto / totais["entradas"], 2)
+                              if totais["entradas"] else None),
+        "por_campanha": por_campanha,
+    }
 
 
 @router.get("", response_model=list[CampanhaOut])
@@ -206,3 +291,244 @@ def atividade(
             for e in eventos
         ]
     }
+
+
+# --- Anúncios × Grupos e Resultados (F7) -------------------------------------
+
+
+def _periodo(inicio: str | None, fim: str | None):
+    """Período do relatório. Default: últimos 30 dias em BRT (o dia civil que
+    a afiliada enxerga), nunca UTC."""
+    from datetime import timedelta
+
+    from app.services.janela_envio_service import BRT
+    from datetime import datetime as _dt
+
+    hoje = _dt.now(BRT).date()
+    # Data inválida vira 422, não "últimos 30 dias": engolir a falha faz um bug
+    # de data no frontend virar número silenciosamente errado numa tela que
+    # decide investimento — o pior tipo de erro deste produto.
+    try:
+        d_fim = _dt.fromisoformat(fim).date() if fim else hoje
+        d_ini = _dt.fromisoformat(inicio).date() if inicio else d_fim - timedelta(days=29)
+    except ValueError:
+        raise HTTPException(status_code=422,
+                            detail="Período inválido. Use datas no formato AAAA-MM-DD.")
+    if d_ini > d_fim:
+        d_ini, d_fim = d_fim, d_ini
+    return d_ini, d_fim
+
+
+@router.get("/{campanha_id}/anuncios", response_model=AnunciosDaCampanhaOut)
+def listar_anuncios(
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """Campanhas de anúncio do Meta + quais estão vinculadas a ESTA campanha
+    de grupos (o multi-select da tela)."""
+    from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+
+    repo = CampanhaAnuncioRepository(db)
+    anuncios = repo.campanhas_de_anuncio(current_user.id)
+    vinculadas = set(repo.campaign_ids(campanha.id))
+    # Quem já pertence a OUTRA campanha de grupos vem marcado: a tela
+    # desabilita a linha em vez de deixar clicar e tomar 409 no salvar.
+    ocupados = repo.vinculos_de_outras_campanhas(campanha.id, [c.id for c in anuncios])
+    nomes_de_campanha = {c.id: c.nome for c in _servico(db).listar(
+        current_user.id, incluir_arquivadas=True)[0]}
+    return {
+        "anuncios": [
+            {
+                "id": c.id,
+                "nome": c.name,
+                "status": c.status,
+                "sub_id": c.sub_id,
+                "vinculada": c.id in vinculadas,
+                "vinculada_em_outra": nomes_de_campanha.get(ocupados[c.id])
+                                      if c.id in ocupados else None,
+            }
+            for c in anuncios
+        ]
+    }
+
+
+@router.put("/{campanha_id}/anuncios", response_model=AnunciosDaCampanhaOut)
+def definir_anuncios(
+    payload: list[int],
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+
+    repo = CampanhaAnuncioRepository(db)
+    # Ownership: só campanhas de anúncio DA usuária podem ser vinculadas.
+    minhas = {c.id for c in repo.campanhas_de_anuncio(current_user.id)}
+    alheias = [cid for cid in payload if cid not in minhas]
+    if alheias:
+        raise HTTPException(status_code=404, detail="Campanha de anúncio não encontrada.")
+
+    # Um anúncio pertence a UMA campanha de grupos: vinculado a duas, o mesmo
+    # gasto entraria inteiro nas duas e os dois lucros sairiam errados. O banco
+    # tem UNIQUE, mas 409 explicado é melhor do que violação de constraint.
+    ocupados = repo.vinculos_de_outras_campanhas(campanha.id, list(payload))
+    if ocupados:
+        nomes = {c.id: c.name for c in repo.campanhas_de_anuncio(current_user.id)}
+        conflitos = ", ".join(sorted(nomes.get(cid, str(cid)) for cid in ocupados))
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Já vinculado a outra campanha de grupos: {conflitos}. "
+                    "Desvincule lá antes de vincular aqui."),
+        )
+    repo.definir(campanha.id, list(dict.fromkeys(payload)))
+    db.commit()
+    return listar_anuncios(campanha=campanha, current_user=current_user, db=db)
+
+
+@router.get("/{campanha_id}/resultados", response_model=ResultadosOut)
+def resultados(
+    inicio: str | None = None,
+    fim: str | None = None,
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """Linha por grupo: participantes, entradas/saídas, mensagens, cliques,
+    pedidos, comissão líquida, lucro e **lucro por pessoa**."""
+    from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+    from app.services.campanha_resultado_service import CampanhaResultadoService
+
+    d_ini, d_fim = _periodo(inicio, fim)
+    dados = CampanhaResultadoService(db).por_grupo(current_user.id, campanha, d_ini, d_fim)
+    anuncios = CampanhaAnuncioRepository(db).metricas(current_user.id, campanha.id,
+                                                      d_ini, d_fim)
+    entradas = dados["totais"]["entradas"]
+    ficaram = dados["totais"]["ficaram"]
+    # A conta do imposto vem pronta do repository — repeti-la aqui criaria uma
+    # segunda fórmula de dinheiro numa camada que não devia calcular nada.
+    gasto_com_imposto = anuncios["gasto_com_imposto"]
+    return {
+        "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},
+        "linhas": dados["linhas"],
+        "totais": dados["totais"],
+        "anuncios": {
+            "campanhas_vinculadas": anuncios["campanhas"],
+            "investimento": round(anuncios["gasto"], 2),
+            "investimento_com_imposto": round(gasto_com_imposto, 2),
+            # None = sem pixel/sem dado. A tela mostra "configure o pixel",
+            # nunca 0 (que significaria "ninguém virou lead").
+            "leads": anuncios["leads"],
+            # CPL é None tanto sem pixel quanto com 0 lead — nos dois casos a
+            # divisão não existe. Quem distingue os dois na tela é `leads`
+            # acima (None = "configure o pixel"; 0 = "ninguém virou lead").
+            "cpl": (round(gasto_com_imposto / anuncios["leads"], 2)
+                    if anuncios["leads"] else None),
+            "custo_por_entrada": (round(gasto_com_imposto / entradas, 2)
+                                  if entradas else None),
+            "custo_por_permanencia": (round(gasto_com_imposto / ficaram, 2)
+                                      if ficaram else None),
+        },
+    }
+
+
+def _seguro_para_planilha(valor: str) -> str:
+    """
+    Neutraliza fórmula em campo de CSV.
+
+    O nome do grupo é escrito por QUALQUER admin do grupo — inclusive alguém
+    que não é a afiliada. Um nome como `=HYPERLINK("http://…"&A1;"Clique")`
+    vira fórmula ativa quando ela abre o arquivo no Excel/Sheets.
+    """
+    texto = "" if valor is None else str(valor)
+    if texto[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + texto
+    return texto
+
+
+@router.get("/{campanha_id}/leads/export")
+def exportar_leads(
+    inicio: str | None = None,
+    fim: str | None = None,
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """
+    CSV dos EVENTOS DE ENTRADA (decisão de produto, 25/08).
+
+    Exporta data, grupo, origem e se a pessoa continua no grupo — **nunca**
+    número de telefone: com `getParticipants=false` nós sequer coletamos os
+    números, e o identificador que guardamos é um hash irreversível. Quem
+    esperava "lista de contatos" recebe o que existe, com a explicação no
+    cabeçalho do arquivo.
+    """
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    from app.models.campanha_link import EVENTO_ENTRADA, EVENTO_SAIDA, GrupoEvento
+    from app.services.campanha_grupos_service import CampanhaGruposService
+
+    pares = CampanhaGruposService(db).grupos_da_campanha(campanha)
+    nomes = {g.id: (g.nome or f"Grupo {g.id}") for _v, g in pares}
+    if not nomes:
+        raise HTTPException(status_code=404, detail="A campanha não tem grupos.")
+
+    from app.services.campanha_resultado_service import _intervalo_brt
+
+    d_ini, d_fim = _periodo(inicio, fim)
+    ini_utc, fim_utc = _intervalo_brt(d_ini, d_fim)
+
+    # As SAÍDAS não são limitadas pela janela: quem entrou no período e saiu
+    # depois dele não continua no grupo. Só as ENTRADAS seguem o filtro.
+    saidas = (
+        db.query(GrupoEvento)
+        .filter(GrupoEvento.grupo_id.in_(list(nomes)),
+                GrupoEvento.tipo == EVENTO_SAIDA)
+        .order_by(GrupoEvento.criado_em)
+        .all()
+    )
+    saidas_por_chave: dict = {}
+    for s_ev in saidas:
+        saidas_por_chave.setdefault(
+            (s_ev.grupo_id, s_ev.identificador_hash), []
+        ).append(s_ev.criado_em)
+
+    entradas = (
+        db.query(GrupoEvento)
+        .filter(GrupoEvento.grupo_id.in_(list(nomes)),
+                GrupoEvento.tipo == EVENTO_ENTRADA,
+                GrupoEvento.criado_em >= ini_utc,
+                GrupoEvento.criado_em < fim_utc)
+        .order_by(GrupoEvento.criado_em)
+        .all()
+    )
+
+    buffer = io.StringIO()
+    escritor = csv.writer(buffer)
+    escritor.writerow(["data_entrada", "grupo", "origem", "ainda_no_grupo"])
+    for e in entradas:
+        # "Ainda no grupo" é por ENTRADA, não por pessoa: quem entrou, saiu e
+        # voltou tem duas linhas — a primeira é "nao", a segunda "sim".
+        # Resolver pelo estado final marcaria as duas como "sim" e inflaria a
+        # permanência justamente da coorte que a exportação existe para medir.
+        posteriores = saidas_por_chave.get((e.grupo_id, e.identificador_hash), ())
+        saiu = any(s > e.criado_em for s in posteriores if s and e.criado_em)
+        escritor.writerow([
+            e.criado_em.isoformat() if e.criado_em else "",
+            _seguro_para_planilha(nomes.get(e.grupo_id, "")),
+            _seguro_para_planilha(e.origem),
+            "nao" if saiu else "sim",
+        ])
+    buffer.seek(0)
+    # Nome de arquivo ASCII e fixo: header HTTP é codificado em latin-1 pelo
+    # Starlette e um emoji no nome da campanha (rotineiro) derruba a request
+    # com UnicodeEncodeError — 500 sem mensagem, sem saída para a usuária.
+    nome_arquivo = f"entradas-campanha-{campanha.id}-{d_ini}-a-{d_fim}.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
+    )

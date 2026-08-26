@@ -3,7 +3,7 @@ from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Integer,
     String, Text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from app.models.tipos import JSON_PORTATIL
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -27,7 +27,7 @@ class CampanhaLink(Base):
     descricao_previa = Column(String(300), nullable=True)
     banner_previa_url = Column(Text, nullable=True)
     pixel_facebook_id = Column(String(32), nullable=True)
-    pixel_eventos = Column(JSONB, nullable=False,
+    pixel_eventos = Column(JSON_PORTATIL, nullable=False,
                            default=lambda: {"pageview": True, "lead": True})
     ativo = Column(Boolean, nullable=False, default=True)
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

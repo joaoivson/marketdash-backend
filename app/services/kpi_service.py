@@ -77,13 +77,20 @@ class KpiService:
     def __init__(self, db: Session):
         self.db = db
 
-    def _taxas(self, user_id: int) -> tuple[float, float]:
-        """(ad_rate, comm_rate) em fração. Mesma fonte usada pelo campaign_service."""
+    def taxas(self, user_id: int) -> tuple[float, float]:
+        """(ad_rate, comm_rate) em fração. Mesma fonte usada pelo campaign_service.
+
+        Público de propósito: é a fonte única dos impostos e já era chamado de
+        fora da classe. Um `_privado` usado por três módulos só engana quem lê.
+        """
         from app.repositories.user_settings_repository import UserSettingsRepository
         from app.services.user_settings_service import UserSettingsService
 
         s = UserSettingsService(UserSettingsRepository(self.db)).get_settings(user_id)
         return (s.get("ad_tax_rate") or 0.0) / 100.0, (s.get("commission_tax_rate") or 0.0) / 100.0
+
+    # Alias do nome antigo — havia call-sites fora da classe.
+    _taxas = taxas
 
     def _linhas_do_kpi(self, user_id: int, inicio: date, fim: date):
         """Linhas do período com status que conta para KPI."""

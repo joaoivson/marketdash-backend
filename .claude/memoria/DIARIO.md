@@ -11,6 +11,61 @@
 
 ---
 
+## 2026-08-26 — Grupos F7: os números do ciclo, e o bug que quase passou
+
+**O achado da rodada: a tela de Resultados divergia do Dashboard em 294%.**
+`_comissao_por_sub_id` somava `commission` de todas as linhas do período sem a
+allowlist `STATUS_DO_KPI` — um `UNPAID` de R$500 entrava como comissão real — e
+comparava status com `"canceled"` (um L) enquanto a Shopee manda `cancelled`
+(dois). O docstring do módulo dizia, em letras garrafais, que a fórmula era a
+do KpiService; o código não fazia isso. Comentário não é teste: a suíte passava
+porque todo cenário usava status dentro da allowlist. O que pegou foi revisão
+adversarial com dado sintético fora do caminho feliz.
+
+**A lição de arquitetura:** `normalizar_sub_id` faz `rtrim('-')`. Ao mover o
+filtro do sub_id para o SQL (era um `for` em Python sobre todas as linhas do
+usuário), quase descartei em silêncio toda venda com `wg1-`. Regra de bolso:
+função de normalização replicada em SQL precisa replicar TODOS os passos, e o
+teste tem que usar um valor sujo — com valor limpo os dois caminhos concordam
+e o bug fica invisível.
+
+**Leads do Meta: preferimos errar para baixo.** Não deu para fechar se `lead`
+é o agregado que já contém `offsite_conversion.fb_pixel_lead` (fonte pública
+diz as duas coisas) e a conta real de hml não tem conversão de lead nenhuma
+para decidir empiricamente. Ficou `max()`. O raciocínio é assimétrico e vale
+registrar: lead inflado divide o CPL pela metade, faz anúncio ruim parecer bom
+e a afiliada gasta MAIS; lead subestimado, no pior caso, a deixa cautelosa. As
+duas direções não custam a mesma coisa, então o hedge não é neutro — é para o
+lado que não queima dinheiro dela.
+
+**Período não é decoração.** `eventos_por_grupo` contava desde sempre. Com o
+filtro de 7 dias na tela, entradas históricas apareciam ao lado de comissão de
+7 dias — e, pior, o rateio do gasto do período usava entradas de meses atrás:
+o grupo que encheu em julho levava o gasto de agosto. A saída que anula um
+"ficaram", essa sim, continua sem janela de propósito: quem entrou no período
+e saiu depois não ficou.
+
+**O teste que se autoenvenenava.** `test_roteiro_envio_fatia` começou a falhar
+inteiro com "0 enviadas", com toda a cara de regressão do claim atômico. Era o
+teto GLOBAL da plataforma (5.000 msgs/dia somando todas as usuárias): o banco
+de teste é compartilhado e acumulava. O motor estava certo — parqueou, como
+deve. Ficou um `autouse` que tira o teto do caminho e, de quebra, o teste que
+o teto global nunca teve. Vale para qualquer limite global futuro: contador que
+atravessa usuárias precisa de fixture, ou o teste vira bomba-relógio.
+
+**Camadas.** A rota recalculava `gasto × (1 + imposto)` que o repository já
+calculava. Duas fórmulas de dinheiro em camadas diferentes é uma que fica para
+trás na próxima mudança de regra. `metricas()` passou a devolver
+`gasto_com_imposto`, e `KpiService._taxas` virou `taxas` — um `_privado`
+chamado por três módulos só engana quem lê.
+
+**Pendente:** revalidar a semântica de `lead` quando uma campanha de grupos com
+pixel rodar de verdade; a suíte da F7 depende do Postgres local (5434) e
+**pula em verde** onde ele não existe — CI não protege o invariante que ela
+existe para proteger.
+
+---
+
 ## 2026-08-26 — Grupos F6: link de entrada, eventos e o hash de terceiro
 
 **Página no backend, não no SPA.** O crawler do WhatsApp não executa JS: a

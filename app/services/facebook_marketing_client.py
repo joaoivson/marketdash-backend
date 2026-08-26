@@ -321,7 +321,9 @@ async def get_campaign_insights(
         # de TODOS os cliques (curtida, etc.) e ficam acima do real.
         "fields": (
             "spend,clicks,inline_link_clicks,impressions,cpc,cost_per_inline_link_click,"
-            "ctr,inline_link_click_ctr,reach,date_start,date_stop"
+            # `actions` traz as conversões contadas pelo Meta; extraímos Lead
+            # dali (F7). Campo a mais na MESMA chamada — sem custo extra.
+            "ctr,inline_link_click_ctr,reach,actions,date_start,date_stop"
         ),
         "level": "campaign",
         "time_increment": 1,

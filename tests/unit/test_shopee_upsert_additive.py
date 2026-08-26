@@ -56,7 +56,11 @@ def _fake_node(purchase_dt, order_id="order1", item_id="item1", commission=10.0,
 
 
 def _fake_repo_with_integration():
-    fake_integration = MagicMock(is_active=True, app_id="test_app", encrypted_password=b"fake")
+    # AppID da Shopee é NUMÉRICO e o cliente valida isso antes de chamar a API —
+    # um valor textual aqui faz o teste morrer em ShopeePermanentError, não no
+    # comportamento de upsert que ele quer provar.
+    fake_integration = MagicMock(is_active=True, app_id="18300000000",
+                                 encrypted_password=b"fake")
     repo_mock = MagicMock()
     repo_mock.get_by_user_id.return_value = fake_integration
     return repo_mock

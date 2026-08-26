@@ -92,6 +92,9 @@ class CampaignDailyInsight(Base):
     cpc = Column(Float, nullable=True)
     ctr = Column(Float, nullable=True)
     reach = Column(Integer, nullable=True)
+    # NULL = sem pixel configurado / Meta não reportou. NUNCA 0: zero seria
+    # "ninguém virou lead", e a tela precisa distinguir os dois casos (F7).
+    leads = Column(Integer, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

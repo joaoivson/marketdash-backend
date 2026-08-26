@@ -15,6 +15,7 @@ ROTAS_COM_LISTA = [
     ("/api/v1/roteiros/{roteiro_id}/passos", "put"),
     ("/api/v1/templates/{template_id}/variacoes", "put"),
     ("/api/v1/campanhas-grupos/{campanha_id}/grupos", "put"),
+    ("/api/v1/campanhas-grupos/{campanha_id}/anuncios", "put"),
 ]
 
 

@@ -36,6 +36,62 @@ def _to_float(v) -> float:
         return 0.0
 
 
+# Como o Meta relaciona `lead` com `offsite_conversion.fb_pixel_lead` e
+# `onsite_conversion.lead_grouped` NÃO está fechado na documentação pública:
+# há fonte dizendo que `lead` é o agregado (e então somar os três conta cada
+# lead duas vezes) e fonte dizendo que `lead` é só o formulário nativo (e então
+# somar seria correto). Não deu para decidir empiricamente: a conta real de hml
+# não tem nenhuma conversão de lead ainda.
+#
+# Enquanto isso, `max()` — o hedge que erra só para um lado. Inflar o número de
+# leads corta o CPL pela metade e faz anúncio ruim parecer bom, empurrando a
+# afiliada a gastar mais; subestimar, no pior caso, a deixa cautelosa. As duas
+# direções não custam a mesma coisa.
+#
+# ⚠️ Revalidar assim que uma campanha de grupos com pixel rodar de verdade:
+# se `lead` e as específicas vierem com valores IGUAIS no mesmo dia, `lead` é o
+# agregado e `max` já é o certo; se vierem diferentes e complementares, trocar
+# por soma das específicas.
+ACTION_TYPE_LEAD_AGREGADO = "lead"
+ACTION_TYPES_DE_LEAD_ESPECIFICOS = (
+    "onsite_conversion.lead_grouped",
+    "offsite_conversion.fb_pixel_lead",
+)
+ACTION_TYPES_DE_LEAD = (ACTION_TYPE_LEAD_AGREGADO,) + ACTION_TYPES_DE_LEAD_ESPECIFICOS
+
+
+def _leads_de(ins: dict):
+    """Lead do dia a partir de `actions`. Devolve None quando o Meta não
+    reportou NADA de conversão — a tela precisa distinguir "sem pixel" (NULL)
+    de "ninguém virou lead" (0)."""
+    acoes = ins.get("actions")
+    if not isinstance(acoes, list) or not acoes:
+        return None
+    agregado = None
+    especificos = 0
+    achou_especifico = False
+    for acao in acoes:
+        if not isinstance(acao, dict):
+            continue
+        tipo = str(acao.get("action_type") or "")
+        if tipo not in ACTION_TYPES_DE_LEAD:
+            continue
+        try:
+            # Arredonda, não trunca: o Meta devolve valor atribuído fracionário
+            # e truncar por ação some com lead de verdade (0,6 + 0,6 → 0).
+            valor = float(acao.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+        if tipo == ACTION_TYPE_LEAD_AGREGADO:
+            agregado = (agregado or 0.0) + valor
+        else:
+            especificos += valor
+            achou_especifico = True
+    if agregado is None and not achou_especifico:
+        return None
+    return int(round(max(agregado or 0.0, especificos)))
+
+
 def _to_int(v) -> int:
     try:
         return int(float(v))
@@ -558,6 +614,7 @@ class FacebookIntegrationService:
                                 cpc=_to_float(ins.get("cost_per_inline_link_click") or ins.get("cpc")) or None,
                                 ctr=_to_float(ins.get("inline_link_click_ctr") or ins.get("ctr")) or None,
                                 reach=_to_int(ins.get("reach")) or None,
+                                leads=_leads_de(ins),
                             )
                         )
                     camp_repo.upsert_insights(rows)

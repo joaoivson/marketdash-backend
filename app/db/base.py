@@ -14,6 +14,8 @@ def _apply_safe_migrations(engine, logger):
         # 060 (grupos F3): sem esta coluna, TODA query de UserSettings quebra
         # se o código chegar antes da migration — rede extra do protocolo.
         "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS whatsapp_envio_config JSONB",
+        # 065 (grupos F7): Leads do Meta por dia.
+        "ALTER TABLE campaign_daily_insights ADD COLUMN IF NOT EXISTS leads INTEGER",
     ]
     from sqlalchemy import text
     try:
