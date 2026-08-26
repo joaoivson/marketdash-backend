@@ -11,6 +11,19 @@
 
 ---
 
+## 2026-08-25 — Grupos F2: campanhas de grupos (059 antes dos models)
+
+Entidade Campanha + vínculos com posição. O que o diff não conta: a 059 foi
+aplicada em hml ANTES de escrever os models (lição da F1 — o --reload local é
+deploy instantâneo); "arquivar libera vaga" do limite do plano vale nos DOIS
+sentidos (desarquivar re-conta — pego em revisão, o teste consagrava só a
+ida); PUT de grupos deduplica pela última ocorrência (payload repetido
+estourava a PK composta no meio do salvar-ordem). Substituição de conjunto
+(lista completa na ordem final) em vez de deltas: a tela reenvia tudo ao
+arrastar, e delta driftaria.
+
+---
+
 ## 2026-08-25 — Grupos F1: WAHA no lugar da Evolution, números e grupos das alunas
 
 Migração TOTAL de gateway (decisão do plano de grupos): `waha_client.py` com o

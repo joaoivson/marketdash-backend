@@ -15,7 +15,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         "menus": frozenset(
             {"dashboard", "campanhas", "upload_cliques", "indique_ganhe", "configuracoes", "planos"}
         ),
-        "limites": {"paginas_captura": 0, "links": 0, "whatsapp_numeros": 0, "whatsapp_grupos": 0},
+        "limites": {"paginas_captura": 0, "links": 0, "whatsapp_numeros": 0, "whatsapp_grupos": 0, "campanhas_grupos": 0},
         "label": "Essencial",
     },
     "pro": {
@@ -31,7 +31,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "planos",
             }
         ),
-        "limites": {"paginas_captura": 15, "links": 30, "whatsapp_numeros": 0, "whatsapp_grupos": 0},
+        "limites": {"paginas_captura": 15, "links": 30, "whatsapp_numeros": 0, "whatsapp_grupos": 0, "campanhas_grupos": 0},
         "label": "Pro",
     },
     "max": {
@@ -45,6 +45,8 @@ FEATURES: Dict[str, Dict[str, Any]] = {
                 "meus_links",
                 # Automação Instagram (comentário → direct) é exclusiva do MAX.
                 "automacoes",
+                # Campanhas de grupos de WhatsApp (Módulo de Grupos F2+).
+                "campanhas_grupos",
                 "indique_ganhe",
                 "configuracoes",
                 "planos",
@@ -52,7 +54,7 @@ FEATURES: Dict[str, Dict[str, Any]] = {
         ),
         # Módulo de Grupos (decisão João 25/08): 3 números, grupos ilimitados.
         # O teto de mensagens/dia (240) é env + worker, não limite de plano aqui.
-        "limites": {"paginas_captura": -1, "links": -1, "whatsapp_numeros": 3, "whatsapp_grupos": -1},
+        "limites": {"paginas_captura": -1, "links": -1, "whatsapp_numeros": 3, "whatsapp_grupos": -1, "campanhas_grupos": -1},
         "label": "Max",
     },
 }
@@ -69,7 +71,7 @@ def is_unlimited(value: int) -> bool:
 PRO_ONLY_MENUS: FrozenSet[str] = frozenset({"captura", "meus_links"})
 
 # Menus exclusivos do MAX (cadeado no Essencial E no Pro).
-MAX_ONLY_MENUS: FrozenSet[str] = frozenset({"automacoes"})
+MAX_ONLY_MENUS: FrozenSet[str] = frozenset({"automacoes", "campanhas_grupos"})
 
 # Checkout Kiwify por (plano, periodo) — product_id preenchido via tabela/env.
 PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {

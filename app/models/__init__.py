@@ -32,6 +32,7 @@ from app.models.sync_error_log import SyncErrorLog
 from app.models.sync_run import SyncRun
 from app.models.whatsapp import WhatsappOptin, WhatsappEnvio
 from app.models.whatsapp_grupos import WhatsappInstancia, WhatsappGrupo, WhatsappGrupoInstancia
+from app.models.campanha_grupos import Campanha, CampanhaGrupo
 
 __all__ = [
     "User", "Dataset", "DatasetRow", "Subscription", "AdSpend", "ClickRow",
@@ -43,5 +44,6 @@ __all__ = [
     "SyncRun",
     "WhatsappOptin", "WhatsappEnvio",
     "WhatsappInstancia", "WhatsappGrupo", "WhatsappGrupoInstancia",
+    "Campanha", "CampanhaGrupo",
 ]
 
