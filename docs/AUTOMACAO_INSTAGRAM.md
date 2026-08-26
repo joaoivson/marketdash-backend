@@ -661,6 +661,15 @@ automação (indica loop).
 
 ## 9. Promoção para PRODUÇÃO
 
+> **Medido em 26/08/2026, e não é o que este checklist assumia.** As três tabelas
+> **já existem em produção** — criadas pelo `create_all` do boot, não pela `052`.
+> As colunas da `054`/`055`/`056` estão lá (vêm dos models), mas **as policies da
+> `052` não**, e o cron da `053` também não. Conferir "a coluna existe?" dá falso
+> positivo. Ver [`PROMOCAO_PARA_PRODUCAO.md`](PROMOCAO_PARA_PRODUCAO.md) §0 e §4.
+>
+> A `052` é idempotente (`DROP POLICY IF EXISTS` antes de cada `CREATE POLICY`):
+> reaplicar em produção só cria o que falta.
+
 1. [ ] **App Review aprovado** para as três permissões (sem isso, só admins e
        testadores do app conseguem conectar)
 2. [ ] Cadastrar as URLs de produção (redirect, deauthorize, data deletion, webhook)

@@ -5,6 +5,12 @@
 > arquivo existe para que a promoção seja uma sequência conferível, e não uma
 > reconstrução de memória no dia.
 
+> ⚠️ **O documento mestre agora é [`PROMOCAO_PARA_PRODUCAO.md`](PROMOCAO_PARA_PRODUCAO.md)**,
+> que cobre Grupos **e** Instagram, traz o estado do banco medido em 26/08/2026 e
+> a ordem de execução consolidada. Este arquivo ficou como detalhamento do módulo
+> de grupos — e foi escrito **antes da migration `067`**, que também precisa ser
+> aplicada (`conexao_convites` + `blacklist_numeros.numero_mascarado`).
+
 O risco que estrutura o runbook: **`Base.metadata.create_all()` roda no boot** e
 cria toda tabela nova em produção **sem RLS**. Quem chegar primeiro define o
 resultado — se o deploy subir antes das migrations, as tabelas nascem
@@ -54,6 +60,7 @@ Leia a lista e decida item a item.
 | 5 | `063_campanha_links_eventos.sql` | |
 | 6 | `065_campanha_anuncios_leads.sql` | o UNIQUE falha se o mesmo `campaign_id` estiver em duas campanhas de grupos — cheque duplicatas antes |
 | 7 | `066_monitoramentos.sql` | |
+| 8 | `067_blacklist_e_conexao_externa.sql` | `conexao_convites` + `numero_mascarado` na blacklist |
 
 **As de cron (`061` e `064`) ficam de fora desta etapa** — ver seção 5.
 

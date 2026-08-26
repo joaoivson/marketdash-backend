@@ -11,6 +11,38 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-26 (Documentação de promoção + o proxy que apontava para produção)
+
+Documento único de promoção para produção — `docs/PROMOCAO_PARA_PRODUCAO.md` —
+cobrindo Grupos de WhatsApp e Instagram, com o estado dos dois bancos **medido**,
+não lembrado.
+
+A medição desmentiu o que os checklists assumiam sobre o Instagram: as três
+tabelas **já existem em produção**, criadas pelo `create_all` do boot e não pela
+migration `052`. As colunas da `054`/`055`/`056` estão lá porque vêm dos models —
+então conferir "a coluna existe?" dá falso positivo. **As policies da `052` e o
+cron da `053` nunca foram aplicados em produção.** Não é vazamento (RLS ligado sem
+policy nega tudo para `anon`, e a API conecta com `BYPASSRLS`), mas a segunda
+linha de defesa não existe lá, e o cron ausente vira problema real no lançamento:
+o token do Business Login dura 60 dias e só renova enquanto está válido.
+
+Dois achados que valem por si:
+
+- **As rotas do Instagram e as dos Grupos dividem o mesmo bloco
+  `!isProductionHost()`** em `app-routes.tsx`. Remover esse gate para liberar
+  Grupos liberaria o Instagram junto, sem App Review. O bloco precisa ser
+  separado na promoção.
+- **`nginx.conf` mandava `/g/` e `/conectar/` para `api.marketdash.com.br` fixo**
+  — em homologação, isso servia essas páginas a partir da **API de produção**
+  (que nem tem as tabelas). Corrigido com `map $host $api_upstream`, espelhando o
+  `API_BY_HOST` do frontend. Como `proxy_pass` com variável resolve DNS em
+  runtime, foi preciso um `resolver`: usamos DNS público, não o `127.0.0.11` do
+  Docker — verificado que o DNS embutido **recusa conexão na bridge padrão**, o
+  que derrubaria o `/g` inteiro por causa da topologia da rede.
+
+O runbook antigo (`PROMOCAO_MODULO_GRUPOS.md`) foi escrito antes da migration
+`067` e não a listava; agora lista, e aponta para o documento mestre.
+
 ## [Não versionado] - 2026-08-26 (Migração das chaves do Supabase)
 
 O Supabase trocou o formato das chaves de API: `anon`/`service_role` deram lugar
