@@ -34,6 +34,7 @@ CONVERSIONS_QUERY = """
       conversionStatus
       estimatedTotalCommission
       netCommission
+      referrer
       utmContent
       orders {
         orderId
@@ -347,6 +348,18 @@ class ShopeeIntegrationService:
                     # itemCommission (nível do item) não serve: não traz o valor completo.
                     net_comm = float(node.get("netCommission") or 0)
 
+                    # CANAL DE ORIGEM: `referrer` (Instagram, Others, Websites, WhatsApp...)
+                    # — é a coluna "Canal" do relatório da Shopee.
+                    #
+                    # `channelType` (nível do item) NÃO serve: é o balde amplo, e em 225 mil
+                    # linhas só devolveu "Social Medias", null e "Shopee Video". Como o
+                    # dashboard descarta o genérico "Social medias" (senão tudo colapsaria
+                    # nele), o donut "Comissão por canal" virava "Outros 100%" para quem não
+                    # tinha CSV de cliques. Fica como fallback, melhor que vazio.
+                    # Validado em 26/08/2026 contra o relatório do afiliado: Websites bateu
+                    # exato e Instagram/Others na mesma proporção (o resto é filtro de status).
+                    referrer_no = str(node.get("referrer") or "").strip()
+
                     # Coletar itens deste nó para distribuir comissão proporcionalmente
                     node_items = []
                     for order in (node.get("orders") or []):
@@ -363,12 +376,12 @@ class ShopeeIntegrationService:
                                 "Shopee item order=%s item=%s channelType=%r attributionType=%r",
                                 order_id, item_id, raw_channel, raw_attribution,
                             )
-                            # Canal: usa SOMENTE channelType (o campo de origem real da Shopee).
-                            # NÃO faz fallback p/ attributionType (que é direto/cookie, gravado à parte
-                            # em attribution_type) — senão o donut "Comissão por canal" do dashboard
-                            # mostrava "ORDERED_IN_SAME_SHOP"/genérico em vez do canal. Vazio → o front
-                            # agrupa como "Outros".
-                            channel_val = str(raw_channel or "").strip()
+                            # Canal: `referrer` do nó primeiro (origem real), channelType do
+                            # item como fallback. NUNCA attributionType (direto/cookie, gravado à
+                            # parte em attribution_type) — senão o donut mostrava
+                            # "ORDERED_IN_SAME_SHOP" no lugar do canal. Vazio → o front agrupa
+                            # como "Outros".
+                            channel_val = referrer_no or str(raw_channel or "").strip()
                             node_items.append({
                                 "order_id": order_id,
                                 "order_status": order_status,
