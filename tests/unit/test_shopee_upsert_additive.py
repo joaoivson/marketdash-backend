@@ -22,7 +22,7 @@ def _fake_response(nodes):
 
 
 def _fake_node(purchase_dt, order_id="order1", item_id="item1", commission=10.0, revenue=100.0,
-               net_commission=None):
+               net_commission=None, referrer="Instagram"):
     """`net_commission=None` mantém total == líquida (afiliado sem RM vinculada).
     Passe um valor menor para simular afiliado com Fee de gestão da RM."""
     return {
@@ -31,6 +31,7 @@ def _fake_node(purchase_dt, order_id="order1", item_id="item1", commission=10.0,
         "conversionStatus": "COMPLETED",
         "estimatedTotalCommission": commission,
         "netCommission": commission if net_commission is None else net_commission,
+        "referrer": referrer,
         "utmContent": "",
         "orders": [
             {
@@ -312,3 +313,77 @@ async def test_grava_comissao_liquida_do_afiliado_e_nao_a_total():
     assert float(rows_arg[0].commission) == pytest.approx(9.20), (
         "gravou a comissão TOTAL do pedido em vez da líquida do afiliado"
     )
+
+
+@pytest.mark.asyncio
+async def test_canal_vem_do_referrer_e_nao_do_channel_type():
+    """Regressão do bug real (26/08/2026): o donut "Comissão por canal" mostrava
+    "Outros 100%".
+
+    O sync gravava `channelType` (nível do item), que é o balde amplo — em 225 mil
+    linhas só devolveu "Social Medias", null e "Shopee Video". Como o dashboard
+    descarta o genérico "Social medias" de propósito, sobrava "Outros" para quem
+    não tivesse CSV de cliques. O canal de origem real é `referrer` (nível do nó):
+    Instagram, Others, Websites, WhatsApp — a coluna "Canal" do relatório.
+    """
+    from app.repositories.dataset_row_repository import DatasetRowRepository
+    from app.services import shopee_integration_service as svc_mod
+
+    now_brt = datetime.now(BRT)
+    node = _fake_node(now_brt - timedelta(hours=2), referrer="Instagram")
+    # o balde amplo do item continua vindo, e não pode ganhar do referrer
+    node["orders"][0]["items"][0]["channelType"] = "Social Medias"
+    fake_dataset = MagicMock(id=555)
+
+    with patch.object(
+        svc_mod, "_get_or_create_shopee_dataset", return_value=fake_dataset
+    ), patch(
+        "app.services.shopee_graphql_client.execute_graphql",
+        new_callable=AsyncMock,
+        return_value=_fake_response([node]),
+    ), patch.object(
+        svc_mod, "decrypt_value", return_value="fake-password"
+    ), patch.object(
+        DatasetRowRepository, "count_by_date", return_value={}
+    ), patch.object(
+        DatasetRowRepository, "bulk_create"
+    ) as bulk_create_mock:
+        service = svc_mod.ShopeeIntegrationService(_fake_repo_with_integration())
+        await service.sync_commissions(user_id=1, db=MagicMock(), days_back=1)
+
+    (rows_arg,), _ = bulk_create_mock.call_args
+    assert rows_arg[0].channel == "Instagram", (
+        "gravou o balde amplo (channelType) em vez do canal de origem (referrer)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_canal_cai_no_channel_type_quando_referrer_vem_vazio():
+    """Sem referrer, o balde amplo ainda é melhor que campo vazio."""
+    from app.repositories.dataset_row_repository import DatasetRowRepository
+    from app.services import shopee_integration_service as svc_mod
+
+    now_brt = datetime.now(BRT)
+    node = _fake_node(now_brt - timedelta(hours=2), referrer="")
+    node["orders"][0]["items"][0]["channelType"] = "Shopee Video"
+    fake_dataset = MagicMock(id=555)
+
+    with patch.object(
+        svc_mod, "_get_or_create_shopee_dataset", return_value=fake_dataset
+    ), patch(
+        "app.services.shopee_graphql_client.execute_graphql",
+        new_callable=AsyncMock,
+        return_value=_fake_response([node]),
+    ), patch.object(
+        svc_mod, "decrypt_value", return_value="fake-password"
+    ), patch.object(
+        DatasetRowRepository, "count_by_date", return_value={}
+    ), patch.object(
+        DatasetRowRepository, "bulk_create"
+    ) as bulk_create_mock:
+        service = svc_mod.ShopeeIntegrationService(_fake_repo_with_integration())
+        await service.sync_commissions(user_id=1, db=MagicMock(), days_back=1)
+
+    (rows_arg,), _ = bulk_create_mock.call_args
+    assert rows_arg[0].channel == "Shopee Video"
+
