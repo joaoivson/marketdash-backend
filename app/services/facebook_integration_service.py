@@ -129,6 +129,33 @@ def _budget_to_brl(raw) -> Optional[float]:
     return _to_float(raw) / 100.0
 
 
+def agrupar_insights_por_campanha(insights: list[dict]) -> dict[str, list[dict]]:
+    """Agrupa a resposta de nível-CONTA por `campaign_id`.
+
+    `get_account_campaign_insights` traz uma linha por (campanha, dia) numa
+    chamada só; o sync precisa dela indexada por campanha. Linha sem
+    `campaign_id` é descartada: sem ela não há a qual campanha local ligar.
+    """
+    agrupado: dict[str, list[dict]] = {}
+    for ins in insights:
+        fb_campaign_id = str(ins.get("campaign_id") or "")
+        if fb_campaign_id:
+            agrupado.setdefault(fb_campaign_id, []).append(ins)
+    return agrupado
+
+
+def insight_vazio_com_entrega(insights_upserted: int, placement_upserted: int) -> bool:
+    """True quando a conta entregou no período mas nenhum insight foi gravado.
+
+    É a assinatura do incidente de 26/08/2026: a chamada de insights voltou
+    vazia (HTTP 200, `data: []`) enquanto a de placement seguia trazendo dados,
+    e o gasto sumiu da tela de 3 alunas por dois dias com o sync marcado
+    "success". Conta que parou de anunciar NÃO cai aqui — nesse caso as duas
+    chamadas vêm vazias, e acusar isso esvaziaria o valor do sinal.
+    """
+    return insights_upserted == 0 and placement_upserted > 0
+
+
 class FacebookIntegrationService:
     def __init__(self, repo: FacebookIntegrationRepository):
         self.repo = repo
@@ -518,6 +545,10 @@ class FacebookIntegrationService:
                 )
 
             processed = 0
+            # Contados separadamente porque o run "success" com 0 insights foi
+            # exatamente o que escondeu o incidente de 26/08 por dois dias.
+            insights_upserted = 0
+            placement_upserted = 0
             for ad_account_id in account_ids:
                 try:
                     campaigns = await fb.list_campaigns(token, ad_account_id)
@@ -546,6 +577,23 @@ class FacebookIntegrationService:
                         "ad_review_issue não será atualizado nesta rodada",
                         user_id, ad_account_id, exc.detail,
                     )
+
+                # Insights diários de TODAS as campanhas da conta numa chamada só
+                # (ver get_account_campaign_insights). Falha aqui não derruba o sync:
+                # as campanhas continuam sendo atualizadas e o gasto entra no próximo
+                # ciclo — mas a guarda no fim marca o run como parcial.
+                try:
+                    insights_da_conta = await fb.get_account_campaign_insights(
+                        token, ad_account_id, since.isoformat(), until.isoformat()
+                    )
+                except HTTPException as exc:
+                    logger.warning(
+                        "Facebook insights falhou user_id=%s conta=%s: %s",
+                        user_id, ad_account_id, exc.detail,
+                    )
+                    insights_da_conta = []
+
+                insights_por_campanha = agrupar_insights_por_campanha(insights_da_conta)
 
                 # fb_campaign_id -> id local. Necessário para casar as linhas do
                 # breakdown por placement (que vêm no nível da CONTA, numa chamada só)
@@ -583,19 +631,8 @@ class FacebookIntegrationService:
                     campaign_id_by_fb_id[fb_campaign_id] = campaign.id
 
                     # Insights diários: UPSERT da janela (preserva histórico, atualiza valores).
-                    try:
-                        insights = await fb.get_campaign_insights(
-                            token, fb_campaign_id, since.isoformat(), until.isoformat()
-                        )
-                    except HTTPException as exc:
-                        logger.warning(
-                            "Facebook insights falhou user_id=%s campaign=%s: %s",
-                            user_id, fb_campaign_id, exc.detail,
-                        )
-                        insights = []
-
                     rows: list[CampaignDailyInsight] = []
-                    for ins in insights:
+                    for ins in insights_por_campanha.get(fb_campaign_id, []):
                         day_str = ins.get("date_start")
                         try:
                             day = date.fromisoformat(day_str)
@@ -617,7 +654,7 @@ class FacebookIntegrationService:
                                 leads=_leads_de(ins),
                             )
                         )
-                    camp_repo.upsert_insights(rows)
+                    insights_upserted += camp_repo.upsert_insights(rows)
                     processed += 1
 
                 # Breakdown por placement: UMA chamada por CONTA (level=campaign),
@@ -671,6 +708,7 @@ class FacebookIntegrationService:
                     try:
                         with db.begin_nested():
                             saved = camp_repo.upsert_platform_insights(platform_rows)
+                        placement_upserted += saved
                         logger.info(
                             "Placement insights user_id=%s conta=%s: %d linhas",
                             user_id, ad_account_id, saved,
@@ -689,12 +727,39 @@ class FacebookIntegrationService:
             db.commit()
             logger.info("AdSpend espelhado do Meta user_id=%s: %d linhas", user_id, mirrored)
             logger.info(
-                "Facebook sync concluído user_id=%s: %d campanhas (%d contas)",
-                user_id, processed, len(account_ids),
+                "Facebook sync concluído user_id=%s: %d campanhas, %d insights, "
+                "%d linhas de placement (%d contas)",
+                user_id, processed, insights_upserted, placement_upserted, len(account_ids),
             )
+
+            suspeita_parcial = insight_vazio_com_entrega(insights_upserted, placement_upserted)
+            detalhes = None
+            if suspeita_parcial:
+                detalhes = {
+                    "insights_vazios_com_placement": {
+                        "campanhas": processed,
+                        "linhas_placement": placement_upserted,
+                        "janela": f"{since.isoformat()}..{until.isoformat()}",
+                    }
+                }
+                logger.warning(
+                    "Facebook sync user_id=%s: nenhum insight gravado, mas o placement "
+                    "trouxe %d linhas — o gasto NÃO está entrando na tela",
+                    user_id, placement_upserted,
+                )
+
             if run_id is not None:
                 try:
-                    run_repo.mark_success(run_id, records_fetched=processed, records_upserted=processed)
+                    # records_fetched = campanhas listadas; records_upserted = linhas de
+                    # insight de fato gravadas. Antes os dois eram "campanhas", e o painel
+                    # mostrava 72/72 com zero gasto entrando.
+                    run_repo.mark_success(
+                        run_id,
+                        records_fetched=processed,
+                        records_upserted=insights_upserted,
+                        is_suspected_partial=suspeita_parcial,
+                        details=detalhes,
+                    )
                 except Exception:
                     pass
             return processed

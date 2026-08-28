@@ -305,22 +305,33 @@ async def list_ads(access_token: str, ad_account_id: str) -> list[dict]:
     return await _get_paginated(_graph_url(f"{ad_account_id}/ads"), params)
 
 
-async def get_campaign_insights(
+async def get_account_campaign_insights(
     access_token: str,
-    campaign_id: str,
+    ad_account_id: str,
     since: str,
     until: str,
 ) -> list[dict]:
-    """Insights diários de uma campanha entre `since` e `until` (YYYY-MM-DD).
+    """Insights diários de TODAS as campanhas de uma conta — UMA chamada.
 
-    Retorna uma lista de dicts (um por dia) com spend/clicks/impressions/cpc/ctr/reach.
+    Cada item traz `campaign_id`, então o chamador agrupa por campanha.
+
+    ⚠️ Existia aqui uma versão por campanha (`{campaign_id}/insights`, uma chamada
+    para CADA campanha). Com 70+ campanhas por conta e o cron de hora em hora, o
+    volume passava de 2.000 chamadas/hora e a Graph API começava a devolver
+    `data: []` — HTTP 200, sem erro — para TODAS as campanhas de algumas contas,
+    de forma permanente. O gasto sumia da tela em silêncio enquanto esta chamada
+    (uma por conta) seguia respondendo normal. Ver CHANGELOG (28/08/2026).
+
+    Não voltar ao modelo por campanha: além do risco, o custo em rate limit crescia
+    com o número de campanhas do usuário, e aqui não cresce.
     """
     params = {
         # inline_link_* = métricas de "clique no link" (o que o Gerenciador mostra por padrão
         # e o que importa p/ afiliado: clique que vai pra Shopee). clicks/cpc/ctr "secos" são
         # de TODOS os cliques (curtida, etc.) e ficam acima do real.
         "fields": (
-            "spend,clicks,inline_link_clicks,impressions,cpc,cost_per_inline_link_click,"
+            "campaign_id,spend,clicks,inline_link_clicks,impressions,cpc,"
+            "cost_per_inline_link_click,"
             # `actions` traz as conversões contadas pelo Meta; extraímos Lead
             # dali (F7). Campo a mais na MESMA chamada — sem custo extra.
             "ctr,inline_link_click_ctr,reach,actions,date_start,date_stop"
@@ -331,7 +342,7 @@ async def get_campaign_insights(
         "access_token": access_token,
         "limit": 500,
     }
-    return await _get_paginated(_graph_url(f"{campaign_id}/insights"), params)
+    return await _get_paginated(_graph_url(f"{ad_account_id}/insights"), params)
 
 
 # Placements que a Meta pode devolver em `publisher_platform`. A referência de Ads

@@ -11,6 +11,59 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-28 (O gasto do Meta sumiu da tela de 3 alunas)
+
+Uma aluna relatou que o gasto de ontem não aparecia — a tela de Campanhas
+mostrava **R$ 0,00** e, pior, **Lucro +R$ 22,67 num dia que deu prejuízo de
+R$ 53,36**. O Gerenciador da Meta mostrava R$ 76,03 gastos em 27/08.
+
+O dado **já estava dentro do MarketDash**, campanha a campanha, centavo a
+centavo — só que na tabela errada. O sync faz duas chamadas à Graph API:
+
+| Chamada | Volume | Grava em | Estado |
+|---|---|---|---|
+| `{campaign_id}/insights` | **uma por campanha** | `campaign_daily_insights` (o que a tela lê) | parou em 26/08 16:20 |
+| `act_X/insights` + `breakdowns` | uma por conta | `campaign_platform_daily_insights` | funcionando |
+
+A primeira passou a responder **HTTP 200 com `data: []`** para todas as
+campanhas de 3 contas, de forma permanente. Sem exceção, sem log de erro: o
+`except HTTPException` seguia com `insights = []` e o upsert de lista vazia é
+um no-op. O `max(updated_at)` das linhas dessas alunas ficou congelado no
+minuto exato em que parou.
+
+**O que provavelmente causou.** Com 70+ campanhas por conta e o cron de hora em
+hora, o sync disparava **~2.200 chamadas por hora** à Graph API (uma por
+campanha de cada usuária, 24h por dia). As 3 contas atingidas são as de menor
+gasto — e o limite da Meta escala com o gasto da conta. Não foi possível
+confirmar o erro exato: reproduzir a chamada exige o token da aluna. O que os
+dados **descartam**: não é deploy (3 de 38 contas, em dois momentos distintos) e
+não é o token (a outra chamada usa o mesmo e passa).
+
+**A correção.** Os insights passam a vir em **uma chamada por conta**
+(`act_X/insights?level=campaign`, sem breakdown) — a mesma que nunca parou de
+responder. De ~2.200 chamadas por ciclo para ~40. O custo em rate limit deixa de
+crescer com o número de campanhas da aluna. `get_campaign_insights` foi removido
+para não voltar por descuido.
+
+**Por que ninguém viu por dois dias.** O painel `/admin/sincronizacoes` marcava
+`success` e **72/72** em todos os 24 ciclos diários. O contador somava CAMPANHAS
+LISTADAS, não insights gravados. Agora `records_upserted` conta linhas de insight
+de fato gravadas, e o run é marcado **"Possível parcial"** (`is_suspected_partial`,
+que o painel já exibia) quando nenhum insight entra **enquanto o placement traz
+linhas** — a assinatura exata da falha. Conta que só parou de anunciar não
+dispara o alerta: aí as duas chamadas vêm vazias.
+
+**Dados corrigidos.** 33 linhas de insight de 26–28/08 reconstruídas a partir do
+placement (a soma dos placements de uma campanha num dia É o insight daquele
+dia — conferido contra o Gerenciador da Meta e contra 8 dias de dados de todas
+as usuárias, onde as duas fontes batem exatamente), e `ad_spends` reprojetado.
+R$ 206,30 de gasto que não aparecia: Alice R$ 142,44, Mariana R$ 48,36,
+Katyusci R$ 15,50.
+
+**Fica pendente:** a cadência de hora em hora do cron do Facebook. 24 ciclos por
+dia para um dado que muda pouco depois de 3 dias é o que colocou o volume nesse
+patamar.
+
 ## [Não versionado] - 2026-08-27 (Layout no celular e no tablet)
 
 O painel estava quebrado no celular e no tablet. Auditoria por screenshot das 25
