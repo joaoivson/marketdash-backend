@@ -67,24 +67,40 @@ DIVERGENTES = """
     ORDER BY c.user_id, c.date, c.campaign_id
 """
 
-UPSERT = """
+def montar_upsert(tem_leads: bool) -> str:
+    """`leads` só existe onde a migration 065 foi aplicada (hml, não produção).
+
+    Citar a coluna incondicionalmente aborta a transação inteira com
+    UndefinedColumn — o mesmo motivo pelo qual o sync isola o placement num
+    savepoint. O valor nunca vem desta fonte de qualquer forma: quando a coluna
+    existe, só preservamos o que já está lá.
+    """
+    col_leads = ", leads" if tem_leads else ""
+    val_leads = ", NULL" if tem_leads else ""
+    set_leads = "\n        leads = campaign_daily_insights.leads," if tem_leads else ""
+    return f"""
     INSERT INTO campaign_daily_insights
-        (user_id, campaign_id, fb_campaign_id, date, spend, clicks, impressions, cpc, ctr, reach, leads,
-         created_at, updated_at)
+        (user_id, campaign_id, fb_campaign_id, date, spend, clicks, impressions, cpc, ctr,
+         reach{col_leads}, created_at, updated_at)
     VALUES (%(user_id)s, %(campaign_id)s, %(fb_campaign_id)s, %(date)s, %(spend)s, %(clicks)s,
-            %(impressions)s, %(cpc)s, %(ctr)s, NULL, NULL, now(), now())
+            %(impressions)s, %(cpc)s, %(ctr)s, NULL{val_leads}, now(), now())
     ON CONFLICT ON CONSTRAINT uq_insight_campaign_date DO UPDATE SET
         spend = EXCLUDED.spend,
         clicks = EXCLUDED.clicks,
         impressions = EXCLUDED.impressions,
         cpc = EXCLUDED.cpc,
         ctr = EXCLUDED.ctr,
-        -- reach não é somável entre placements e leads não vem nessa chamada:
-        -- preserva o que já existe em vez de sobrescrever com valor pior.
-        reach = campaign_daily_insights.reach,
-        leads = campaign_daily_insights.leads,
+        -- reach não é somável entre placements: preserva o que já existe em vez
+        -- de sobrescrever com valor pior.
+        reach = campaign_daily_insights.reach,{set_leads}
         fb_campaign_id = COALESCE(EXCLUDED.fb_campaign_id, campaign_daily_insights.fb_campaign_id),
         updated_at = now()
+"""
+
+
+TEM_LEADS = """
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'campaign_daily_insights' AND column_name = 'leads'
 """
 
 # Mesma lógica de CampaignRepository.rebuild_ad_spend_from_meta (app/repositories/campaign_repository.py):
@@ -152,10 +168,13 @@ def main():
         cn.close()
         return
 
+    cur.execute(TEM_LEADS)
+    upsert = montar_upsert(tem_leads=cur.fetchone() is not None)
+
     gravadas = 0
     for r in linhas:
         spend, clicks, impressions = float(r["spend"]), int(r["clicks"]), int(r["impressions"])
-        cur.execute(UPSERT, {
+        cur.execute(upsert, {
             "user_id": r["user_id"], "campaign_id": r["campaign_id"],
             "fb_campaign_id": r["fb_campaign_id"], "date": r["date"],
             "spend": spend, "clicks": clicks, "impressions": impressions,
