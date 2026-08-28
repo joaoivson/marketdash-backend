@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy import desc
@@ -6,10 +6,53 @@ from sqlalchemy.orm import Session
 
 from app.models.sync_run import SyncRun
 
+# Um run "running" mais velho que isto está morto: o run mais longo que TERMINOU
+# em 30 dias de produção levou 7,9 min, e o `time_limit` da task do Celery é 700s.
+# 1h é ~8x a maior duração real — folga suficiente para nunca fechar run vivo.
+STALE_RUNNING_SECONDS = 3600
+
+# Não é "failed": nada falhou na API, o processo foi morto no meio. Marcar como
+# falha inflaria `errors_24h` e a aba de erros do painel com ruído que não pede
+# ação nenhuma.
+STATUS_INTERROMPIDO = "interrupted"
+
 
 class SyncRunRepository:
     def __init__(self, db: Session):
         self.db = db
+
+    def fechar_orfaos(self, idade_segundos: int = STALE_RUNNING_SECONDS) -> int:
+        """Fecha runs presos em 'running' porque o processo morreu no meio.
+
+        O ciclo do cron roda como BackgroundTask no processo da API; um deploy,
+        um restart ou um OOM mata o processo e a linha fica 'running' PARA
+        SEMPRE — nada a marca. Em 28/08/2026 havia **50 delas** acumuladas
+        desde 28/07, inflando "rodando agora" e escondendo o estado real.
+
+        Usa o índice parcial `WHERE status = 'running'` (migration 037).
+        Idempotente: rodar de novo não acha mais nada.
+        """
+        agora = datetime.now(timezone.utc)
+        fechados = (
+            self.db.query(SyncRun)
+            .filter(
+                SyncRun.status == "running",
+                SyncRun.started_at < agora - timedelta(seconds=idade_segundos),
+            )
+            .update(
+                {
+                    "status": STATUS_INTERROMPIDO,
+                    "finished_at": agora,
+                    "error_message": (
+                        "Processo interrompido antes de terminar (deploy, restart ou "
+                        "timeout). Fechado automaticamente."
+                    ),
+                },
+                synchronize_session=False,
+            )
+        )
+        self.db.commit()
+        return fechados
 
     def create(
         self,

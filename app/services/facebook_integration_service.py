@@ -729,12 +729,24 @@ async def run_facebook_sync_all(trigger: str = "cron") -> dict:
     from app.db.session import SessionLocal
     from app.models.user import User
     from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
+    from app.repositories.sync_run_repository import SyncRunRepository
 
     # Lista os usuários ativos numa sessão curta, depois sincroniza cada um na SUA PRÓPRIA
     # sessão (isola falha e evita estado cruzado entre usuários após commit/rollback).
     db0 = SessionLocal()
     skipped_gate = 0
     try:
+        # Este ciclo roda como BackgroundTask do processo da API: um deploy no meio
+        # mata a task e deixa o run daquela usuária em 'running' para sempre. Como o
+        # cron é de hora em hora e o limiar é de 1h, fechar aqui pega os órfãos de
+        # TODAS as origens (facebook e shopee) sem precisar de agendamento próprio.
+        try:
+            orfaos = SyncRunRepository(db0).fechar_orfaos()
+            if orfaos:
+                logger.warning("sync_runs: %d run(s) presos em 'running' foram fechados", orfaos)
+        except Exception as exc:  # noqa: BLE001 — limpeza nunca derruba o ciclo
+            logger.warning("sync_runs: falha ao fechar runs órfãos (%s) — ciclo segue", exc)
+
         user_ids = [i.user_id for i in FacebookIntegrationRepository(db0).get_all_active()]
         # Em homologação o cron sincroniza só quem está liberado (ver
         # app/core/sync_gate.py). Os e-mails vêm em UMA query — fora de
