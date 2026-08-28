@@ -11,6 +11,47 @@
 
 ---
 
+## 2026-08-27 — Proxy por sessão no WhatsApp (plano completo, desligado por flag)
+
+Implementado `docs/PLANO_PROXY_POR_SESSAO.md` inteiro, menos o spike que ele
+mesmo mandava rodar antes (§5.1) — que precisa de proxy real em hml.
+
+**O que a implementação decidiu além do plano:**
+
+- **A aplicação do proxy numa sessão já pareada é sempre humana**, atrás de
+  `WHATSAPP_PROXY_APLICAR_AUTOMATICO=false`. O plano previa realocação
+  automática na quarentena, mas isso depende da resposta do spike ("o
+  `stop`→`PUT`→`start` pede novo QR?"). Automatizar antes da resposta seria
+  arriscar derrubar o número de uma aluna para consertar um IP. Enquanto isso, a
+  quarentena realoca **no banco** e grita no log; a sessão segue no IP antigo.
+- **Falha de rede em chip SEM proxy continua no disjuntor antigo.** O plano
+  isentava `timeout`/`rede` do disjuntor, mas sem IP dedicado não há como
+  distinguir "o IP caiu" de "o WAHA caiu" — e a isenção geral faria o lote girar
+  em falso, uma linha falhada por vez, até o orçamento da fatia acabar. Hoje
+  produção não tem proxy nenhum: essa é a configuração real.
+- **O motor alterna entre os chips do mesmo proxy** quando um dá timeout. Sem
+  isso, "todos os chips do proxy falharam" nunca seria observável: falha não
+  consome cota do dia, então o motor escolheria sempre o mesmo número.
+- **`r.motivo_parada` deixou de ser sobrescrito** pelo status genérico da
+  execução. `proxy_degradado` virava `pausada` na volta do laço — o diagnóstico
+  se perdia justamente no caso em que ele existe para explicar a parada.
+
+**Estado no banco:** migration 068 aplicada em **hml** (a tabela já tinha sido
+criada lá pelo `create_all` do backend local, que aponta para hml — a migration
+formalizou índice e RLS). 069 (pg_cron da sonda) em **nenhum** ambiente.
+Produção intocada.
+
+**Validado em tela** (Playwright, admin em hml): cadastro de proxy, verificação
+(host morto → "ConnectError: Connection refused" na linha e no toast, status
+ainda `ok` porque 1 falha < 2), realocação de um número com o aviso correto de
+que a sessão só usa o IP novo ao reiniciar. Dado de teste removido de hml e a
+flag devolvida a `false` no fim.
+
+**O que continua sendo o maior risco de banimento** e NÃO foi feito (plano §7):
+aquecimento de chip novo (rampa no `teto_diario`, coluna que já existe),
+variação de texto e janela humana. Proxy é o IP; comportamento é o que denuncia.
+
+
 ## 2026-08-26 — O sync que dizia "sucesso" e trazia zero
 
 João conectou o dispositivo dele em homologação, sincronizou e não veio grupo

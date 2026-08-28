@@ -87,6 +87,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
 | **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Resumo diário (sessão global) + números/grupos das alunas (F1 do módulo de grupos); hml; **o número do resumo precisa re-parear (QR) pós-migração** |
+| **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migration 068 em hml; 069 (cron da sonda) em nenhum ambiente; produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
 
 ## Planos
 
@@ -117,6 +118,24 @@ PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q
 O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 
 ## Em voo / pendente de humano
+
+- **Proxy por sessão (27/08)**: implementado, **flag ligada** e **pool vazio** —
+  ou seja, ainda sem efeito prático: cada sessão continua saindo pelo IP do
+  servidor, agora com WARNING no log. O que falta, em ordem:
+  1. **comprar 2 proxies BR** (1 móvel, 1 residencial — datacenter é queimado)
+     e cadastrá-los no admin (Uso e Sistema › Sistema › "IPs das conexões");
+  2. rodar o **spike**: aplicar proxy novo numa sessão já pareada em hml e
+     responder se o WhatsApp pede novo QR (registrar em `docs/whatsapp-waha.md`);
+  3. aplicar a **migration 069** (cron da sonda) — só depois de haver pool, ou
+     ela cria um `sync_run` vazio por hora;
+  4. `WHATSAPP_PROXY_OBRIGATORIO=true` **só em produção e só com pool com
+     capacidade** — com pool cheio/vazio e obrigatório ligado, nenhum número
+     novo é criado.
+  ⚠️ Números **já pareados não migram sozinhos**: a mudança de IP de um número
+  ativo é justamente o sinal a evitar, então é o botão *Realocar*, em lote
+  pequeno (um por dia por usuária).
+  ⚠️ Em hml/produção **implantados** a flag não muda nada ainda: o backend
+  desta feature não foi commitado nem deployado.
 
 - **Rodada 7 do painel admin** validada só contra **homologação**. Itens 1, 2,
   3 e o achado card×lista precisam de reconfirmação contra **produção** — ver
