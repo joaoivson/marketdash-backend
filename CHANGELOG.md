@@ -11,6 +11,38 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-27 (Layout no celular e no tablet)
+
+O painel estava quebrado no celular e no tablet. Auditoria por screenshot das 25
+telas (área da aluna e painel admin) em três tamanhos — celular, tablet e
+desktop — e correção do que apareceu. Elementos passando da borda da tela:
+**celular 51 → 14, tablet 32 → 0, desktop segue em 0.** Os que restam são a
+barra de abas do admin, que rola de propósito, e dois elementos decorativos.
+
+**Ofertas** era a pior: dois cards por linha no celular quando o card foi
+desenhado para ocupar a linha inteira, então nome, preço e comissão apareciam
+cortados. Agora é um card por linha no celular e dois no tablet.
+
+**Editor de automação**: os botões "Salvar rascunho" e "Publicar automação"
+ficavam atrás da barra de navegação inferior — publicar era impossível pelo
+celular.
+
+**Painel admin** não tinha nenhum tratamento para telas pequenas. A tabela de
+uso da plataforma era cortada sem oferecer rolagem, os filtros não cabiam na
+largura da tela e os rótulos longos do DRE empurravam os valores para fora.
+Tabelas largas agora viram cards no celular e no tablet, e a aba aberta aparece
+sozinha na barra de abas.
+
+**Modais** deixaram de encostar nas bordas no celular, e os que ainda abriam
+como caixa centralizada passaram a abrir como gaveta — incluindo o de nova
+despesa. No envio rápido de oferta, o texto e o link saíam da tela.
+
+**Meus Links** ficava com o título vazio no topo e desperdiçava 56px dos 390px
+da tela com margem repetida.
+
+Para quem for validar: `mobile-audit.mjs` agora percorre as rotas atuais nos
+três tamanhos e reporta erro de console junto com o screenshot.
+
 ## [Não versionado] - 2026-08-26 (O sync de grupos: 499 viravam zero)
 
 A sincronização de grupos vinha terminando "com sucesso" e gravando nada. O log
@@ -419,6 +451,99 @@ cada pessoa dentro do grupo vale**.
 - `num`/`pct` estouravam em `undefined` e, sem ErrorBoundary no projeto,
   derrubariam o Dashboard inteiro.
 - Abas da campanha viraram controladas pela URL — `?tab=` não navegava.
+
+## [Não versionado] - 2026-08-27 (Proxy por sessão no WhatsApp)
+
+Cada número conectado pode passar a sair por um **IP próprio**. Está no código,
+**desligado por flag** (`whatsapp_proxy: false`) — ligar exige cadastrar os
+proxies antes.
+
+A decisão que o desenho carrega: **proxy sticky, não rotativo**. O que derruba
+número no WhatsApp não é repetir o mesmo IP, é *trocar* de IP — uma sessão que
+aparece em São Paulo e dez minutos depois em Frankfurt é o retrato mais óbvio de
+conta automatizada. Então o que é dinâmico aqui é a **alocação** (pool no banco,
+admin troca sem redeploy), nunca o IP por mensagem.
+
+### Added
+
+- **Pool de IPs** (`whatsapp_proxies`, migration 068) com alocação por
+  **afinidade de usuária**: os 3 chips da mesma afiliada dividem um IP — é o
+  retrato coerente de uma pessoa com três aparelhos em casa, e derruba o custo
+  de 3 IPs por afiliada para 1. Chips de afiliadas **diferentes** nunca dividem
+  IP: um banimento contaminaria a vizinhança.
+- **Sonda de saúde horária** (`proxies.verificar` + `/internal/cron/proxy-health`,
+  migration 069): 2 falhas seguidas → `degradado`, 4 → `quarentena` (o pool para
+  de alocar nele). Registra em `sync_runs` (`source="proxy_health"`). IP diferente
+  do host é normal em residencial rotativo; **país** diferente vira alerta.
+- **Aba "IPs das conexões (proxy)"** no admin (Uso e Sistema › Sistema): pool com
+  ocupação e status, quem está em qual IP, *Verificar* e *Realocar*. A afiliada
+  não vê nada disso — para ela, pool esgotado é "sem capacidade de conexão, fale
+  com o suporte", sem a palavra proxy.
+- **Cooldown de 24h por chip** e contador de trocas: trocar de IP é evento raro
+  e registrado, com confirmação explícita na tela.
+
+### Fixed
+
+- **Falha de rede deixou de ser tratada como banimento.** `timeout`/`rede` num
+  chip atrás de proxy não conta mais para o disjuntor: cinco instabilidades de
+  rede desconectavam o número e pediam novo QR à afiliada por causa de um IP
+  fora do ar. Agora, quando *todos* os chips do mesmo IP falham na mesma fatia, o
+  IP vai a `degradado` e a execução **pausa** (retomável) — e o motor alterna
+  entre os chips do proxy em vez de martelar o que acabou de falhar. Chip sem
+  proxy segue no comportamento antigo: sem IP dedicado não há como distinguir "o
+  IP caiu" de "o WAHA caiu".
+- **`desconectado`/`auth` continuam no disjuntor e NÃO trocam de IP.** Trocar de
+  proxy porque o número foi banido queima o IP seguinte também.
+- **O `PUT` de webhooks não apaga mais o proxy da sessão.** `webhooks` e `proxy`
+  moram na mesma chave `config` do WAHA: ligar/desligar um monitoramento
+  reescrevia o `config` e devolveria a sessão ao IP do servidor, em silêncio.
+
+### Pendente
+
+- **Não está medido se aplicar um proxy novo numa sessão já pareada
+  (`stop` → `PUT` → `start`) exige novo QR.** Até o spike em homologação
+  responder, a realocação automática por quarentena só mexe no banco e alerta; a
+  aplicação na sessão é sempre um clique de gente, com aviso na tela
+  (`WHATSAPP_PROXY_APLICAR_AUTOMATICO=false`).
+- Migration 068 aplicada em **hml**; 069 (pg_cron da sonda) em nenhum ambiente.
+  Produção não foi tocada.
+- O plano §7 continua aberto e é o resto do risco de banimento — **aquecimento
+  de chip novo** (rampa no `teto_diario`, que já existe na tabela), variação de
+  texto e janela humana. Proxy é o IP; o comportamento é o que mais denuncia robô.
+
+## [Não versionado] - 2026-08-26 (Fix: "Comissão por canal" mostrava Outros 100%)
+
+O donut do dashboard colapsava tudo em "Outros" para quem não tinha CSV de
+cliques do período. O correto no dia conferido era Instagram / Others / Websites.
+
+### Fixed
+
+- **O sync gravava o balde amplo em vez do canal de origem.** `channelType`
+  (nível do item) só devolveu três valores em 225 mil linhas: "Social Medias"
+  (212.837), null (11.094) e "Shopee Video" (1.350). Como o dashboard descarta
+  o genérico "Social medias" de propósito — senão tudo colapsaria nele — sobrava
+  "Outros 100%".
+  - Passa a usar **`referrer`** (nível do nó): Instagram, Others, Websites,
+    WhatsApp — a coluna "Canal" do relatório da Shopee. `channelType` fica como
+    fallback, melhor que campo vazio.
+  - O campo foi encontrado por introspection do schema GraphQL; não aparecia em
+    busca por "channel"/"source". Validado contra o relatório do afiliado no dia
+    25/08: Websites bateu exato (14,17) e Instagram/Others na mesma proporção —
+    a diferença restante é o filtro de status, que o script de validação não
+    aplicava.
+  - Dois testes de regressão: um garante que `referrer` ganha de `channelType`
+    quando ambos vêm, outro garante o fallback quando `referrer` vem vazio.
+
+### Descoberto no caminho
+
+- **`mcnManagementFeeRate` e `linkedMcnName` existem na API** (retornaram
+  "8.00%" e "Uno Hub"). É a taxa de contrato do afiliado, que até então não
+  estava em lugar nenhum — destrava medir o fee de cada conta sem estimativa.
+- **O upsert por `row_hash` atualiza `commission` e `channel`** em conflito
+  (`dataset_row_repository.py`). Ou seja, um full refresh de 90 dias corrige o
+  histórico dos dois bugs sem UPDATE manual. Ressalva: o `row_hash` do sync
+  inclui um contador `seq` por execução — se a API devolver quantidade diferente
+  de nós para o mesmo item, o re-sync insere em vez de atualizar.
 
 ## [Não versionado] - 2026-08-26 (Fix: upload de CSV sumia quando o broker caía)
 
