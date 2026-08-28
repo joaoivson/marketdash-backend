@@ -64,6 +64,35 @@ Katyusci R$ 15,50.
 dia para um dado que muda pouco depois de 3 dias é o que colocou o volume nesse
 patamar.
 
+### Sincronizações presas em "running" desde julho
+
+Apareceu ao validar o deploy acima: o ciclo das 16:00 processou **25 alunas em
+vez de 38** e deixou um run em `running`. É o rastro do container sendo trocado
+no meio — o ciclo roda como `BackgroundTask` do processo da API e morre junto
+com ele.
+
+Puxando o fio, havia **50 runs presos em `running`**, o mais antigo de **28/07**
+(31 dias). Nada nunca os fechava. Todos contavam como "rodando agora" no painel,
+e a maioria era das duas contas com mais campanhas (296 e 341) — as que mais
+demoravam e mais chance tinham de ser pegas por um restart.
+
+`fechar_orfaos()` roda no início de cada ciclo e encerra o que passou de 1h em
+`running`, de qualquer origem. O limiar não é novo: é o mesmo
+`STALE_RUNNING_SECONDS` que o painel já usava para marcar "(travada?)" — agora
+numa constante só, no repository. Duas cópias sairiam de sincronia e o painel
+acusaria numa faixa enquanto a limpeza fecharia noutra. Folga real: o run mais
+longo que **terminou** em 30 dias levou 7,9 min.
+
+Status próprio **`interrupted`** ("Interrompida", cinza no painel), não
+`failed`: nada falhou na API, o processo foi morto. Marcar como falha inflaria
+`errors_24h` e a aba de erros com 50 registros que não pedem ação nenhuma.
+
+⚠️ **Todo deploy trunca o ciclo em andamento.** Hoje é inofensivo — a janela do
+sync é de 3 dias e o ciclo seguinte cobre —, mas explica runs "sumidos" no
+painel. Mover o ciclo para o worker do Celery resolveria de vez; não foi feito
+porque ele foi movido para inline de propósito (Rodada 5), quando o worker
+rodava com código velho.
+
 ## [Não versionado] - 2026-08-27 (Layout no celular e no tablet)
 
 O painel estava quebrado no celular e no tablet. Auditoria por screenshot das 25
