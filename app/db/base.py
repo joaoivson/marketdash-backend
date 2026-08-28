@@ -22,6 +22,14 @@ def _apply_safe_migrations(engine, logger):
         "ALTER TABLE blacklist_numeros ADD COLUMN IF NOT EXISTS numero_mascarado VARCHAR(24)",
         "ALTER TABLE blacklist_numeros ADD COLUMN IF NOT EXISTS "
         "remover_dos_grupos BOOLEAN NOT NULL DEFAULT TRUE",
+        # 068 (proxy por sessão): `whatsapp_instancias` já existe em todo
+        # ambiente, e `create_all` NÃO adiciona coluna a tabela existente —
+        # sem isto, qualquer query de instância quebra com UndefinedColumn
+        # se o deploy chegar antes da migration.
+        "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS proxy_id INTEGER",
+        "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS proxy_fixado_em TIMESTAMPTZ",
+        "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS "
+        "proxy_trocas INTEGER NOT NULL DEFAULT 0",
     ]
     from sqlalchemy import text
     try:

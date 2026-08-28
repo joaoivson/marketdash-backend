@@ -81,6 +81,7 @@ celery_app.conf.include = [
     "app.tasks.instagram_tasks",
     "app.tasks.roteiro_tasks",
     "app.tasks.monitoramento_tasks",
+    "app.tasks.proxy_tasks",
 ]
 
 # Auto-discover any other tasks under app.tasks

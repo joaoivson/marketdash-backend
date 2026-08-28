@@ -1,4 +1,5 @@
 """Provisionamento de sessão: nome com prefixo do ambiente, limite do plano e cap global."""
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,20 @@ from app.services.waha_client import ErroWhatsapp
 from app.services.whatsapp_instancia_service import (
     LimiteDeNumeros, LimiteGlobal, WhatsappInstanciaService, nome_de_instancia,
 )
+
+
+@pytest.fixture(autouse=True)
+def pool_de_proxy_previsivel(monkeypatch):
+    """O provisionamento de sessão não pode depender de uma flag de DEPLOY.
+
+    Estes testes usam repo falso (sem Session), então com `whatsapp_proxy: true`
+    no `feature-flags.json` a alocação real tentava consultar o pool e o teste
+    quebrava por AttributeError — falha de teste, não de código. Quem exercita
+    proxy monkeypatcha `alocar`/`credenciais` explicitamente logo abaixo.
+    """
+    from app.services import proxy_pool_service
+
+    monkeypatch.setattr(proxy_pool_service, "habilitado", lambda: False)
 
 
 class _FakeRepo:
@@ -64,7 +79,7 @@ def test_criar_provisiona_sessao_no_waha(monkeypatch):
     criadas = []
 
     class _Cliente:
-        def criar_sessao(self, webhooks=None, start=True):
+        def criar_sessao(self, webhooks=None, start=True, proxy=None):
             criadas.append(webhooks)
             return {}
 
@@ -89,7 +104,7 @@ def test_falha_do_waha_ao_criar_nao_persiste_linha(monkeypatch):
     # Linha órfã local consumiria o limite do plano: 3 tentativas num outage
     # do WAHA e a usuária ficaria trancada com zero números funcionais.
     class _ClienteQueFalha:
-        def criar_sessao(self, webhooks=None, start=True):
+        def criar_sessao(self, webhooks=None, start=True, proxy=None):
             raise ErroWhatsapp("timeout", "WAHA fora do ar")
 
     monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
@@ -151,7 +166,9 @@ class _ClienteDeSessao:
         return {"config": {"webhooks": [{"url": "https://api/x/webhook",
                                          "events": list(self.eventos_atuais)}]}}
 
-    def atualizar_sessao(self, webhooks):
+    def atualizar_sessao(self, webhooks, proxy=None):
+        # `proxy` no PUT não é detalhe: o `config` é reescrito inteiro, então
+        # omiti-lo apagaria o proxy da sessão em silêncio.
         self.registro.append(webhooks[0]["events"])
         return {}
 
@@ -304,7 +321,7 @@ def test_sessao_inexistente_no_waha_nao_tenta_reconfigurar(monkeypatch):
         def sessao_info(self):
             return {}
 
-        def atualizar_sessao(self, webhooks):
+        def atualizar_sessao(self, webhooks, proxy=None):
             feitas.append(webhooks)
 
     _com_cliente(monkeypatch, _Ausente())
@@ -352,3 +369,131 @@ def test_sessao_ausente_no_waha_nao_e_desconhecida(monkeypatch):
 
     assert sincronizar_todas(_DbSemEnvio(), [inst], {1: False},
                              "https://api/x/webhook") == (0, [])
+
+
+# --- proxy por sessão (plano 27/08) ------------------------------------------
+
+
+def test_falha_do_waha_ao_criar_nao_deixa_proxy_alocado(monkeypatch):
+    """Proxy alocado com sessão que não existe = vaga fantasma no pool. Com um
+    pool pequeno, três tentativas num outage do WAHA esgotariam a capacidade
+    da plataforma inteira."""
+    from app.services import proxy_pool_service
+
+    escolhido = SimpleNamespace(id=5, servidor="10.0.0.5:8005",
+                                usuario_cifrado=None, senha_cifrada=None)
+    monkeypatch.setattr(proxy_pool_service, "alocar", lambda db, i: escolhido)
+    monkeypatch.setattr(proxy_pool_service, "credenciais",
+                        lambda p: {"server": "10.0.0.5:8005"} if p else None)
+
+    class _ClienteQueFalha:
+        def criar_sessao(self, webhooks=None, start=True, proxy=None):
+            raise ErroWhatsapp("timeout", "WAHA fora do ar")
+
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: _ClienteQueFalha())
+    repo = _FakeRepo()
+    svc = WhatsappInstanciaService(repo, plan_limit_numeros=3, webhook_url="https://api/x")
+    with pytest.raises(ErroWhatsapp):
+        svc.criar(1, "Número 1")
+    assert repo.salvas == [], "instância persistida apesar da falha no WAHA"
+
+
+def test_criar_manda_o_proxy_alocado_para_o_waha_e_fixa_na_instancia(monkeypatch):
+    from app.services import proxy_pool_service
+
+    escolhido = SimpleNamespace(id=5)
+    monkeypatch.setattr(proxy_pool_service, "alocar", lambda db, i: escolhido)
+    monkeypatch.setattr(proxy_pool_service, "credenciais",
+                        lambda p: {"server": "10.0.0.5:8005"} if p else None)
+    recebidos = []
+
+    class _Cliente:
+        def criar_sessao(self, webhooks=None, start=True, proxy=None):
+            recebidos.append(proxy)
+            return {}
+
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: _Cliente())
+    svc = WhatsappInstanciaService(_FakeRepo(), plan_limit_numeros=3,
+                                   webhook_url="https://api/x")
+    inst = svc.criar(7, "Número 1")
+    assert recebidos == [{"server": "10.0.0.5:8005"}]
+    assert inst.proxy_id == 5 and inst.proxy_fixado_em is not None
+
+
+def test_pool_esgotado_em_producao_nao_cria_sessao_nenhuma(monkeypatch):
+    """`sem_proxy` precisa impedir a criação ANTES de tocar o WAHA — sessão
+    criada lá e recusada aqui vira órfã no servidor."""
+    from app.services import proxy_pool_service
+
+    def _sem_vaga(db, instancia):
+        raise ErroWhatsapp("sem_proxy", proxy_pool_service.MENSAGEM_SEM_PROXY)
+
+    monkeypatch.setattr(proxy_pool_service, "alocar", _sem_vaga)
+    tocou = []
+
+    class _Cliente:
+        def criar_sessao(self, webhooks=None, start=True, proxy=None):
+            tocou.append(True)
+            return {}
+
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: _Cliente())
+    repo = _FakeRepo()
+    svc = WhatsappInstanciaService(repo, plan_limit_numeros=3, webhook_url="https://api/x")
+    with pytest.raises(ErroWhatsapp) as e:
+        svc.criar(1, None)
+    assert e.value.motivo == "sem_proxy"
+    assert tocou == [] and repo.salvas == []
+
+
+def test_remover_devolve_a_vaga_do_proxy(monkeypatch):
+    class _Cliente:
+        def deletar_sessao(self):
+            return None
+
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: _Cliente())
+    repo = _FakeRepo()
+    svc = WhatsappInstanciaService(repo, plan_limit_numeros=3, webhook_url=None)
+    inst = SimpleNamespace(nome_instancia="mkdaaau1xbbbb", status="conectada",
+                           user_id=1, proxy_id=5,
+                           proxy_fixado_em=datetime.now(timezone.utc))
+    svc.remover(inst)
+    assert inst.proxy_id is None and inst.status == "removida"
+
+
+def test_qr_recria_a_sessao_com_o_mesmo_proxy(monkeypatch):
+    """Recriar a sessão com outro IP (ou sem IP) seria uma TROCA de IP disparada
+    por um poll de tela — o oposto do desenho sticky."""
+    from app.services import proxy_pool_service
+
+    monkeypatch.setattr(proxy_pool_service, "credenciais_da_instancia",
+                        lambda db, i: {"server": "10.0.0.5:8005"})
+    recebidos = []
+
+    class _ClienteSemSessao:
+        def __init__(self):
+            self.chamadas = 0
+
+        def sessao_info(self):
+            self.chamadas += 1
+            return {} if self.chamadas == 1 else {"status": "SCAN_QR_CODE"}
+
+        def criar_sessao(self, webhooks=None, start=True, proxy=None):
+            recebidos.append(proxy)
+            return {}
+
+        def qrcode(self):
+            return None
+
+    cliente = _ClienteSemSessao()
+    monkeypatch.setattr("app.services.whatsapp_instancia_service.cliente_da_sessao",
+                        lambda nome: cliente)
+    svc = WhatsappInstanciaService(_FakeRepo(), plan_limit_numeros=3,
+                                   webhook_url="https://api/x")
+    svc.qr(SimpleNamespace(nome_instancia="mkdaaau1xbbbb", status="criada",
+                           numero=None, falhas_seguidas=0, ultima_conexao_em=None,
+                           user_id=1, proxy_id=5))
+    assert recebidos == [{"server": "10.0.0.5:8005"}]

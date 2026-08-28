@@ -161,6 +161,34 @@ def _lista_de_grupos(dados: Any) -> List[Dict[str, Any]]:
         f"{str(dados)[:120]}",
     )
 
+def mascarar_proxy(config: Any) -> Any:
+    """Cópia de um `config` de sessão com a credencial do proxy trocada por
+    `***`. Log de `config.proxy` cru vazaria usuário e senha do IP — a mesma
+    regra dos tokens da Shopee."""
+    if not isinstance(config, dict):
+        return config
+    limpo = dict(config)
+    if "proxy" in limpo:
+        limpo["proxy"] = "***"
+    return limpo
+
+
+def _config_de_sessao(webhooks: Optional[List[Dict[str, Any]]],
+                      proxy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Monta o `config` INTEIRO da sessão.
+
+    Existe porque `webhooks` e `proxy` moram na mesma chave: escrever um
+    sobrescreve o outro. Foi por isso que o método passou a montar o dict
+    completo em vez de `{"webhooks": ...}` direto.
+    """
+    config: Dict[str, Any] = {}
+    if webhooks:
+        config["webhooks"] = webhooks
+    if proxy:
+        config["proxy"] = proxy
+    return config
+
+
 class WahaClient:
     def __init__(self, base_url: Optional[str], api_key: Optional[str],
                  sessao: Optional[str], timeout: float = 20.0):
@@ -245,14 +273,20 @@ class WahaClient:
         return bool(self.sessao_info())
 
     def criar_sessao(self, webhooks: Optional[List[Dict[str, Any]]] = None,
-                     start: bool = True) -> Dict[str, Any]:
+                     start: bool = True,
+                     proxy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Cria (ou reaproveita) a sessão. Sessão já existente é sucesso para o
         nosso propósito — o método roda toda vez que a tela de conexão abre.
+
+        `proxy` é o `config.proxy` do WAHA já decifrado
+        (`proxy_pool_service.credenciais`): `{"server": "host:porta",
+        "username": ..., "password": ...}`, com o server SEM esquema.
         """
         corpo: Dict[str, Any] = {"name": self.sessao, "start": start}
-        if webhooks:
-            corpo["config"] = {"webhooks": webhooks}
+        config = _config_de_sessao(webhooks, proxy)
+        if config:
+            corpo["config"] = config
         status, dados = self._pedir("POST", "/api/sessions", corpo)
         detalhe = str(dados).lower()
         if status == 409 or (
@@ -263,15 +297,37 @@ class WahaClient:
             raise ErroWhatsapp("criar_sessao", f"status {status}: {str(dados)[:150]}")
         return dados if isinstance(dados, dict) else {}
 
-    def atualizar_sessao(self, webhooks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """PUT /api/sessions/{sessao} — reconfigura webhooks sem re-parear."""
+    def atualizar_sessao(self, webhooks: List[Dict[str, Any]],
+                         proxy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        PUT /api/sessions/{sessao} — reconfigura a sessão (reinicia, mas não
+        re-pareia).
+
+        ⚠️ O `config` é enviado INTEIRO: mandar só `webhooks` apaga o
+        `config.proxy` que já estava lá (e a sessão volta a sair pelo IP do
+        servidor, em silêncio). Quem chama precisa passar o proxy vigente —
+        ver `whatsapp_instancia_service.sincronizar_eventos`.
+        """
         status, dados = self._pedir(
             "PUT", f"/api/sessions/{self.sessao}",
-            {"config": {"webhooks": webhooks}},
+            {"config": _config_de_sessao(webhooks, proxy)},
         )
         if status >= 400:
             raise ErroWhatsapp("webhook", f"status {status}: {str(dados)[:150]}")
         return dados if isinstance(dados, dict) else {}
+
+    def parar_sessao(self) -> None:
+        """
+        POST /api/sessions/{sessao}/stop — para sem deslogar.
+
+        É o que permite aplicar um proxy novo (stop → PUT → start) sem
+        `deletar_sessao`, que faz logout e exigiria novo QR.
+        """
+        status, dados = self._pedir("POST", f"/api/sessions/{self.sessao}/stop")
+        # 404 = sessão não existe; 422 = já parada. Nenhum dos dois é erro para
+        # quem só quer garantir que ela NÃO está rodando.
+        if status >= 400 and status not in (404, 422):
+            raise ErroWhatsapp("sessao", f"stop {status}: {str(dados)[:150]}")
 
     def iniciar_sessao(self) -> None:
         status, dados = self._pedir("POST", f"/api/sessions/{self.sessao}/start")

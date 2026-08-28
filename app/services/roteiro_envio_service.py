@@ -83,6 +83,16 @@ class RoteiroEnvioService:
         self.cliente_factory = cliente_factory
         self.short_link_factory = short_link_factory
         self._clientes: Dict[str, object] = {}
+        # Falhas de REDE desta fatia, agrupadas por proxy: {proxy_id: {inst_id: n}}.
+        # É o que separa "o proxy caiu" (todos os chips dele falhando) de
+        # "instabilidade pontual num chip" — ver `_tratar_erro`.
+        self._rede_por_proxy: Dict[int, Dict[int, int]] = {}
+        # Chips cujo TRANSPORTE acabou de falhar nesta fatia. Serve a duas
+        # coisas: não martelar o chip que acabou de dar timeout, e permitir que
+        # a próxima linha caia noutro chip — sem essa alternância, "todos os
+        # chips do proxy falharam" nunca seria observável (o motor escolheria
+        # sempre o mesmo número, já que falha não consome cota do dia).
+        self._rede_recente: set = set()
 
     # --- preparação ---------------------------------------------------------
 
@@ -189,10 +199,14 @@ class RoteiroEnvioService:
     def _instancia_para_grupo(self, grupo_id: int, elegiveis: List,
                               vinculos: Dict[int, List[int]]) -> Optional[object]:
         membros = set(vinculos.get(grupo_id, []))
-        for inst in elegiveis:
-            if inst.id in membros:
+        candidatos = [i for i in elegiveis if i.id in membros]
+        # Preferir quem ainda não falhou por rede nesta fatia. Só uma
+        # preferência: se todos já falharam, tenta de novo em vez de pular o
+        # grupo — o objetivo é alternar, não reduzir a capacidade.
+        for inst in candidatos:
+            if inst.id not in self._rede_recente:
                 return inst
-        return None
+        return candidatos[0] if candidatos else None
 
     def _devolver(self, mensagem: RoteiroMensagem) -> None:
         """Linha claimada que não deu para enviar por motivo GLOBAL volta a
@@ -239,7 +253,11 @@ class RoteiroEnvioService:
             self.db.expire(execucao)
             execucao = self.repo.execucao_por_id(execucao_id)
             if execucao.status in (EXEC_PAUSADA, EXEC_CANCELADA):
-                r.motivo_parada = execucao.status
+                # Preserva um motivo mais específico já registrado nesta fatia
+                # (ex.: `proxy_degradado`, que pausa a execução de dentro do
+                # tratamento de erro). Sobrescrever com "pausada" apagaria
+                # justamente o diagnóstico que explica a parada.
+                r.motivo_parada = r.motivo_parada or execucao.status
                 break
 
             agora = datetime.now(timezone.utc)
@@ -390,6 +408,47 @@ class RoteiroEnvioService:
     # contam para o disjuntor (5 grupos sem admin não podem desconectar a sessão).
     MOTIVOS_DO_GRUPO = {"grupo_invalido", "sem_permissao", "acao"}
 
+    # Erros de TRANSPORTE. Não são sinal de banimento: o WhatsApp não recusou
+    # nada — a conversa não chegou lá. Tratá-los como banimento (contando para
+    # o disjuntor) desconectava o número por instabilidade de rede.
+    MOTIVOS_DE_REDE = {"timeout", "rede"}
+
+    # Repetições na MESMA fatia antes de acusar o proxy. Uma falha isolada é
+    # ruído de rede; a segunda, com todos os chips daquele IP falhando, é o IP.
+    FALHAS_DE_REDE_PARA_ACUSAR_PROXY = 2
+
+    def _diagnosticar_proxy(self, execucao, instancia, r: ResultadoDaFatia) -> bool:
+        """Falha de rede repetida em TODOS os chips do mesmo proxy = o proxy caiu.
+
+        Marca o proxy como degradado e PAUSA a execução; a realocação fica com
+        a sonda de saúde. Trocar de IP aqui seria trocar no meio de um envio —
+        e IP novo com lote em andamento é o pior momento possível.
+
+        Devolve True quando assumiu o desfecho (execução pausada).
+        """
+        proxy_id = getattr(instancia, "proxy_id", None)
+        if proxy_id is None:
+            return False
+        por_instancia = self._rede_por_proxy.setdefault(proxy_id, {})
+        por_instancia[instancia.id] = por_instancia.get(instancia.id, 0) + 1
+        self._rede_recente.add(instancia.id)
+        chips = [i for i in self.repo_instancias.por_usuario(execucao.user_id)
+                 if getattr(i, "proxy_id", None) == proxy_id]
+        # "Todos os chips do proxy" é dentro DESTA usuária: por afinidade, um
+        # proxy só atende chips de uma afiliada (proxy_pool_service).
+        todos_falharam = chips and all(i.id in por_instancia for i in chips)
+        repetiu = sum(por_instancia.values()) >= self.FALHAS_DE_REDE_PARA_ACUSAR_PROXY
+        if not (todos_falharam and repetiu):
+            return False
+        from app.services import proxy_pool_service
+
+        proxy_pool_service.marcar_degradado(
+            self.db, proxy_id,
+            f"execucao {execucao.id}: falha de rede em todos os chips do proxy",
+        )
+        self._pausar(execucao, r, "proxy_degradado")
+        return True
+
     def _tratar_erro(self, execucao, mensagem, instancia, e: ErroWhatsapp,
                      r: ResultadoDaFatia, elegiveis: List) -> None:
         if e.motivo in ("sem_permissao", "acao"):
@@ -402,6 +461,23 @@ class RoteiroEnvioService:
             self.db.add(grupo)
             self.repo.marcar(mensagem, MSG_PULADA, erro="grupo_invalido")
             r.puladas += 1
+            return
+        if e.motivo in self.MOTIVOS_DE_REDE and getattr(instancia, "proxy_id", None):
+            # Chip ATRÁS DE PROXY: rede não é banimento. A tabela do plano
+            # (§2.6) separa três coisas que o código tratava como uma só —
+            # proxy caído (pausa a execução), instabilidade pontual num chip
+            # (falha a linha e segue) e `desconectado`/`auth`, que continuam
+            # no disjuntor abaixo. Trocar de proxy porque o NÚMERO caiu
+            # queimaria o IP seguinte também.
+            #
+            # Sem proxy o diagnóstico é impossível (não há como distinguir "o
+            # IP caiu" de "o WAHA caiu"), então o caminho segue o disjuntor
+            # antigo — que é o comportamento em produção hoje.
+            if self._diagnosticar_proxy(execucao, instancia, r):
+                self._devolver(mensagem)
+                return
+            self.repo.marcar(mensagem, MSG_FALHOU, erro=e.motivo)
+            r.falhas += 1
             return
         instancia.falhas_seguidas = (instancia.falhas_seguidas or 0) + 1
         if e.fatal or instancia.falhas_seguidas >= settings.WHATSAPP_FALHAS_PARA_PARAR:

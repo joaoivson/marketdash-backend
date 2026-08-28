@@ -1,3 +1,4 @@
 {
-  "payment_provider": "kiwify"
+  "payment_provider": "kiwify",
+  "whatsapp_proxy": true
 }

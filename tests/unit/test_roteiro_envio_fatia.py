@@ -41,6 +41,15 @@ if PG_OK:
         _conn.execute(text(
             "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS whatsapp_envio_config JSONB"
         ))
+        # 068 (proxy por sessão): mesmo motivo — `whatsapp_instancias` já
+        # existe neste banco de teste e `create_all` não a altera.
+        for _alter in (
+            "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS proxy_id INTEGER",
+            "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS proxy_fixado_em TIMESTAMPTZ",
+            "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS "
+            "proxy_trocas INTEGER NOT NULL DEFAULT 0",
+        ):
+            _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
 
 from app.models.roteiro import (   # noqa: E402
@@ -541,3 +550,146 @@ def test_flip_local_nao_paga_pausa_anti_ban(db):
     pausas = []
     _servico(db, _WahaComRenome(), dormir=pausas.append).processar_fatia(execucao.id)
     assert pausas == []   # abrir/fechar entrada não toca o WhatsApp
+
+
+# --- §2.6: falha de PROXY não é banimento (e vice-versa) ---------------------
+
+
+def _proxy_no_banco(db, max_sessoes=3):
+    from app.models.whatsapp_proxies import WhatsappProxy
+
+    p = WhatsappProxy(rotulo=f"BR-{uuid.uuid4().hex[:4]}", tipo="movel",
+                      host="10.0.0.9", porta=8080, pais="BR",
+                      max_sessoes=max_sessoes)
+    db.add(p)
+    db.flush()
+    return p
+
+
+def test_rede_em_todos_os_chips_do_proxy_pausa_e_degrada_o_ip(db):
+    """
+    O sintoma que o motor não sabia ler: o IP caiu, e não o número.
+
+    Antes, `timeout` contava para o disjuntor — cinco falhas e o número era
+    marcado desconectado, exigindo novo QR da afiliada por causa de um proxy
+    fora do ar. Agora o proxy vai a `degradado` e a execução PAUSA (retomável),
+    sem tocar no status do número.
+    """
+    from app.models.whatsapp_proxies import PROXY_DEGRADADO
+
+    user, instancias, grupos, execucao = _cenario(db, n_grupos=4, n_instancias=2)
+    proxy = _proxy_no_banco(db)
+    for inst in instancias:
+        inst.proxy_id = proxy.id
+    db.commit()
+
+    class _SemRede:
+        def enviar_texto(self, chat_id, texto):
+            raise ErroWhatsapp("timeout", "conexão morreu")
+
+        def enviar_imagem(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+    r = _servico(db, _SemRede()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["motivo_parada"] == "proxy_degradado"
+    assert execucao.status == EXEC_PAUSADA
+    assert db.query(type(proxy)).get(proxy.id).status == PROXY_DEGRADADO
+    # O número NÃO é o culpado: continua conectado e sem falhas acumuladas.
+    for inst in instancias:
+        db.refresh(inst)
+        assert inst.status == "conectada"
+        assert (inst.falhas_seguidas or 0) == 0
+    # A linha que não deu para enviar volta para a fila — o problema era global.
+    assert db.query(RoteiroMensagem).filter(
+        RoteiroMensagem.execucao_id == execucao.id,
+        RoteiroMensagem.status == MSG_PENDENTE).count() >= 1
+
+
+def test_rede_pontual_em_um_chip_nao_derruba_o_numero(db):
+    """Um chip com instabilidade e o outro saudável = rede pontual. Falha a
+    linha e segue; nem pausa a execução, nem desconecta o número."""
+    user, instancias, grupos, execucao = _cenario(db, n_grupos=4, n_instancias=2)
+    proxy = _proxy_no_banco(db)
+    for inst in instancias:
+        inst.proxy_id = proxy.id
+    ruim = instancias[0]
+    db.commit()
+
+    class _Seletivo:
+        def __init__(self):
+            self.enviadas = []
+
+        def para(self, nome):
+            self.nome = nome
+            return self
+
+        def enviar_texto(self, chat_id, texto):
+            if self.nome == ruim.nome_instancia:
+                raise ErroWhatsapp("timeout", "instabilidade")
+            self.enviadas.append(chat_id)
+            return {"ok": True}
+
+        def enviar_imagem(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+    seletivo = _Seletivo()
+    svc = RoteiroEnvioService(db, dormir=lambda s: None,
+                              cliente_factory=lambda nome: seletivo.para(nome))
+    r = svc.processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert execucao.status != EXEC_PAUSADA
+    db.refresh(ruim)
+    assert ruim.status == "conectada"
+    assert (ruim.falhas_seguidas or 0) == 0, "rede pontual contou como banimento"
+
+
+def test_desconectado_nao_troca_proxy_e_mantem_o_disjuntor(db):
+    """`desconectado` é o número caindo (ou banido). Trocar de IP aqui
+    queimaria o IP seguinte também — o disjuntor antigo continua valendo."""
+    from app.models.whatsapp_proxies import PROXY_OK
+
+    user, instancias, grupos, execucao = _cenario(db, n_grupos=2, n_instancias=1)
+    proxy = _proxy_no_banco(db)
+    inst = instancias[0]
+    inst.proxy_id = proxy.id
+    db.commit()
+
+    class _Caiu:
+        def enviar_texto(self, chat_id, texto):
+            raise ErroWhatsapp("desconectado", "sessão caiu")
+
+        def enviar_imagem(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+    _servico(db, _Caiu()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    db.refresh(inst)
+    assert inst.status == "desconectada"          # disjuntor, como antes
+    assert inst.proxy_id == proxy.id              # MESMO IP
+    assert (inst.proxy_trocas or 0) == 0
+    assert db.query(type(proxy)).get(proxy.id).status == PROXY_OK
+
+
+def test_sem_proxy_a_rede_continua_no_disjuntor_antigo(db):
+    """Sem proxy não há como distinguir 'o IP caiu' de 'o WAHA caiu' — o
+    comportamento antigo (disjuntor) é o que impede o lote de girar em falso."""
+    user, instancias, grupos, execucao = _cenario(db, n_grupos=8, n_instancias=1)
+    inst = instancias[0]
+    assert inst.proxy_id is None
+
+    class _SemRede:
+        def enviar_texto(self, chat_id, texto):
+            raise ErroWhatsapp("rede", "connection reset")
+
+        def enviar_imagem(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+    _servico(db, _SemRede()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    db.refresh(inst)
+    assert inst.status == "desconectada"

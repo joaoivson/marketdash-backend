@@ -315,6 +315,53 @@ def _rodar_snapshot_de_grupos() -> None:
         db.close()
 
 
+@router.post("/cron/proxy-health", status_code=status.HTTP_202_ACCEPTED)
+def cron_proxy_health(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """
+    Sonda de saúde do pool de proxies (plano §2.7) — pg_cron de hora em hora.
+
+    De hora em hora, e não 1×/dia como o snapshot de grupos, porque aqui a
+    consulta é externa (um GET por proxy contra um eco de IP) e não toca o
+    banco compartilhado — não é o padrão que derrubou o Postgres em 20/07.
+
+    Query:
+      - proxy_id=<int> opcional — verifica só esse proxy (botão "Verificar"
+        do admin passa por aqui em vez de duplicar a lógica).
+
+    Preferência por Celery (o worker sobrevive a restart da API); se o broker
+    estiver fora — e ele já esteve, em crashloop de AOF — cai no BackgroundTask
+    inline, senão a sonda simplesmente para de existir em silêncio.
+    """
+    caller_ip = request.client.host if request.client else "unknown"
+    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
+
+    from app.tasks.proxy_tasks import rodar_verificacao
+
+    bruto = request.query_params.get("proxy_id")
+    try:
+        apenas = int(bruto) if bruto else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="proxy_id inválido")
+
+    modo = "celery"
+    try:
+        from app.tasks.proxy_tasks import verificar_proxies
+
+        verificar_proxies.apply_async(kwargs={"apenas_proxy_id": apenas}, priority=9)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cron.proxy-health: Celery indisponível (%s) — inline", exc)
+        background_tasks.add_task(rodar_verificacao, apenas)
+        modo = "background-inline-fallback"
+    logger.info("cron.proxy-health aceito caller_ip=%s proxy_id=%s modo=%s",
+                caller_ip, apenas, modo)
+    return {"status": "accepted", "mode": modo, "proxy_id": apenas}
+
+
 @router.get("/cron/health", status_code=status.HTTP_200_OK)
 def cron_health(
     request: Request,

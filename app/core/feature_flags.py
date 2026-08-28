@@ -74,6 +74,27 @@ def dm_com_botao() -> bool:
     return instagram_dm_formato() == DM_FORMATO_BOTAO
 
 
+# --- Proxy por sessão no WAHA (anti-banimento) -------------------------------
+
+def whatsapp_proxy_ligado() -> bool:
+    """Liga a alocação de proxy nas sessões do WhatsApp.
+
+    Mesma ordem de precedência do formato do direct: a **env var vem primeiro**
+    para que dê para desligar em produção sem rebuild de imagem
+    (`WHATSAPP_PROXY_LIGADO=false` no Coolify + restart). O
+    `feature-flags.json` fica como default versionado.
+
+    Desligado por padrão: sem proxy cadastrado no pool, ligar isto com
+    `WHATSAPP_PROXY_OBRIGATORIO=true` impediria a criação de qualquer número.
+    """
+    do_ambiente = (os.environ.get("WHATSAPP_PROXY_LIGADO") or "").strip().lower()
+    if do_ambiente in ("1", "true", "sim", "on"):
+        return True
+    if do_ambiente in ("0", "false", "nao", "não", "off"):
+        return False
+    return bool(_load_config().get("whatsapp_proxy", False))
+
+
 def get_payment_provider() -> str:
     """Retorna o provider ativo: 'cakto' ou 'kiwify'."""
     return _load_config().get("payment_provider", "cakto")

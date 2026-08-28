@@ -19,6 +19,7 @@ from app.models.whatsapp_grupos import (
     INSTANCIA_CONECTADA, INSTANCIA_CRIADA, INSTANCIA_DESCONECTADA,
     INSTANCIA_REMOVIDA, WhatsappInstancia,
 )
+from app.services import proxy_pool_service
 from app.services.waha_client import ErroWhatsapp, WahaClient, numero_de_jid
 
 logger = logging.getLogger(__name__)
@@ -151,8 +152,12 @@ def sincronizar_eventos(db, instancia, precisa_de_message: bool,
             "Há um envio em andamento neste número. Tente de novo quando ele "
             "terminar — mudar isso agora reiniciaria a conexão e pararia o envio."
         )
+    # O PUT reescreve o `config` INTEIRO: mandar só os webhooks apagaria o
+    # `config.proxy` da sessão, e ela voltaria a sair pelo IP do servidor — em
+    # silêncio, que é a pior forma de perder o proxy.
     cliente_da_sessao(instancia.nome_instancia).atualizar_sessao(
-        config_de_webhook(webhook_url, desejados)
+        config_de_webhook(webhook_url, desejados),
+        proxy=proxy_pool_service.credenciais_da_instancia(db, instancia),
     )
     logger.info("Sessão %s reconfigurada: eventos=%s",
                 instancia.nome_instancia, desejados)
@@ -199,7 +204,8 @@ def sincronizar_todas(db, instancias, precisa_por_instancia: Dict[int, bool],
     for i in pendentes:
         cliente_da_sessao(i.nome_instancia).atualizar_sessao(
             config_de_webhook(webhook_url,
-                              eventos_desejados(precisa_por_instancia.get(i.id, False)))
+                              eventos_desejados(precisa_por_instancia.get(i.id, False))),
+            proxy=proxy_pool_service.credenciais_da_instancia(db, i),
         )
         logger.info("Sessão %s reconfigurada", i.nome_instancia)
         feitas += 1
@@ -223,10 +229,14 @@ def config_de_webhook(url: str, eventos: Optional[List[str]] = None) -> List[Dic
 
 
 class WhatsappInstanciaService:
-    def __init__(self, repo, plan_limit_numeros: int, webhook_url: Optional[str]):
+    def __init__(self, repo, plan_limit_numeros: int, webhook_url: Optional[str],
+                 db=None):
         self.repo = repo
         self.plan_limit_numeros = plan_limit_numeros
         self.webhook_url = webhook_url
+        # A alocação de proxy é a única coisa aqui que precisa de Session
+        # própria (o pool é global, não passa pelo repo de instâncias).
+        self.db = db if db is not None else getattr(repo, "db", None)
 
     def criar(self, user_id: int, nome_exibicao: Optional[str]) -> WhatsappInstancia:
         from app.core.plans import is_unlimited
@@ -249,9 +259,6 @@ class WhatsappInstanciaService:
             # caído continua "conectada" na tela até alguém abrir o QR.
             logger.error("Sessão %s criada SEM webhook (WAHA_WEBHOOK_URL/TOKEN ausentes)", nome)
         webhooks = config_de_webhook(self.webhook_url) if self.webhook_url else None
-        # WAHA primeiro: se falhar, nada é persistido — linha órfã local
-        # consumiria o limite do plano sem sessão nenhuma por trás.
-        cliente.criar_sessao(webhooks=webhooks)
 
         instancia = WhatsappInstancia(
             user_id=user_id,
@@ -259,6 +266,20 @@ class WhatsappInstanciaService:
             nome_instancia=nome,
             status=INSTANCIA_CRIADA,
         )
+        # Proxy ANTES do WAHA: a sessão precisa nascer já atrás do IP dela.
+        # Aplicar depois exigiria stop→PUT→start numa sessão recém-pareada —
+        # justamente a troca de IP que o desenho existe para evitar.
+        # Com o pool esgotado e WHATSAPP_PROXY_OBRIGATORIO=true isto levanta
+        # `sem_proxy` e nada é criado (nem aqui, nem no WAHA).
+        proxy = proxy_pool_service.alocar(self.db, instancia)
+        # WAHA primeiro: se falhar, nada é persistido — linha órfã local
+        # consumiria o limite do plano sem sessão nenhuma por trás. E o proxy
+        # só é fixado depois do sucesso: alocado sem sessão = vaga fantasma.
+        cliente.criar_sessao(
+            webhooks=webhooks,
+            proxy=proxy_pool_service.credenciais(proxy),
+        )
+        proxy_pool_service.fixar(instancia, proxy)
         return self.repo.salvar(instancia)
 
     def qr(self, instancia: WhatsappInstancia) -> Dict[str, Any]:
@@ -272,7 +293,14 @@ class WhatsappInstanciaService:
             info = cliente.sessao_info()
             if not info:
                 webhooks = config_de_webhook(self.webhook_url) if self.webhook_url else None
-                cliente.criar_sessao(webhooks=webhooks)
+                # MESMO proxy já fixado: recriar a sessão com outro IP (ou sem
+                # IP) é a troca que queremos evitar — e aqui ela aconteceria
+                # sozinha, num poll de tela.
+                cliente.criar_sessao(
+                    webhooks=webhooks,
+                    proxy=proxy_pool_service.credenciais_da_instancia(
+                        self.db, instancia),
+                )
                 info = cliente.sessao_info()
             estado = str(info.get("status") or "inexistente")
         except ErroWhatsapp as e:
@@ -334,7 +362,53 @@ class WhatsappInstanciaService:
             logger.warning("Falha ao deletar sessão %s no WAHA: %s",
                            instancia.nome_instancia, e.motivo)
         instancia.status = INSTANCIA_REMOVIDA
+        # Devolve a vaga ao pool na MESMA gravação: proxy preso a número
+        # removido esgotaria o pool com fantasmas.
+        proxy_pool_service.liberar(self.db, instancia)
         self.repo.salvar(instancia)
+
+
+def aplicar_proxy_na_sessao(db, instancia, webhook_url: Optional[str] = None,
+                            verificar_envio: bool = True) -> None:
+    """
+    Faz a sessão JÁ EXISTENTE passar a sair pelo proxy fixado hoje no banco:
+    `stop` → `PUT` do config inteiro → `start`.
+
+    Usa `parar_sessao` (não `deletar_sessao`): delete faz logout e exigiria
+    novo QR com certeza. Com o stop, a sessão mantém a credencial do WhatsApp.
+
+    ⚠️ **Não confirmado** se o WAHA re-pareia mesmo assim — é o spike §1 do
+    plano, a rodar em homologação. Por isso este caminho é sempre disparado
+    por gente (botão do admin, com confirmação), nunca sozinho, enquanto
+    `WHATSAPP_PROXY_APLICAR_AUTOMATICO` estiver desligado.
+
+    Recusa no meio de um envio pelo mesmo motivo do `sincronizar_eventos`: o
+    restart mataria o lote e a afiliada não entenderia por quê.
+    """
+    if verificar_envio and _ha_envio_em_andamento(db, instancia.user_id):
+        raise EnvioEmAndamento(
+            "Há um envio em andamento neste número. Tente de novo quando ele "
+            "terminar — trocar o IP agora reiniciaria a conexão e pararia o envio."
+        )
+    url = webhook_url or settings.WAHA_WEBHOOK_URL or ""
+    if not url.strip():
+        # Sem URL, o PUT gravaria `url: ""` e a sessão perderia TODO o webhook.
+        raise ErroWhatsapp("sem_config", "WAHA_WEBHOOK_URL ausente")
+
+    from app.services.monitoramento_service import MonitoramentoService
+
+    precisa = MonitoramentoService(db).sessoes_que_precisam_de_message(
+        instancia.user_id
+    ).get(instancia.id, False)
+    cliente = cliente_da_sessao(instancia.nome_instancia)
+    cliente.parar_sessao()
+    cliente.atualizar_sessao(
+        config_de_webhook(url, eventos_desejados(precisa)),
+        proxy=proxy_pool_service.credenciais_da_instancia(db, instancia),
+    )
+    cliente.iniciar_sessao()
+    logger.warning("Sessão %s reiniciada com proxy %s aplicado",
+                   instancia.nome_instancia, instancia.proxy_id)
 
 
 def aplicar_evento_de_status(repo, instancia: WhatsappInstancia,

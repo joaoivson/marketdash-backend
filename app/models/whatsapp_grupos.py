@@ -31,6 +31,13 @@ class WhatsappInstancia(Base):
     teto_diario = Column(Integer, nullable=True)   # NULL = default do sistema
     falhas_seguidas = Column(Integer, nullable=False, default=0)
     ultima_conexao_em = Column(DateTime(timezone=True), nullable=True)
+    # --- proxy por sessão (migration 068). STICKY: o chip fica com um IP fixo
+    # enquanto estiver saudável — trocar de IP é o que denuncia automação.
+    # `proxy_trocas` existe para que a troca seja um evento medido, não rotina.
+    proxy_id = Column(Integer, ForeignKey("whatsapp_proxies.id", ondelete="SET NULL"),
+                      nullable=True, index=True)
+    proxy_fixado_em = Column(DateTime(timezone=True), nullable=True)
+    proxy_trocas = Column(Integer, nullable=False, default=0)
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     atualizado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

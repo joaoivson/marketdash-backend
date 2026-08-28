@@ -105,6 +105,12 @@ def criar_instancia(
     except LimiteGlobal as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ErroWhatsapp as e:
+        if e.motivo == "sem_proxy":
+            # Pool de IPs esgotado. Para a afiliada isso é CAPACIDADE — a
+            # palavra "proxy" não aparece na tela dela em lugar nenhum.
+            logger.error("Pool de proxies esgotado ao criar número do user %s",
+                         current_user.id)
+            raise HTTPException(status_code=503, detail=e.detalhe)
         logger.warning("Criar sessão falhou para user %s (%s)", current_user.id, e.motivo)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

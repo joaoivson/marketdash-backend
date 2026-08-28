@@ -102,6 +102,28 @@ class Settings(BaseSettings):
     WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA: int = 5000  # proteção da plataforma
     WHATSAPP_FATIA_ORCAMENTO_S: int = 900       # ~15min por fatia (< task_time_limit 1200)
     WHATSAPP_HASH_SALT: Optional[str] = None    # sha256(jid+salt) p/ eventos (F6)
+    # --- Proxy por sessão (anti-banimento, plano 27/08). STICKY: um IP fixo por
+    # chip enquanto ele estiver saudável. "Dinâmico" é a ALOCAÇÃO (pool no
+    # banco, realoca em falha real), nunca o IP por mensagem — trocar de IP é
+    # justamente o padrão que denuncia conta automatizada.
+    WHATSAPP_PROXY_OBRIGATORIO: bool = False    # true em produção: sem vaga, não cria a sessão
+    WHATSAPP_PROXY_MAX_SESSOES: int = 3         # default do pool ao cadastrar um proxy
+    WHATSAPP_PROXY_COOLDOWN_H: int = 24         # entre trocas de proxy do MESMO chip
+    WHATSAPP_PROXY_HEALTH_TIMEOUT_S: float = 8.0
+    # Aplicar proxy novo numa sessão JÁ PAREADA (stop → PUT → start) é
+    # operação sensível: **não está confirmado** se o WAHA exige novo QR
+    # depois disso (spike §1 do plano, pendente em hml). Enquanto isso, a
+    # realocação automática por quarentena só mexe no banco e ALERTA — quem
+    # aplica na sessão é o admin, com confirmação na tela. Ligue esta chave
+    # depois de o spike responder "não pede QR".
+    WHATSAPP_PROXY_APLICAR_AUTOMATICO: bool = False
+    # Sonda de saúde: quantas falhas seguidas levam a `degradado` e a `quarentena`.
+    WHATSAPP_PROXY_FALHAS_DEGRADADO: int = 2
+    WHATSAPP_PROXY_FALHAS_QUARENTENA: int = 4
+    # Eco de IP usado pela sonda. Precisa ser HTTP simples e devolver o IP puro.
+    WHATSAPP_PROXY_HEALTH_URL: str = "https://api.ipify.org"
+    # Consulta de país do IP (opcional). Vazio = a sonda não checa geolocalização.
+    WHATSAPP_PROXY_GEO_URL: str = "https://ipapi.co/{ip}/country/"
     # Retenção das capturas do monitoramento (F8). O texto é escrito por
     # TERCEIROS e a finalidade — replicar uma oferta — é efêmera: passada a
     # janela, guardar não serve a nada e só amplia o que temos de terceiro.

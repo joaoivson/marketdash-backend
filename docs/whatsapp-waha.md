@@ -89,6 +89,88 @@ memória `reference_coolify`). Fixe tudo por env desde o primeiro deploy.
    desligar.
 5. Desligar/remover o serviço da Evolution no Coolify.
 
+## Proxy por sessão (anti-banimento)
+
+> Implementado em 27/08/2026 (plano `docs/PLANO_PROXY_POR_SESSAO.md`).
+> **Desligado por padrão** — ver a flag abaixo.
+
+**O desenho é STICKY.** Cada chip fica com um IP fixo enquanto estiver
+saudável; o que denuncia automação no WhatsApp é TROCAR de IP, não repetir o
+mesmo. "Dinâmico" aqui é a **alocação** (pool no banco, realoca em falha real,
+admin troca sem redeploy), nunca o IP por mensagem.
+
+**Afinidade por usuária.** Chips da MESMA afiliada dividem IP (retrato coerente
+de uma pessoa com três aparelhos em casa, e 1 IP em vez de 3). Chips de
+usuárias diferentes, nunca — um banimento contaminaria a vizinhança.
+
+| Peça | Onde |
+|---|---|
+| Pool + alocação/cooldown | `app/services/proxy_pool_service.py` |
+| `config.proxy` no WAHA | `waha_client.criar_sessao/atualizar_sessao` (montam o `config` INTEIRO) |
+| Aplicar IP novo numa sessão pareada | `whatsapp_instancia_service.aplicar_proxy_na_sessao` (stop → PUT → start) |
+| Sonda de saúde | `app/tasks/proxy_tasks.py` + `POST /api/v1/internal/cron/proxy-health` |
+| Admin | `/admin/sincronizacoes?tab=sistema` → "IPs das conexões (proxy)" |
+| Migrations | `068_whatsapp_proxies.sql` (tabela) · `069_cron_proxy_health.sql` (pg_cron) |
+
+### Ligar
+
+```
+WHATSAPP_PROXY_LIGADO=true       # env (precede o feature-flags.json, sem rebuild)
+WHATSAPP_PROXY_OBRIGATORIO=true  # produção: pool cheio ⇒ NÃO cria a sessão
+WHATSAPP_PROXY_MAX_SESSOES=3     # default por proxy ao cadastrar
+WHATSAPP_PROXY_COOLDOWN_H=24     # entre trocas do MESMO chip
+WHATSAPP_PROXY_APLICAR_AUTOMATICO=false   # ver a pendência abaixo
+```
+
+Sem `WHATSAPP_PROXY_LIGADO`, vale `whatsapp_proxy` do `feature-flags.json`
+(**`true` desde 27/08**). Com a flag ligada e o pool VAZIO + `OBRIGATORIO=true`,
+nenhum número novo é criado — cadastre os proxies antes de ligar as duas coisas.
+
+**Flag ligada com pool vazio não faz nada**: cada sessão continua saindo pelo IP
+do servidor, agora com um WARNING por criação de número. Para desligar sem
+rebuild: `WHATSAPP_PROXY_LIGADO=false` no Coolify + restart.
+
+Ordem para tirar do papel:
+
+1. comprar 2 proxies BR (1 móvel, 1 residencial — datacenter é queimado);
+2. cadastrar no admin e clicar em *Verificar* em cada um;
+3. aplicar a **migration 069** (antes disso a sonda só geraria `sync_run` vazio
+   por hora);
+4. números **novos** já nascem com IP; os **já pareados** migram um por dia por
+   usuária pelo botão *Realocar* — mudar o IP de um número ativo é justamente o
+   sinal a evitar, então é migração única, não passeio;
+5. `WHATSAPP_PROXY_OBRIGATORIO=true` só em produção e só com pool com folga.
+
+### ⚠️ Pendência: o `PUT` + `stop/start` pede novo QR?
+
+**Não medido.** O spike §1 do plano (rodar em hml com um proxy real) é o que
+responde. Enquanto não houver resposta:
+
+- a realocação automática por quarentena **só mexe no banco** e ALERTA no log;
+  a sessão segue no IP antigo até alguém aplicar;
+- aplicar na sessão é sempre um clique de gente (admin → *Realocar* → "aplicar
+  agora"), com o aviso na tela;
+- `WHATSAPP_PROXY_APLICAR_AUTOMATICO=true` só depois de o spike dizer "não
+  pede QR". **Registre o resultado aqui.**
+
+Se o WAHA exigir re-pareamento, a regra passa a ser "proxy se define no
+pareamento e só muda com re-pareamento agendado" — muda a UX do admin, não a
+estrutura do que está implementado.
+
+### Operar
+
+- **Cadastrar**: aba Sistema → *Novo proxy*. Credencial é cifrada (Fernet, a
+  mesma `SHOPEE_ENCRYPTION_KEY`) e **nunca** volta em resposta de API nem em log.
+- **Sonda**: de hora em hora (migration 069). 2 falhas seguidas → `degradado`;
+  4 → `quarentena` (o pool para de alocar nele). Registra em `sync_runs`
+  (`source="proxy_health"`).
+- **IP diferente do host é normal** em residencial rotativo. O que é alerta é o
+  **país** mudar — a sonda loga em ERROR e a tela mostra na verificação manual.
+- **Nunca troque de proxy porque o número caiu ou foi banido**: isso queima o
+  IP seguinte também. O motor de envio já separa os casos (`timeout`/`rede`
+  atrás do mesmo proxy pausa a execução e marca o IP; `desconectado`/`auth`
+  segue o disjuntor e não toca no IP).
+
 ## Depurar
 
 - Estado da sessão: `GET {WAHA_URL}/api/sessions/{nome}` com `X-Api-Key`.
