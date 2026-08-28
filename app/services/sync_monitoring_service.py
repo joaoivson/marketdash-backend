@@ -18,9 +18,11 @@ _APP_TZ = ZoneInfo("America/Sao_Paulo")
 from app.models.sync_run import SyncRun
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
 from app.repositories.shopee_integration_repository import ShopeeIntegrationRepository
-from app.repositories.sync_run_repository import SyncRunRepository
+from app.repositories.sync_run_repository import STALE_RUNNING_SECONDS, SyncRunRepository
 
-STALE_RUNNING_SECONDS = 3600  # running há mais de 1h = provavelmente morta (SIGKILL do time_limit)
+# STALE_RUNNING_SECONDS mora no repository: é o MESMO limiar que o
+# `fechar_orfaos()` usa para encerrar esses runs. Duas cópias sairiam de sincronia
+# e o painel passaria a marcar "(travada?)" numa faixa diferente da que fecha.
 
 # Código da API Shopee → rótulo. Sem isso "108 erros" não diz se a ação é nossa,
 # da aluna ou de ninguém (instabilidade do fornecedor).
