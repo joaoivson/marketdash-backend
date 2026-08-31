@@ -18,7 +18,7 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
 from app.schemas.whatsapp_conexoes import (
     BlacklistCriar, BlacklistOut, ConviteAtivoOut, ConviteOut, GrupoOut,
-    InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
+    InstanciaAtualizar, InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
 )
 from app.services.waha_client import ErroWhatsapp, mascarar
 from app.services.whatsapp_grupo_sync_service import WhatsappGrupoSyncService
@@ -74,6 +74,7 @@ def _instancia_out(i) -> InstanciaOut:
         nome_exibicao=i.nome_exibicao,
         numero_mascarado=mascarar(i.numero) if i.numero else None,
         status=i.status,
+        envio_pausado=bool(i.envio_pausado),
         ultima_conexao_em=i.ultima_conexao_em,
         criado_em=i.criado_em,
     )
@@ -126,6 +127,27 @@ def qr_da_instancia(
     db: Session = Depends(get_db),
 ):
     return InstanciaQrOut(**_servico(db, request).qr(instancia))
+
+
+@router.patch("/instancias/{instancia_id}", response_model=InstanciaOut)
+def atualizar_instancia(
+    payload: InstanciaAtualizar,
+    request: Request,
+    instancia=Depends(instancia_do_usuaria),
+    db: Session = Depends(get_db),
+):
+    """Renomear e/ou pausar o envio. Não fala com o WAHA — por isso não checa
+    WAHA_URL nem devolve 503: pausar um chip precisa funcionar justamente
+    quando a conexão está ruim."""
+    if payload.nome_exibicao is None and payload.envio_pausado is None:
+        raise HTTPException(status_code=422, detail="Nada para atualizar.")
+    return _instancia_out(
+        _servico(db, request).atualizar(
+            instancia,
+            nome_exibicao=payload.nome_exibicao,
+            envio_pausado=payload.envio_pausado,
+        )
+    )
 
 
 @router.delete("/instancias/{instancia_id}", status_code=204)

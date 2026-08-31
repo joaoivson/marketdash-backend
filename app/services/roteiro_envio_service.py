@@ -186,7 +186,12 @@ class RoteiroEnvioService:
     def _instancias_elegiveis(self, user_id: int, inicio, fim) -> List:
         elegiveis = []
         for inst in self.repo_instancias.por_usuario(user_id):
-            if inst.status != INSTANCIA_CONECTADA:
+            # Pausa é intenção da afiliada e vale mesmo com o chip conectado —
+            # ela pausa justamente o número saudável que está sendo usado
+            # demais. Filtrar aqui já cobre os dois caminhos de erro do loop:
+            # pool vazio vira `sem_instancia`, grupo sem candidato vira
+            # `sem_instancia_no_grupo`.
+            if inst.status != INSTANCIA_CONECTADA or inst.envio_pausado:
                 continue
             teto = inst.teto_diario or settings.WHATSAPP_TETO_POR_INSTANCIA
             usadas = self.repo.enviadas_na_janela(user_id, inicio, fim,

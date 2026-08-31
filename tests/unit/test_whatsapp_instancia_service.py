@@ -497,3 +497,64 @@ def test_qr_recria_a_sessao_com_o_mesmo_proxy(monkeypatch):
                            numero=None, falhas_seguidas=0, ultima_conexao_em=None,
                            user_id=1, proxy_id=5))
     assert recebidos == [{"server": "10.0.0.5:8005"}]
+
+
+# --- atualizar: renomear e pausar (migration 070) ----------------------------
+
+
+def _instancia_falsa(**kw):
+    base = dict(id=1, nome_exibicao="Principal", nome_instancia="mkdtstu1xaaaa",
+                status="conectada", envio_pausado=False, pausado_em=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _svc():
+    return WhatsappInstanciaService(_FakeRepo(), plan_limit_numeros=3, webhook_url=None)
+
+
+def test_renomear_aplica_strip_e_nao_toca_a_chave_do_webhook():
+    inst = _instancia_falsa()
+    _svc().atualizar(inst, nome_exibicao="  Backup  ")
+    assert inst.nome_exibicao == "Backup"
+    # `nome_instancia` roteia o webhook e é UNIQUE — renomear é cosmético.
+    assert inst.nome_instancia == "mkdtstu1xaaaa"
+
+
+def test_renomear_so_com_espacos_nao_apaga_o_nome_atual():
+    inst = _instancia_falsa()
+    _svc().atualizar(inst, nome_exibicao="   ")
+    assert inst.nome_exibicao == "Principal"
+
+
+def test_pausar_nao_mexe_no_status_da_conexao():
+    """Os dois eixos são independentes: quem escreve em `status` é o webhook
+    do WAHA. Gravar a pausa ali seria apagado no próximo evento WORKING."""
+    inst = _instancia_falsa()
+    _svc().atualizar(inst, envio_pausado=True)
+    assert inst.envio_pausado is True
+    assert inst.status == "conectada"
+    assert inst.pausado_em is not None
+
+
+def test_repausar_nao_reinicia_o_relogio_de_parado_desde():
+    marco = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    inst = _instancia_falsa(envio_pausado=True, pausado_em=marco)
+    _svc().atualizar(inst, envio_pausado=True)
+    assert inst.pausado_em == marco
+
+
+def test_retomar_limpa_o_pausado_em():
+    inst = _instancia_falsa(envio_pausado=True,
+                            pausado_em=datetime.now(timezone.utc))
+    _svc().atualizar(inst, envio_pausado=False)
+    assert inst.envio_pausado is False
+    assert inst.pausado_em is None
+
+
+def test_atualizar_ignora_campo_ausente():
+    """PATCH parcial: `None` é "não mexer", não "apagar"."""
+    inst = _instancia_falsa(envio_pausado=True)
+    _svc().atualizar(inst, nome_exibicao="Só o nome")
+    assert inst.nome_exibicao == "Só o nome"
+    assert inst.envio_pausado is True

@@ -48,6 +48,10 @@ if PG_OK:
             "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS proxy_fixado_em TIMESTAMPTZ",
             "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS "
             "proxy_trocas INTEGER NOT NULL DEFAULT 0",
+            # 070 (pausa de envio): idem.
+            "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS "
+            "envio_pausado BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS pausado_em TIMESTAMPTZ",
         ):
             _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
@@ -113,7 +117,8 @@ JANELA_24H = {"ativo": True, "dias": {str(i): {"ativo": True,
 
 
 def _cenario(db, n_grupos=3, n_instancias=1, teto_instancia=None,
-             janela_config=JANELA_24H, agendado_delta_s=-60):
+             janela_config=JANELA_24H, agendado_delta_s=-60,
+             instancias_pausadas=()):
     """Janela 24h por padrão: o teste roda a qualquer hora do dia — a regra
     de janela tem teste próprio com config explícita."""
     """Usuária + instâncias conectadas + grupos vinculados + execução ENVIANDO
@@ -134,6 +139,7 @@ def _cenario(db, n_grupos=3, n_instancias=1, teto_instancia=None,
         inst = WhatsappInstancia(
             user_id=user.id, nome_instancia=f"mkdtst{suf}x{i}",
             status="conectada", teto_diario=teto_instancia,
+            envio_pausado=i in instancias_pausadas,
         )
         db.add(inst); db.flush()
         instancias.append(inst)
@@ -273,6 +279,36 @@ def test_teto_da_instancia_esvazia_o_pool_e_pausa(db):
     assert r["enviadas"] == 1                      # bateu no teto após a 1ª
     assert execucao.status == EXEC_PAUSADA         # retomável
     assert r["motivo_parada"] == "sem_instancia"
+
+
+def test_instancia_pausada_sai_do_pool_mesmo_conectada(db):
+    """Pausa é intenção da afiliada, não saúde da conexão: o chip continua
+    `conectada` (o webhook do WAHA manda nesse campo) e ainda assim não pode
+    disparar. Com o único número pausado, o pool nasce vazio e a execução
+    pausa — retomável, como no teto por instância."""
+    user, _, _, execucao = _cenario(db, n_grupos=3, instancias_pausadas=(0,))
+    r = _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["enviadas"] == 0
+    assert execucao.status == EXEC_PAUSADA
+    assert r["motivo_parada"] == "sem_instancia"
+
+
+def test_pausar_um_chip_deixa_o_outro_enviar(db):
+    """Pausar um número de dois não pode parar a afiliada — o pool encolhe,
+    não fecha."""
+    user, instancias, grupos, execucao = _cenario(
+        db, n_grupos=3, n_instancias=2, instancias_pausadas=(0,))
+    cliente = _FakeWaha()
+    r = _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["enviadas"] == 3
+    assert execucao.status == EXEC_CONCLUIDA
+    # Tudo saiu pelo chip que não está pausado.
+    assert {m.instancia_id for m in db.query(RoteiroMensagem)
+            .filter(RoteiroMensagem.execucao_id == execucao.id).all()} == {instancias[1].id}
 
 
 def test_teto_global_da_plataforma_parqueia_para_amanha(db, monkeypatch):

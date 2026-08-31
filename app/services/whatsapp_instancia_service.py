@@ -352,6 +352,33 @@ class WhatsappInstanciaService:
         """Ownership mora aqui — a rota nunca consulta o repo direto."""
         return self.repo.por_id(user_id, instancia_id)
 
+    def atualizar(
+        self,
+        instancia: WhatsappInstancia,
+        nome_exibicao: Optional[str] = None,
+        envio_pausado: Optional[bool] = None,
+    ) -> WhatsappInstancia:
+        """Renomear e/ou pausar o envio. `None` = campo não veio no PATCH.
+
+        Nada disso toca o WAHA: `nome_exibicao` é cosmético (a chave de
+        roteamento do webhook é `nome_instancia`, imutável), e a pausa é um
+        filtro nosso no pool de envio — a sessão continua conectada, recebendo
+        e sincronizando grupos normalmente.
+        """
+        if nome_exibicao is not None:
+            nome = nome_exibicao.strip()
+            if nome:
+                instancia.nome_exibicao = nome
+        if envio_pausado is not None and bool(instancia.envio_pausado) != envio_pausado:
+            instancia.envio_pausado = envio_pausado
+            # Só na transição: repausar um chip já pausado não pode reiniciar o
+            # relógio de "parado desde quando".
+            instancia.pausado_em = datetime.now(timezone.utc) if envio_pausado else None
+            logger.info("Envio %s para a sessão %s",
+                        "pausado" if envio_pausado else "retomado",
+                        instancia.nome_instancia)
+        return self.repo.salvar(instancia)
+
     def remover(self, instancia: WhatsappInstancia) -> None:
         """Logout + delete no WAHA; soft-delete local (histórico preservado)."""
         try:

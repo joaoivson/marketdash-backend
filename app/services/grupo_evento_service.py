@@ -186,9 +186,12 @@ class GrupoEventoService:
             self.db.query(WhatsappInstancia)
             .join(WhatsappGrupoInstancia,
                   WhatsappGrupoInstancia.instancia_id == WhatsappInstancia.id)
+            # Remover alguém do grupo é escrita ATIVA no WhatsApp pelo chip:
+            # um chip pausado não age, mesmo conectado.
             .filter(WhatsappGrupoInstancia.grupo_id == grupo.id,
                     WhatsappInstancia.user_id == user_id,
-                    WhatsappInstancia.status == INSTANCIA_CONECTADA)
+                    WhatsappInstancia.status == INSTANCIA_CONECTADA,
+                    WhatsappInstancia.envio_pausado.is_(False))
             .first()
         )
         if not instancia:

@@ -9,11 +9,25 @@ class InstanciaCriar(BaseModel):
     nome_exibicao: Optional[str] = Field(default=None, max_length=120)
 
 
+class InstanciaAtualizar(BaseModel):
+    """PATCH parcial: `None` significa "não mexer neste campo".
+
+    Renomear e pausar chegam pela mesma rota porque são a mesma pergunta da
+    tela ("mudar algo neste chip") — e `nome_exibicao` só é validado aqui, já
+    que no POST ele é opcional e ganha fallback no service.
+    """
+    nome_exibicao: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    envio_pausado: Optional[bool] = None
+
+
 class InstanciaOut(BaseModel):
     id: int
     nome_exibicao: Optional[str]
     numero_mascarado: Optional[str]
     status: str
+    # Eixo separado de `status`: o chip pode estar conectado E pausado. Quem
+    # escreve em `status` é o webhook do WAHA; aqui é a afiliada.
+    envio_pausado: bool
     ultima_conexao_em: Optional[datetime]
     criado_em: datetime
 

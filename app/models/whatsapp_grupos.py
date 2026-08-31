@@ -30,6 +30,11 @@ class WhatsappInstancia(Base):
     status = Column(String(16), nullable=False, default=INSTANCIA_CRIADA)
     teto_diario = Column(Integer, nullable=True)   # NULL = default do sistema
     falhas_seguidas = Column(Integer, nullable=False, default=0)
+    # --- pausa de envio (migration 070). Eixo SEPARADO de `status`: aquele é a
+    # saúde da conexão e o webhook do WAHA o sobrescreve a cada evento; este é a
+    # intenção da afiliada. Um chip pode estar conectado E pausado.
+    envio_pausado = Column(Boolean, nullable=False, default=False)
+    pausado_em = Column(DateTime(timezone=True), nullable=True)
     ultima_conexao_em = Column(DateTime(timezone=True), nullable=True)
     # --- proxy por sessão (migration 068). STICKY: o chip fica com um IP fixo
     # enquanto estiver saudável — trocar de IP é o que denuncia automação.
