@@ -76,11 +76,28 @@
 ### Informações do Servidor
 
 - **IP Público:** `31.97.22.173`
-- **Tipo:** VPS KVM 2
+- **Tipo:** VPS KVM 2 ⚠️ **NÃO CONFIRMADO — ver aviso abaixo**
 - **Especificações:**
   - 2 vCPUs
   - 2GB RAM
   - 40GB SSD
+
+> ⚠️ **Conflito aberto (31/08/2026).** Esta seção é de 25/01/2026 e diz KVM 2
+> (2 vCPU / 2 GB). O `docs/PLANO_ESCALA_100_USUARIAS.md` (27/08) afirma
+> **KVM 4 — 4 vCPU / 16 GB** como o servidor atual. Os dois não podem estar
+> certos, e a diferença decide se o teto de 60 sessões WAHA
+> (`WHATSAPP_MAX_INSTANCIAS_GLOBAL`) é capacidade real ou fantasia: com 2 GB,
+> compartilhados com API, worker, Redis e frontend, o teto real fica perto de
+> 10–15 sessões.
+>
+> **Como resolver em 30 segundos** (precisa de acesso SSH, que não está
+> disponível por chave — pede senha):
+>
+> ```bash
+> ssh root@31.97.22.173 'nproc; free -g; df -h /'
+> ```
+>
+> Ou pelo painel do Coolify. Quem medir, corrige aqui e apaga este aviso.
 - **Sistema Operacional:** Ubuntu 22.04 LTS
 - **Região:** Próxima ao Brasil
 
