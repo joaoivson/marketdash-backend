@@ -11,6 +11,51 @@
 
 ---
 
+## 2026-08-31 — Pausar o envio por um número (e por que não virou um `status`)
+
+A tela de Dispositivos ganhou renomear e pausar. Renomear é trivial —
+`nome_exibicao` é cosmético e `nome_instancia` (chave do webhook, UNIQUE)
+continua imutável. **Pausar foi a decisão de verdade.**
+
+A tentação era `status = "pausada"`: o enum já existia, a coluna já existia,
+zero migration. **Estaria errado.** Quem escreve em `status` é o webhook do
+WAHA — `aplicar_evento_de_status` e `_marcar_conectada` sobrescrevem o campo a
+cada evento de sessão. Uma pausa gravada ali dura até o próximo `WORKING`, e
+aí o chip **volta a disparar sozinho**, sem ninguém ter mandado. Falha
+silenciosa, do tipo que a afiliada só descobre pelo banimento.
+
+São dois eixos independentes, não dois valores do mesmo campo:
+
+| Campo | Responde | Quem escreve |
+|---|---|---|
+| `status` | o chip está conectado? | webhook do WAHA |
+| `envio_pausado` | a afiliada quer disparar por ele? | a afiliada |
+
+Um número pode estar **conectado E pausado** — e é exatamente o caso de uso:
+pausar o chip saudável que está sendo usado demais. O precedente já estava no
+repo, no pool de proxies (`068`): `ativo` = intenção humana, `status` = saúde
+automática. Migration `070`, duas colunas aditivas.
+
+**Onde a pausa vale e onde não vale.** Vale em
+`roteiro_envio_service._instancias_elegiveis` (o pool de envio, o ponto
+principal) e em `grupo_evento_service._cliente_do_grupo` (remover alguém por
+blacklist é escrita ativa no WhatsApp pelo chip). **Não** vale para
+sincronizar grupos, snapshot diário nem monitoramento: leitura e escuta
+continuam. Pausar o envio não é desconectar — e a afiliada precisa poder
+sincronizar os grupos de um chip que ela pausou.
+
+Os dois caminhos de erro do motor já existiam e cobrem a pausa sem código
+novo: pool vazio → `_pausar(execucao, "sem_instancia")` (retomável); grupo sem
+candidato → `MSG_PULADA erro="sem_instancia_no_grupo"`.
+
+**Pendências.** A `070` está em hml (aplicada e conferida no banco em 31/08) e
+**ausente em produção** — ver `docs/PROMOCAO_PARA_PRODUCAO.md` §1. Ela é
+`ALTER TABLE`, então é a armadilha *inversa* da regra do `create_all`: subir o
+model antes da migration quebra `GET /instancias` com `UndefinedColumn`, e não
+existe "a tabela nasce sozinha" para salvar.
+
+---
+
 ## 2026-08-27 — Proxy por sessão no WhatsApp (plano completo, desligado por flag)
 
 Implementado `docs/PLANO_PROXY_POR_SESSAO.md` inteiro, menos o spike que ele

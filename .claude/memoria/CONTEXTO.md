@@ -148,7 +148,10 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   inteiro). **A UI está oculta em produção** por `isProductionHost()`: menu,
   aba de Configurações e as 4 rotas `/dashboard/automacoes*`. As migrations
   052–056 seguem **não aplicadas** em produção, de propósito.
-- **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
+- **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **070**
+  (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
+  hml em 31/08 — ⚠️ é `ALTER TABLE`, a armadilha *inversa* do `create_all`:
+  subir o model antes dela quebra `GET /instancias` com `UndefinedColumn`; 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
   produção enquanto as features estiverem desligadas lá. ⚠️ A nota anterior
   dizia que 049–055 não estavam em produção, mas isso é **falso para 049/050**:
   a tela de Campanhas carrega em produção usando `ad_review_issue` e

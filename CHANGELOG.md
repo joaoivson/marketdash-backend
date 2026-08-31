@@ -11,6 +11,58 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-08-31 (Dispositivos: um card por número, com os grupos dentro)
+
+A aba **Configurações › Dispositivos › Números** era uma lista crua de números
+e, embaixo dela, uma tabela com os grupos de *todos* os números juntos. Para
+responder "o que este chip aqui está fazendo?", a afiliada tinha que cruzar as
+duas listas com o dedo.
+
+### Added
+
+- **Cada número virou um bloco expansível com os próprios grupos dentro.**
+  Cabeçalho com ponto de status, identidade (nome + número mascarado),
+  contagem de grupos e desde quando está conectado; rodapé com a ação
+  contextual. Ações secundárias saíram do rosto do card para o menu `⋮` e o
+  modal **Gerenciar**, com o **Remover** isolado no canto oposto ao botão que
+  ela mais aperta.
+- **Renomear o número** (`PATCH /api/v1/whatsapp/instancias/{id}`). Antes o
+  nome era escolhido uma vez, na criação, e nunca mais mudava. É `UPDATE` numa
+  coluna cosmética: `nome_instancia` — a chave que roteia o webhook do WAHA —
+  continua imutável.
+- **Pausar o envio por um número, sem removê-lo** (migration `070`, colunas
+  `envio_pausado` e `pausado_em`). Até aqui, a única forma de parar de disparar
+  por um chip era deletá-lo e reparear tudo do zero.
+- **Bucket "Grupos sem dispositivo ativo".** Remover um número é soft-delete e
+  o vínculo histórico continua no banco — sem esse bloco, os grupos sumiriam da
+  tela sem explicação.
+
+### Fixed
+
+- Grupo que está em dois chips aparece nos dois blocos (é o desenho: o motor
+  faz failover entre eles) e agora vem marcado com **"também em: X"**. Sem
+  isso, a repetição parecia bug.
+
+### Notas de implementação
+
+- **Pausa é um eixo separado de `status`, não um valor dele.** Quem escreve em
+  `status` é o webhook do WAHA (`aplicar_evento_de_status`): uma pausa gravada
+  ali seria apagada no próximo evento `WORKING` e o chip voltaria a disparar
+  sozinho. Um número pode estar **conectado E pausado** — e é justamente o
+  caso de uso (pausar o chip saudável que está sendo usado demais). Mesmo
+  desenho do pool de proxies (`068`): `ativo` = intenção humana, `status` =
+  saúde automática.
+- A pausa é respeitada em `roteiro_envio_service._instancias_elegiveis` (o pool
+  de envio) e em `grupo_evento_service._cliente_do_grupo` (remoção por
+  blacklist é escrita ativa no WhatsApp). **Não** vale para sincronizar grupos,
+  snapshot nem monitoramento — leitura e escuta continuam, pausar envio não é
+  desconectar.
+- ⚠️ A `070` é `ALTER TABLE`, não `CREATE TABLE`: `create_all` **não adiciona
+  coluna em tabela existente**. Aplicar antes do deploy, senão
+  `GET /instancias` quebra com `UndefinedColumn`. Aplicada em **hml em
+  31/08/2026**; **pendente em produção** (onde a aba nem aparece —
+  `isProductionHost()`).
+
 ## [Não versionado] - 2026-08-28 (O gasto do Meta sumiu da tela de 3 alunas)
 
 Uma aluna relatou que o gasto de ontem não aparecia — a tela de Campanhas

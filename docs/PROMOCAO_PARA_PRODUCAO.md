@@ -1,9 +1,14 @@
 # Promoção para produção — Grupos de WhatsApp e Instagram
 
-> **Nada deste documento foi executado.** Por decisão do João (25/08/2026), tudo
-> vive em `develop`/homologação até ser homologado. Estado do banco **medido em
-> 26/08/2026**, não lembrado — a seção 1 traz o script para remedir, porque nota
-> sobre estado de banco apodrece.
+> **Nada deste documento foi executado.** Por decisão do João (25/08/2026,
+> reafirmada em 31/08/2026), tudo vive em `develop`/homologação até ser
+> homologado. Estado do banco **medido em 26/08/2026** (linhas `058`–`067`) e em
+> **31/08/2026** (`068`–`070`), não lembrado — a seção 1 traz o script para
+> remedir, porque nota sobre estado de banco apodrece.
+>
+> **A seção 8 é o inventário fechado do que falta promover** — migrations,
+> arquivos e variáveis. Comece por ela; as seções 3 e 4 são o detalhe de cada
+> item.
 
 Documento único das duas features. O runbook antigo
 (`PROMOCAO_MODULO_GRUPOS.md`) continua valendo para o detalhe do módulo de
@@ -61,8 +66,17 @@ existe em produção**, e a divergência com hml é real.
 | `065` | `campanha_anuncios` + `campaign_daily_insights.leads` | ausente | OK |
 | `066` | `monitoramentos`, `monitoramento_capturas` | ausente | OK (RLS) |
 | `067` | `conexao_convites` + `blacklist_numeros.numero_mascarado` | ausente | OK (RLS) |
+| `068` | `whatsapp_proxies` + `whatsapp_instancias.proxy_*` | ausente | OK |
+| `069` | *(pg_cron saúde de proxy)* | ausente | **agendado** |
+| `070` | `whatsapp_instancias.envio_pausado` + `.pausado_em` | **ausente** | OK (31/08) |
 
 Produção está **limpa**: nenhuma tabela do módulo existe lá. É o cenário bom.
+
+⚠️ **A `070` é a armadilha inversa da regra da seção 0.** Ela não cria tabela,
+faz `ALTER TABLE` em `whatsapp_instancias` — e `create_all` **não adiciona
+coluna em tabela que já existe**. Se o deploy do model subir antes dela,
+`GET /instancias` quebra com `UndefinedColumn` para toda usuária MAX. Aplicar
+**antes** do deploy, sem exceção.
 
 ### Instagram
 
@@ -95,7 +109,8 @@ SELECT c.relname,
 SELECT table_name, column_name FROM information_schema.columns
  WHERE (table_name='campaign_daily_insights' AND column_name='leads')
     OR (table_name='blacklist_numeros'       AND column_name='numero_mascarado')
-    OR (table_name='user_settings'           AND column_name='whatsapp_envio_config');
+    OR (table_name='user_settings'           AND column_name='whatsapp_envio_config')
+    OR (table_name='whatsapp_instancias'     AND column_name='envio_pausado');
 
 -- crons agendados
 SELECT jobname, schedule FROM cron.job ORDER BY jobid;
@@ -110,7 +125,9 @@ Reaplicar é seguro. Nenhuma tem `DROP TABLE`/`DROP COLUMN`/`TRUNCATE`.
 ## 2. O que mais vai no merge — leia antes de aceitar
 
 "Subir o módulo de grupos" **não autoriza** subir o backlog de `develop` junto.
-São **31 commits no backend** e **16 no frontend**. O que **não** é do módulo:
+Em **31/08/2026** são **49 commits no backend** e **33 no frontend** (eram 31 e
+16 em 26/08 — a distância cresce a cada rodada; **conte de novo no dia**). O que
+**não** é do módulo de grupos:
 
 | Commit | O que é | Decisão |
 |---|---|---|
@@ -118,6 +135,13 @@ São **31 commits no backend** e **16 no frontend**. O que **não** é do módul
 | `e8aba4d` / `caea8e9` | fix: token Meta expirado deslogava a usuária (401 → 409) | correção real, independente |
 | `c36b6d5` / `d924d6c` | chaves novas do Supabase (`sb_publishable_`/`sb_secret_`) | aditivo; as antigas seguem funcionando |
 | `f294cf7` | `CHANGELOG.md` versionado | doc |
+| `1e300aa` | fix: CSV sumia com o broker fora do ar | correção real, independente |
+| `457a478` | fix: insights do Meta vinham vazios e o gasto sumia da tela | **correção de dado da aluna** — independente do módulo |
+| `1bd8d6a` | fix: runs presos em `running` para sempre | correção real, independente |
+| `0a0c657` | fix(shopee): canal vem do referrer, não do `channelType` | muda número na tela — decidir com o João |
+| `cc7e91c` / `e6f17b6` | feat(ofertas): vitrine e ordenação por vendas | **feature nova**, não é do módulo |
+| `6e50f2a` | feat(shopee): passo a passo da API de Afiliada | feature nova (frontend) |
+| `2cbf031` … `e0a08eb` | rodada mobile (7 commits no frontend) | melhoria transversal — atinge telas que JÁ estão em produção |
 
 Os demais são F0→F8 do módulo. Confira sempre com:
 
@@ -176,8 +200,8 @@ afiliada receber tudo em duplicidade.
 
 ### 3.4 Os dois crons — o ponto mais perigoso
 
-`061` (roteiros, a cada 5min) e `064` (snapshot diário) agendam `pg_net` **no
-banco**. Hoje estão em **homologação**.
+`061` (roteiros, a cada 5 min), `064` (snapshot diário) e `069` (saúde de proxy,
+horário) agendam `pg_net` **no banco**. Hoje os três estão em **homologação**.
 
 **Aplicar em produção e desagendar em homologação têm que ser o mesmo ato.**
 
@@ -185,7 +209,8 @@ banco**. Hoje estão em **homologação**.
 -- em HOMOLOGAÇÃO, no mesmo momento em que produção passa a agendar:
 SELECT cron.unschedule(jobid) FROM cron.job
  WHERE command LIKE '%internal/cron/roteiros%'
-    OR command LIKE '%internal/cron/grupos-snapshot%';
+    OR command LIKE '%internal/cron/grupos-snapshot%'
+    OR command LIKE '%internal/cron/proxy-health%';   -- 069, entrou em 27/08
 ```
 
 Foi um cron rodando 24×/dia que derrubou o banco compartilhado em 20/07.
@@ -324,9 +349,12 @@ da Meta.
 
 ## 5. Ordem de execução no dia
 
+0. **Ler a seção 8** — é o inventário fechado (migrations, arquivos, envs)
 1. **Medir** produção com o SQL da seção 1 — não confie nesta tabela
 2. **Listar** `git log --oneline main..develop` nos dois repos e decidir item a item
-3. **Aplicar** `058→060→062→063→065→066→067` em produção (**sem** `061`/`064`)
+   (49 e 33 commits em 31/08 — ver seção 2 e 8.5)
+3. **Aplicar** `058→059→060→062→063→065→066→067→068→070` em produção
+   (**sem** `061`/`064`/`069`, que são de pg_cron)
 4. **Conferir** RLS e policies com o SQL da seção 1
 5. **Definir** as variáveis do Coolify (3.2) e subir o WAHA de produção (3.3)
 6. **Merge do backend** `develop→main` → deploy → **`/health` 200**
@@ -334,7 +362,7 @@ da Meta.
    código velho porque o CI só deployava a API e um `|| echo` mascarava a falha
 8. **Separar o gating** de Instagram e Grupos (3.5) e liberar só o de Grupos
 9. **Merge do frontend** → deploy
-10. **Crons**: agendar `061`/`064` em produção e **desagendar em hml no mesmo ato**
+10. **Crons**: agendar `061`/`064`/`069` em produção e **desagendar em hml no mesmo ato**
 11. Observar 48h (seção 6)
 
 > **CI verde ≠ deployado.** E o `tsc --noEmit` do CI **não valida `src/`** — a
@@ -372,3 +400,132 @@ da Meta.
   leitura das credenciais de produção foi bloqueada. Antes de aplicar a `052`,
   vale um `SELECT count(*)` nas três para saber se há dado gravado no período
   sem policy.
+
+---
+
+## 8. Inventário do que falta promover (medido em 31/08/2026)
+
+Esta seção é a **lista fechada**. Se algo não está aqui, não sobe. Nada abaixo
+foi executado em produção.
+
+### 8.1 Migrations — 13 arquivos, nenhum em produção
+
+Ordem obrigatória. As três de `pg_cron` (`061`, `064`, `069`) ficam **fora do
+lote inicial** e vão só no passo 10 da seção 5, junto com o desagendamento em
+homologação.
+
+| # | Arquivo | O que faz | Produção | Homologação |
+|---|---|---|---|---|
+| 1 | `058_whatsapp_instancias_grupos.sql` | 3 tabelas base do módulo | ausente | OK (RLS) |
+| 2 | `059_campanhas_grupos.sql` | `campanhas`, `campanha_grupos` | ausente | OK (RLS) |
+| 3 | `060_roteiros_templates.sql` | 7 tabelas — cria `templates_mensagem` antes das FKs | ausente | OK (RLS) |
+| 4 | `062_integracoes.sql` | `integracoes` + **backfill** de `shopee_integrations` | ausente | OK (RLS) |
+| 5 | `063_campanha_links_eventos.sql` | 4 tabelas de link/evento/snapshot | ausente | OK (RLS) |
+| 6 | `065_campanha_anuncios_leads.sql` | `campanha_anuncios` + `campaign_daily_insights.leads` | ausente | OK |
+| 7 | `066_monitoramentos.sql` | `monitoramentos`, `monitoramento_capturas` | ausente | OK (RLS) |
+| 8 | `067_blacklist_e_conexao_externa.sql` | `conexao_convites` + `blacklist_numeros.numero_mascarado` | ausente | OK (RLS) |
+| 9 | `068_whatsapp_proxies.sql` | `whatsapp_proxies` + `whatsapp_instancias.proxy_*` | ausente | OK |
+| 10 | `070_whatsapp_instancia_envio_pausado.sql` | `whatsapp_instancias.envio_pausado` + `.pausado_em` | ausente | OK (31/08) |
+| — | `061_cron_roteiros.sql` | `roteiros-tick-5min` (a cada 5 min) | ausente | **agendado** |
+| — | `064_cron_grupos_snapshot.sql` | `grupos-snapshot-3am-brt` (diário) | ausente | **agendado** |
+| — | `069_cron_proxy_health.sql` | `proxy-health-horario` (horário) | ausente | **agendado** |
+
+> ⚠️ **A `070` é a única `ALTER TABLE` pura do lote, e é a armadilha inversa da
+> seção 0.** `create_all` cria tabela nova, mas **não adiciona coluna em tabela
+> existente**. Nas outras 9, subir o deploy antes da migration dá tabela sem RLS
+> (ruim, silencioso). Na `070`, dá **`UndefinedColumn` em `GET /instancias` para
+> toda usuária MAX** — barulhento e imediato. Ela depende da `058`.
+
+### 8.2 Variáveis de ambiente no Coolify de produção
+
+**33 settings** nasceram em `develop` (`git diff main..develop -- app/core/config.py`).
+A maioria tem default seguro; a tabela abaixo separa o que **quebra sem valor
+explícito** do que só precisa de revisão.
+
+**Obrigatórias — sem elas o módulo sobe e falha em runtime, não no boot:**
+
+```
+WAHA_URL=                 # servidor WAHA de PRODUÇÃO (nunca o de hml — ver 3.3)
+WAHA_API_KEY=
+WAHA_SESSAO_RESUMO=       # sessão global do resumo diário
+WAHA_WEBHOOK_TOKEN=       # HMAC do webhook
+WAHA_WEBHOOK_URL=         # base pública — NUNCA derivar de url_for (301 em http, falha calada)
+WHATSAPP_HASH_SALT=       # ver 3.7; defina ANTES do primeiro evento de participante
+OPENAI_API_KEY=           # variações por IA — chave NOVA (a antiga vazou e segue pendente de revogação)
+OPENAI_MODELO=            # tem default; fixe para não seguir mudança de default nossa
+```
+
+**Do proxy por sessão (`068`/`069`) — o bloco inteiro é novo e não está na 3.2 antiga:**
+
+```
+WHATSAPP_PROXY_OBRIGATORIO=false     # deixe FALSE até o pool ter IP — ver o aviso abaixo
+WHATSAPP_PROXY_APLICAR_AUTOMATICO=
+WHATSAPP_PROXY_MAX_SESSOES=
+WHATSAPP_PROXY_COOLDOWN_H=
+WHATSAPP_PROXY_FALHAS_DEGRADADO=     # 2
+WHATSAPP_PROXY_FALHAS_QUARENTENA=    # 4
+WHATSAPP_PROXY_HEALTH_URL=
+WHATSAPP_PROXY_HEALTH_TIMEOUT_S=
+WHATSAPP_PROXY_GEO_URL=
+```
+
+**Com default seguro — só mexa com motivo:** `WHATSAPP_MAX_INSTANCIAS_GLOBAL=60`,
+`WHATSAPP_TETO_POR_INSTANCIA=80`, `WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA=5000`,
+`WHATSAPP_GRUPO_PAUSA_MIN_S=8` / `MAX_S=20`, `WHATSAPP_GRUPO_JITTER_MIN_S` /
+`MAX_S`, `WHATSAPP_RODADA_TAMANHO=2`, `WHATSAPP_FATIA_ORCAMENTO_S=900`,
+`MONITORAMENTO_RETENCAO_DIAS=30`, `CONEXAO_CONVITE_MINUTOS=15`.
+
+**Supabase — aditivas, as antigas seguem funcionando** (commits `c36b6d5`/`d924d6c`):
+`SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`.
+Não são do módulo de grupos e podem subir antes, sozinhas.
+
+**Frontend (build-time, no Coolify do frontend):** nenhuma variável **nova** —
+`.env` só mudou o `VITE_API_URL` do ambiente local (commit `de0dd9f`). O
+`VITE_SUPABASE_ANON_KEY` já usa a chave publicável nova.
+
+### 8.3 Arquivos e configuração que não são migration nem env
+
+| O quê | Onde | Por que importa na promoção |
+|---|---|---|
+| **`feature-flags.json` do backend** | `marketdash-backend/feature-flags.json` (versionado) | Está com **`whatsapp_proxy: true`**. O merge liga a flag em produção — e o **pool de IPs nasce vazio lá**. Efeito: toda sessão sai pelo IP do servidor com WARNING no log, igual a hoje em hml. Não quebra, mas **não entregue como se o proxy estivesse protegendo alguém**. Se preferir, suba com `false` e ligue depois de cadastrar os IPs |
+| **`feature-flags.json` do frontend** | `marketdash-frontend/feature-flags.json` | Cópia separada e **divergente de propósito** (não tem `whatsapp_proxy`, que é só do backend). Flag lida pelos dois entra **nas duas** |
+| **`nginx.conf` do frontend** | +49 linhas | `map $host $api_upstream` para `/g`, `/g/preview`, `/conectar` e `/api/conectar`. Sem ele, essas rotas de hml batem na API de **produção** (era o bug corrigido em `315f2ad`). Vai junto com o deploy do frontend |
+| **Servidor WAHA de produção** | infra | Não existe ainda. Ver 3.3 — **nunca** compartilhar com hml |
+| **Gating do frontend — 5 arquivos** | ver 3.5 | Separar o bloco de Instagram do de Grupos. Liberar Grupos sem separar **libera o Instagram junto**, sem App Review |
+| **Prints do Instagram** | `marketdash-frontend/public/instagram/` | Ausentes; a tela mostra só o texto numerado |
+| **Textos legais** | política de privacidade §7 e termos | Reler antes de publicar (ver 3.8) |
+
+### 8.4 Rotas públicas novas (fora do `/api/v1`)
+
+`GET /g/{slug}`, `GET /g/preview/{slug}`, `GET /conectar/{token}` e
+`GET /api/conectar/{token}/qr`. Detalhe e a armadilha do `resolver` do nginx em
+**3.6**.
+
+### 8.5 O que NÃO é do módulo e pode subir sozinho
+
+Correções reais que hoje estão presas em `develop` junto com a feature. Se a
+promoção do módulo demorar, vale um cherry-pick — **decisão do João, item a item**:
+
+| Commit | O que corrige |
+|---|---|
+| `457a478` | insights do Meta vinham vazios: gasto sumia e o lucro aparecia positivo num dia de prejuízo |
+| `1e300aa` | CSV sumia quando o broker estava fora do ar |
+| `e8aba4d` / `caea8e9` | token Meta expirado deslogava a usuária (401 → 409) |
+| `1bd8d6a` | runs presos em `running` para sempre |
+| `4c72e6f` | backfill tolera ausência da coluna `leads` em produção |
+| `c36b6d5` / `d924d6c` | chaves novas do Supabase (aditivo) |
+
+### 8.6 O que a rodada de 31/08 acrescentou
+
+Card por número na aba Dispositivos, **renomear** e **pausar o envio**:
+
+- **Migration:** `070` (única nova).
+- **Backend:** `PATCH /api/v1/whatsapp/instancias/{id}`; `envio_pausado` em
+  `InstanciaOut`; filtro da pausa em `roteiro_envio_service._instancias_elegiveis`
+  e `grupo_evento_service._cliente_do_grupo`.
+- **Frontend:** `DispositivoCard`, `GruposDoDispositivo` e
+  `GerenciarDispositivoModal` (novos) + `NumerosSection` reescrita.
+- **Env:** **nenhuma**.
+- **Gating:** nenhum ponto novo — vive dentro da aba Números, já coberta pelos
+  5 arquivos de 3.5.
+
