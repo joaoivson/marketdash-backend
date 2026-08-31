@@ -87,7 +87,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
 | **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Resumo diário (sessão global) + números/grupos das alunas (F1 do módulo de grupos); hml; **o número do resumo precisa re-parear (QR) pós-migração** |
-| **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migration 068 em hml; 069 (cron da sonda) em nenhum ambiente; produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
+| **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migrations 068 **e 069** em hml (cron horário ativo); **no ar em hml** (API+worker+admin, verificado ponta a ponta em 31/08); produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
 
 ## Planos
 

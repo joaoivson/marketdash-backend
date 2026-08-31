@@ -534,6 +534,36 @@ cada pessoa dentro do grupo vale**.
   derrubariam o Dashboard inteiro.
 - Abas da campanha viraram controladas pela URL — `?tab=` não navegava.
 
+## [Não versionado] - 2026-08-31 (Proxy no ar em homologação + correções)
+
+### Changed
+
+- **Proxy por sessão LIGADO em homologação** (`whatsapp_proxy: true`). API,
+  worker e a aba de admin estão no ar em hml; a migration **069** (cron horário
+  da sonda) foi aplicada lá e o disparo manual do endpoint foi confirmado
+  ponta a ponta: `202 accepted` → task no worker → `sync_runs` com
+  `source="proxy_health"`, `verificados=0` (o pool está vazio — sem proxy
+  cadastrado, ligar a flag não muda o caminho de nenhuma sessão).
+
+### Fixed
+
+- **A aba de WhatsApp do admin ainda pedia variáveis da Evolution**, removida em
+  25/08: mandava configurar `EVOLUTION_URL`/`EVOLUTION_API_KEY`/
+  `EVOLUTION_INSTANCIA` e consultar um `docs/whatsapp-evolution.md` que não
+  existe. Quem caísse no estado "não configurado" seguiria a instrução errada
+  até desistir. Agora aponta as `WAHA_*` e o doc certo.
+- **Estados do WAHA apareciam crus na tela** (`scan_qr_code`, `starting`,
+  `stopped`, `failed`): o mapa de rótulos só conhecia os nomes da era Evolution.
+
+### Documentado (não resolvido)
+
+- **Conflito de specs do VPS**: o doc de infra (25/01) diz KVM 2 — 2 vCPU / 2 GB;
+  o plano de escala (27/08) diz KVM 4 — 4 vCPU / 16 GB. Isso decide se o teto de
+  60 sessões WAHA é capacidade real ou fantasia — com 2 GB divididos com API,
+  worker, Redis e frontend, o teto real fica perto de 10–15. O SSH da máquina
+  pede senha, então o doc passou a carregar o aviso e o comando que resolve, em
+  vez de duas verdades se contradizendo.
+
 ## [Não versionado] - 2026-08-27 (Proxy por sessão no WhatsApp)
 
 Cada número conectado pode passar a sair por um **IP próprio**. Está no código,
