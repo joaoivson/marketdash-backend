@@ -534,6 +534,23 @@ cada pessoa dentro do grupo vale**.
   derrubariam o Dashboard inteiro.
 - Abas da campanha viraram controladas pela URL — `?tab=` não navegava.
 
+## [Não versionado] - 2026-08-31 (Como conseguir a API da Shopee)
+
+### Added
+
+- **Passo a passo "Como pegar sua API de Afiliada da Shopee"** na tela de
+  Configurações › Marketplaces, num modal disparado por um link ao lado do
+  campo AppID.
+
+  Existe porque "não sei onde pegar isso" é onde a afiliada trava ao conectar,
+  e a resposta não é óbvia: **a API não vem ligada na conta Shopee** — precisa
+  ser solicitada por chamado (Central de Ajuda → E-mail, com campos
+  específicos) e a ativação leva de horas a dias, sem aviso por e-mail. Sem
+  essa informação, a conclusão natural dela é que o MarketDash está com defeito.
+
+  Fica em modal, e não solto na tela, para não cobrar leitura de quem já tem a
+  credencial nem empurrar o formulário para baixo da dobra no celular.
+
 ## [Não versionado] - 2026-08-31 (Proxy no ar em homologação + correções)
 
 ### Changed
