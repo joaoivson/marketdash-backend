@@ -76,28 +76,35 @@
 ### Informações do Servidor
 
 - **IP Público:** `31.97.22.173`
-- **Tipo:** VPS KVM 2 ⚠️ **NÃO CONFIRMADO — ver aviso abaixo**
-- **Especificações:**
-  - 2 vCPUs
-  - 2GB RAM
+- **Tipo:** VPS KVM 4
+- **Especificações (medidas em 01/09/2026):**
+  - 4 vCPUs
+  - 15 GB RAM utilizáveis (16 GB nominais), **sem swap**
   - 40GB SSD
 
-> ⚠️ **Conflito aberto (31/08/2026).** Esta seção é de 25/01/2026 e diz KVM 2
-> (2 vCPU / 2 GB). O `docs/PLANO_ESCALA_100_USUARIAS.md` (27/08) afirma
-> **KVM 4 — 4 vCPU / 16 GB** como o servidor atual. Os dois não podem estar
-> certos, e a diferença decide se o teto de 60 sessões WAHA
-> (`WHATSAPP_MAX_INSTANCIAS_GLOBAL`) é capacidade real ou fantasia: com 2 GB,
-> compartilhados com API, worker, Redis e frontend, o teto real fica perto de
-> 10–15 sessões.
+> ✅ **Conflito resolvido em 01/09/2026.** Esta seção afirmava KVM 2
+> (2 vCPU / 2 GB) desde 25/01/2026 e estava **errada**; o
+> `docs/PLANO_ESCALA_100_USUARIAS.md` (27/08) estava certo. Medido no servidor
+> com `ssh root@31.97.22.173 'nproc; free -g'`:
 >
-> **Como resolver em 30 segundos** (precisa de acesso SSH, que não está
-> disponível por chave — pede senha):
->
-> ```bash
-> ssh root@31.97.22.173 'nproc; free -g; df -h /'
+> ```
+> 4
+>               total   used   free   shared  buff/cache   available
+> Mem:             15      4      1        0          10          11
+> Swap:             0      0      0
 > ```
 >
-> Ou pelo painel do Coolify. Quem medir, corrige aqui e apaga este aviso.
+> Ou seja: **11 GB disponíveis** com a stack atual rodando (API, worker, Redis,
+> frontend). O teto de 60 sessões WAHA (`WHATSAPP_MAX_INSTANCIAS_GLOBAL`) não é
+> limitado por esta caixa — ele é um número escolhido no código, não uma
+> capacidade medida.
+>
+> ⚠️ **O que continua NÃO medido:** RAM por sessão WAHA. Sem isso não dá para
+> dizer quantas sessões cabem nos 11 GB — as estimativas variam entre ~19 e ~133
+> sessões conforme o custo marginal seja 420 MB ou 60 MB por sessão. A medição
+> exige parear vários chips reais de uma vez, o que não é viável hoje; a
+> alternativa adotada é deixar o teto configurável **por servidor** (ver
+> `whatsapp_servidores`) e subir conforme sessões reais entrem em produção.
 - **Sistema Operacional:** Ubuntu 22.04 LTS
 - **Região:** Próxima ao Brasil
 
