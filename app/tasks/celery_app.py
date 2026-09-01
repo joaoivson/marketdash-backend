@@ -1,4 +1,5 @@
 from celery import Celery
+from kombu import Queue
 from app.core.ambiente import identidade_do_banco
 from app.core.config import settings
 
@@ -32,6 +33,19 @@ def _fila_do_banco() -> str:
 
 
 FILA = _fila_do_banco()
+
+# Fila DEDICADA do envio em grupos. Motivo: `roteiros.processar_execucao` segura
+# o slot por até 15 min dormindo entre mensagens (ritmo anti-ban). Na fila única,
+# uma rajada de envios ocupa todos os slots e o upload de CSV da afiliada fica
+# atrás de 15 minutos de sono alheio.
+#
+# ⚠️ A armadilha desta mudança é a MESMA do `priority=5`: task roteada para fila
+# que ninguém consome é aceita, enfileirada e nunca executa — sem erro, sem log.
+# Por isso as duas filas entram em `task_queues`: worker SEM `-Q` consome TODAS
+# as filas declaradas ali, então o worker atual continua dando conta sozinho e o
+# worker dedicado é otimização, não pré-requisito. Subir o código sem criar o
+# serviço novo é seguro por construção.
+FILA_WHATSAPP = f"{FILA}-whatsapp"
 
 # Initialize Celery app
 celery_app = Celery(
@@ -70,6 +84,16 @@ celery_app.conf.update(
     # Fila por banco — ver _fila_do_banco(). O worker sem -Q consome exatamente
     # esta fila, então produtor e consumidor andam juntos.
     task_default_queue=FILA,
+    # Declarar as duas faz o worker sem `-Q` consumir AS DUAS — é o que torna a
+    # fila dedicada segura de subir antes do worker dedicado existir.
+    task_queues=(Queue(FILA), Queue(FILA_WHATSAPP)),
+    # Envio em grupos e o que orbita nele saem da fila comum. Task nova de
+    # WhatsApp precisa entrar aqui, senão volta a disputar slot com CSV/Shopee.
+    task_routes={
+        "roteiros.processar_execucao": {"queue": FILA_WHATSAPP},
+        "monitoramento.replicar_captura": {"queue": FILA_WHATSAPP},
+        "proxies.verificar": {"queue": FILA_WHATSAPP},
+    },
 )
 
 # Explicitly include task modules so the worker always registers them (avoids "unregistered task" in production).

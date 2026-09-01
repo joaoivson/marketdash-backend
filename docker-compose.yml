@@ -70,6 +70,9 @@ services:
         condition: service_started
 
   redis:
+        condition: service_started
+
+  redis:
     image: redis:7-alpine
     container_name: marketdash_redis
     ports:
@@ -114,6 +117,42 @@ services:
   # (migration 018). pg_cron chama POST /api/v1/internal/cron/shopee-sync às 10h UTC (7h BRT).
 
   # MinIO for jobs pipeline (USE_JOBS_PIPELINE). Create bucket "uploads" in Console (http://localhost:9000).
+
+
+  # Worker DEDICADO ao envio em grupos. Otimização, não pré-requisito: as duas
+  # filas estão em `task_queues`, então o worker acima consome as duas sozinho
+  # se este não existir (ver o comentário de FILA_WHATSAPP em celery_app.py).
+  #
+  # O que ele resolve: `roteiros.processar_execucao` dorme com o slot na mão por
+  # até 15 min. Sem separar, uma rajada de envios ocupa os 8 slots e o upload de
+  # CSV da afiliada fica atrás de 15 minutos de sono alheio.
+  #
+  # O nome da fila deriva do BANCO em runtime, por isso o `-Q` sai de um python
+  # e não de uma constante — hardcodar aqui faria hml consumir a fila de prod.
+  worker-whatsapp:
+    build: .
+    container_name: marketdash_worker_whatsapp
+    command: >
+      sh -c "celery -A app.tasks.celery_app worker --loglevel=info --concurrency=8
+      -Q $$(python -c 'from app.tasks.celery_app import FILA_WHATSAPP; print(FILA_WHATSAPP)')"
+    volumes:
+      - .:/app
+      - upload_temp_data:/app/uploads
+      - ../feature-flags.json:/app/feature-flags.json:ro
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
+      UPLOAD_TEMP_DIR: /app/uploads
+      USE_JOBS_PIPELINE: "true"
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "3"
+      SHOPEE_ENCRYPTION_KEY: ${SHOPEE_ENCRYPTION_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    
+
   minio:
     image: minio/minio:latest
     container_name: marketdash_minio
