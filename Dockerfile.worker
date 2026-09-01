@@ -38,7 +38,9 @@ ENV DB_POOL_SIZE=2 \
 # default da API (5+5) abririam 80 conexões contra as 40 de hoje e estourariam o
 # Supabase antes de o WhatsApp virar gargalo. Mexer numa sem a outra é o erro.
 #
-# Sem `-Q`: o worker consome todas as filas de `task_queues` (a comum e a do
-# WhatsApp). É isso que torna a fila dedicada segura antes de existir worker
-# dedicado — ver FILA_WHATSAPP em app/tasks/celery_app.py.
-CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--uid=1000", "--concurrency=8"]
+# Uma imagem, dois papéis — quem decide é CELERY_SOMENTE_WHATSAPP no ambiente.
+# O entrypoint explica os dois e por que o padrão continua sem `-Q`.
+# Dois Dockerfiles seria como o worker dedicado fica com código velho: recurso
+# separado que ninguém lembra de atualizar (já aconteceu, por semanas).
+RUN chmod +x /app/scripts/worker-entrypoint.sh
+CMD ["/app/scripts/worker-entrypoint.sh"]

@@ -86,7 +86,7 @@ services:
     # enviando por vez, com CSV e Shopee disputando os mesmos slots.
     # 8 processos × (DB_POOL_SIZE 2 + DB_MAX_OVERFLOW 3) = 40 conexões, o MESMO
     # total de hoje (4 × 10). Dobra a vazão sem pedir nada a mais do Supabase.
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=8
+    command: ["/app/scripts/worker-entrypoint.sh"]
     volumes:
       - .:/app
       - upload_temp_data:/app/uploads
@@ -133,9 +133,7 @@ services:
   worker-whatsapp:
     build: .
     container_name: marketdash_worker_whatsapp
-    command: >
-      sh -c "celery -A app.tasks.celery_app worker --loglevel=info --concurrency=8
-      -Q $$(python -c 'from app.tasks.celery_app import FILA_WHATSAPP; print(FILA_WHATSAPP)')"
+    command: ["/app/scripts/worker-entrypoint.sh"]
     volumes:
       - .:/app
       - upload_temp_data:/app/uploads
@@ -148,6 +146,8 @@ services:
       USE_JOBS_PIPELINE: "true"
       DB_POOL_SIZE: "2"
       DB_MAX_OVERFLOW: "3"
+      # É SÓ isto que separa este worker do outro.
+      CELERY_SOMENTE_WHATSAPP: "true"
       SHOPEE_ENCRYPTION_KEY: ${SHOPEE_ENCRYPTION_KEY}
     depends_on:
       db:
