@@ -118,6 +118,50 @@ o merge para produção** — ela acontece no push para `develop`; (b) migration
 `ALTER TABLE` é a metade perigosa, porque a tabela "existir" esconde que a coluna
 não existe. A 071 é idempotente e a aplicação a consertou sem perda de dado.
 
+### Worker dedicado no ar em homologação — e o bug que ele denunciou
+
+`celery-whatsapp-hml` criado no Coolify (uuid `cogwsgwocwk8k4wkswokks0s`), com as
+38 variáveis do worker atual copiadas uma a uma e mais `CELERY_SOMENTE_WHATSAPP=true`.
+Os dois workers rodam **a mesma imagem**; um env decide o papel, via
+`scripts/worker-entrypoint.sh`. Dois Dockerfiles seria como o dedicado fica com
+código velho quando alguém mexe no outro.
+
+🔴 **O banner de boot do worker novo revelou um bug sério que eu mesmo tinha
+introduzido horas antes.** `Queue(nome)` sem `exchange`/`routing_key` herda o
+default (que vem de `task_default_queue`), então as duas filas ficaram no MESMO
+exchange `direct` com a MESMA key — e exchange direct entrega a **todas** as
+filas que casam com a key. `roteiros.processar_execucao` era publicada uma vez e
+caía nas **duas** listas.
+
+E não precisava de dois workers para doer: o worker padrão consome as duas
+filas, então **ele sozinho** pegava a mensagem duas vezes e executava a fatia
+duas vezes. Em envio de grupo isso é **mensagem duplicada para a afiliada** — o
+caminho mais curto para o número ser banido, justamente o que o ritmo anti-ban
+inteiro existe para evitar.
+
+Corrigido com exchange e routing_key explícitos por fila. **Impacto real: zero** —
+homologação tem 0 execuções e 0 mensagens em toda a história da tabela, então a
+duplicação nunca chegou a disparar.
+
+A lição que ficou em teste: nenhuma asserção sobre `task_routes` pegava isso,
+porque o roteamento estava certo — errada era a *ligação* da fila.
+`test_task_de_envio_e_entregue_a_UMA_fila_so` publica numa transport de memória
+e conta em quantas filas a mensagem cai; verifiquei que ele falha no código
+anterior. Config que "parece certa" precisa de teste de comportamento, não de
+teste de config.
+
+⚠️ **Pendência:** o passo de deploy do worker novo está no
+`deploy-homologation.yml`, mas **avisa e segue** enquanto o secret
+`COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML` não existir. Sem ele o dedicado fica no
+código do último deploy manual. Cadastrar e trocar o bloco por chamada direta ao
+`trigger-deploy.sh`, que falha alto.
+
+⚠️ **Achado de infra:** o servidor `busy` no Coolify tem o IP gravado como
+`http:31.97.22.173` e está inalcançável (`is_usable=false`). Quem criar recurso
+apontando para ele recebe um deploy falho com erro confuso
+(`ssh: Could not resolve hostname http:31.97.22.173`). O servidor que funciona é
+o `localhost`. Vale limpar o registro quebrado.
+
 ### Capacidade, antes e depois
 
 | | Antes | Agora |

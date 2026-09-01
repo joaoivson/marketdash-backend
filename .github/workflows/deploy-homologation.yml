@@ -85,9 +85,29 @@ jobs:
         run: |
           .github/scripts/trigger-deploy.sh worker "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_HML }}"
 
+      # Worker DEDICADO à fila de envio em grupos (celery-whatsapp-hml). É um
+      # terceiro recurso no Coolify e, como os outros dois, precisa do próprio
+      # disparo — recurso sem passo de deploy é exatamente como o Celery rodou
+      # código de semanas atrás com o CI todo verde.
+      #
+      # ⚠️ Enquanto o secret não existir, este passo AVISA e segue. Assim que
+      # ele for cadastrado, troque o bloco por uma chamada direta ao
+      # trigger-deploy.sh (que falha alto), igual aos dois de cima: o estado
+      # "avisa e segue" é aceitável para estrear, não para conviver.
+      - name: Trigger Coolify deployment (worker WhatsApp)
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+          URL_WORKER_WHATSAPP: ${{ secrets.COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML }}
+        run: |
+          if [ -z "$URL_WORKER_WHATSAPP" ]; then
+            echo "::warning title=worker-whatsapp NÃO foi atualizado::O secret COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML não está cadastrado. O worker dedicado de envio continua com o código do último deploy manual. Cadastre o secret para que ele acompanhe a develop."
+            exit 0
+          fi
+          .github/scripts/trigger-deploy.sh worker-whatsapp "$URL_WORKER_WHATSAPP"
+
       - name: Deployment status
         run: |
-          echo "✅ API + worker atualizados em homologação (branch develop)"
+          echo "✅ API + workers atualizados em homologação (branch develop)"
           echo "Repository: ${{ github.repository }}"
           echo "Commit: ${{ github.sha }}"
           echo "Branch: ${{ github.ref }}"
