@@ -161,6 +161,19 @@ http:31.97.22.173`. Conferido antes de apagar: 0 recursos nele, e os 8 apps mais
 os 2 Redis todos no `localhost`, que é o servidor real (o Coolify roda no próprio
 VPS). Registro órfão que só servia para fazer alguém tropeçar.
 
+### Isolamento total (fecha a rodada)
+
+`CELERY_PAPEL` ganhou três valores — `comum`, `whatsapp`, `todas` — e os dois
+workers de homologação foram separados: o comum só na fila geral, o dedicado só
+na de envio. Rajada de envio não ocupa mais slot de CSV, e upload pesado não
+atrasa mais envio.
+
+⚠️ **A rede acabou.** Enquanto o comum consumia as duas filas, o worker dedicado
+era otimização: se caísse, os envios saíam mais devagar mas saíam. Agora, worker
+de WhatsApp fora do ar = envio enfileirado até alguém perceber. `todas` segue
+como default do entrypoint justamente para que container sem a variável nunca
+deixe fila parada. **Vigiar o worker dedicado passou a ser obrigatório.**
+
 ### Capacidade, antes e depois
 
 | | Antes | Agora |
