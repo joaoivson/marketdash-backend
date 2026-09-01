@@ -172,7 +172,20 @@ atrasa mais envio.
 era otimização: se caísse, os envios saíam mais devagar mas saíam. Agora, worker
 de WhatsApp fora do ar = envio enfileirado até alguém perceber. `todas` segue
 como default do entrypoint justamente para que container sem a variável nunca
-deixe fila parada. **Vigiar o worker dedicado passou a ser obrigatório.**
+deixe fila parada.
+
+🔴 **Pendência que bloqueia levar o isolamento para produção: não existe alerta.**
+E o alerta óbvio não serve — **`status: running` do Coolify não significa
+"consumindo"**: container de pé pode estar travado sem puxar da fila, e é
+justamente esse o caso que dói. O sinal honesto é **profundidade da fila no
+Redis** (`LLEN marketdash-<ref>-whatsapp` crescendo sem drenar) e/ou ausência de
+`sync with` no log dos workers. As notificações do Coolify (Discord/Telegram/
+e-mail) são configuração de UI — a API v1 não expõe esses campos, então não dá
+para automatizar daqui. Registrado em `.claude/memoria/DECISOES.md`.
+
+Em homologação o risco é aceitável (0 execuções na história da tabela). Em
+produção não: envio parado em silêncio é indistinguível de "não havia o que
+enviar".
 
 ### Capacidade, antes e depois
 
