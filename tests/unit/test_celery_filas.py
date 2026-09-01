@@ -74,3 +74,58 @@ def test_tasks_de_whatsapp_estao_no_include():
                    "app.tasks.monitoramento_tasks",
                    "app.tasks.proxy_tasks"):
         assert modulo in incluidos, f"{modulo} fora do include"
+
+def test_filas_nao_compartilham_exchange_nem_routing_key():
+    """O bug que o banner de boot do worker denunciou.
+
+    `Queue(nome)` sem exchange/routing_key herda o DEFAULT, que vem de
+    `task_default_queue`. As duas filas ficavam no MESMO exchange direct com a
+    MESMA key — e exchange direct entrega a TODAS as filas que casam com a key.
+    A task de envio caía nas duas listas e era executada DUAS VEZES, uma por
+    worker: mensagem duplicada no grupo da afiliada, que é o caminho mais curto
+    para o número ser banido.
+
+    Nenhuma asserção sobre `task_routes` pegava isso — o roteamento estava
+    certo; errado era a ligação da fila.
+    """
+    q = celery_app.amqp.queues
+    comum, wpp = q[FILA], q[FILA_WHATSAPP]
+    assert comum.routing_key != wpp.routing_key, "routing_key compartilhada duplica a task"
+    assert comum.exchange.name != wpp.exchange.name, "exchange compartilhado duplica a task"
+    assert wpp.routing_key == FILA_WHATSAPP
+
+
+def test_task_de_envio_e_entregue_a_UMA_fila_so():
+    """Prova de entrega real, não de configuração.
+
+    Publica numa transport de memória e conta em quantas filas a mensagem caiu.
+    É o único teste aqui que teria pegado o bug de exchange compartilhado — os
+    outros olham config, e a config *parecia* certa.
+    """
+    from kombu import Connection
+
+    rota = celery_app.amqp.router.route({}, "roteiros.processar_execucao")
+    fila = rota["queue"]
+
+    with Connection("memory://") as conn:
+        canal = conn.channel()
+        destinos = []
+        for nome in (FILA, FILA_WHATSAPP):
+            q = celery_app.amqp.queues[nome](canal)
+            q.declare()
+            destinos.append((nome, q))
+
+        produtor = conn.Producer(canal)
+        produtor.publish(
+            {"teste": True},
+            exchange=fila.exchange,
+            routing_key=fila.routing_key,
+            declare=[d[1] for d in destinos],
+        )
+
+        caiu = [nome for nome, q in destinos if q.get() is not None]
+
+    assert caiu == [FILA_WHATSAPP], (
+        f"a task de envio foi entregue a {caiu}; em mais de uma fila ela executa "
+        "uma vez por worker e a afiliada recebe a mensagem duplicada"
+    )

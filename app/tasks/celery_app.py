@@ -1,5 +1,5 @@
 from celery import Celery
-from kombu import Queue
+from kombu import Exchange, Queue
 from app.core.ambiente import identidade_do_banco
 from app.core.config import settings
 
@@ -86,13 +86,27 @@ celery_app.conf.update(
     task_default_queue=FILA,
     # Declarar as duas faz o worker sem `-Q` consumir AS DUAS — é o que torna a
     # fila dedicada segura de subir antes do worker dedicado existir.
-    task_queues=(Queue(FILA), Queue(FILA_WHATSAPP)),
+    #
+    # ⚠️ `exchange` e `routing_key` EXPLÍCITOS, um par por fila. Sem isso as duas
+    # herdam o default (que vem de `task_default_queue`) e ficam ligadas ao MESMO
+    # exchange direct com a MESMA key — e exchange direct entrega a TODAS as
+    # filas que casam com a key. Resultado: a task de envio cai nas duas listas e
+    # é executada DUAS VEZES, uma por worker. Em envio de grupo isso é mensagem
+    # duplicada para a afiliada, que é o caminho mais curto para o número ser
+    # banido. Pego no banner de boot do worker: `key=` mostrava a fila errada.
+    task_queues=(
+        Queue(FILA, Exchange(FILA, type="direct"), routing_key=FILA),
+        Queue(FILA_WHATSAPP, Exchange(FILA_WHATSAPP, type="direct"),
+              routing_key=FILA_WHATSAPP),
+    ),
     # Envio em grupos e o que orbita nele saem da fila comum. Task nova de
     # WhatsApp precisa entrar aqui, senão volta a disputar slot com CSV/Shopee.
+    # `routing_key` junto com `queue`: só o nome da fila faria o Celery cair no
+    # routing_key default e desfazer a separação acima.
     task_routes={
-        "roteiros.processar_execucao": {"queue": FILA_WHATSAPP},
-        "monitoramento.replicar_captura": {"queue": FILA_WHATSAPP},
-        "proxies.verificar": {"queue": FILA_WHATSAPP},
+        "roteiros.processar_execucao": {"queue": FILA_WHATSAPP, "routing_key": FILA_WHATSAPP},
+        "monitoramento.replicar_captura": {"queue": FILA_WHATSAPP, "routing_key": FILA_WHATSAPP},
+        "proxies.verificar": {"queue": FILA_WHATSAPP, "routing_key": FILA_WHATSAPP},
     },
 )
 
