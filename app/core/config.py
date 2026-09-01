@@ -8,6 +8,13 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # Database (Supabase PostgreSQL)
     DATABASE_URL: str
+    # Pool POR PROCESSO. O worker roda N processos (--concurrency), e cada um
+    # abre seu próprio pool: conexões totais = N × (POOL_SIZE + MAX_OVERFLOW).
+    # Subir a concorrência do worker sem baixar isto estoura o Supabase antes
+    # de o WhatsApp virar gargalo — por isso o worker define valores menores no
+    # compose/Coolify. Os defaults preservam o comportamento da API.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
     
     # Supabase Configuration
     #
