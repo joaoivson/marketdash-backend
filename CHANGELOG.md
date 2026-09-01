@@ -11,6 +11,99 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-01 (Escala: o servidor WAHA vira pool, e o worker deixa de ter 4 slots)
+
+Rodada de infraestrutura para o degrau de escala — nada disso muda tela, e tudo
+muda quanto o sistema aguenta.
+
+### Specs do VPS: o doc mentia há 7 meses
+
+`CONFIGURACAO-COMPLETA-INFRAESTRUTURA.md` (25/01) dizia **KVM 2 — 2 vCPU / 2 GB**;
+`PLANO_ESCALA_100_USUARIAS.md` (27/08) dizia **KVM 4 — 4 vCPU / 16 GB**. Medido
+no servidor: o segundo está certo. São **15 GB, com 11 GB disponíveis** com a
+stack inteira rodando.
+
+A diferença não era detalhe. Com 2 GB, o teto de 60 sessões WAHA seria fantasia
+(o real ficaria em 10–15) e comprar servidor seria urgente. Com 11 GB livres,
+os tetos que existem hoje são **números escolhidos no código**, não capacidade
+de hardware.
+
+Continua **não medido**: RAM por sessão WAHA. Medir exige parear vários chips
+reais de uma vez, o que não é viável agora — a saída adotada é o teto por
+servidor virar configurável (ver abaixo) e subir conforme sessões reais entrem.
+
+### O worker tinha 4 slots, e era esse o teto do produto
+
+O worker subia sem `--concurrency`, então o Celery usava o nº de vCPUs: **4**.
+Esse default existe para trabalho de CPU. As tasks de envio em grupo fazem o
+oposto — **dormem** entre mensagens (pausa 8–20 s por rodada) e seguram o slot
+por até 15 min (`WHATSAPP_FATIA_ORCAMENTO_S`). Resultado: no máximo 4 afiliadas
+enviando por vez, com CSV e Shopee disputando os mesmos 4 slots. Era o gargalo
+real, muito antes de qualquer limite de sessões.
+
+Subir a concorrência sozinha estouraria o Supabase: o pool é **por processo**
+(5+5), então 8 processos dariam 80 conexões contra as 40 de hoje. Por isso
+`DB_POOL_SIZE`/`DB_MAX_OVERFLOW` viraram settings e o worker roda com 2+3 —
+**8 × 5 = 40, exatamente o total atual**. Dobra a vazão sem pedir nada a mais
+do banco. Os defaults (5+5) preservam a API.
+
+Ainda **não feito**: separar a fila de envio em worker dedicado. Exige criar o
+serviço no Coolify **antes** do merge — task roteada para fila sem consumidor
+some em silêncio, o que já aconteceu duas vezes aqui.
+
+### `waha_servidores` (migration 071): crescer vira INSERT
+
+Antes o servidor era UM, fixo em `settings.WAHA_URL`, e não havia para onde
+apontar a sessão 61 — cada salto de capacidade era migração de infra. Agora o
+endereço vem do servidor da própria sessão, e adicionar caixa é uma linha na
+tabela: sem deploy, sem migration, sem tocar no motor de envio.
+
+O desenho copia o pool de proxy da 068, que já funciona. Duas diferenças:
+
+* a afinidade por usuária aqui é **preferência** (debug e raio de incêndio), não
+  isolamento — quem isola vizinhança é o proxy, que dá o IP;
+* `aceita_novas` separa **drenar** de **desligar**, porque **sessão não migra de
+  servidor**: o estado do whatsmeow vive no Postgres daquela caixa. Esvaziar um
+  shard é parar de alocar e esperar a rotatividade, ou re-parear com aviso.
+
+Três armadilhas tratadas:
+
+* **`reconciliar_orfas` varria só o servidor padrão.** Órfã não tem linha no
+  banco — é a definição — então o resolvedor cairia no padrão e o DELETE iria
+  para a caixa errada, em silêncio. Órfã em shard não visitado viveria para
+  sempre, comendo a RAM que o pool existe para administrar. Agora varre todos os
+  servidores e apaga onde encontrou.
+* **O cap global virou `SUM(max_sessoes)`**, com o env como trava de segurança.
+  Só que "adicionei servidor e a capacidade não mudou" seria um mistério
+  silencioso: quando o env está segurando o teto, sai `WARNING` dizendo isso.
+* **`criar_instancia` exigia `WAHA_URL` no env**, o que travaria um ambiente
+  100% pool — o destino do desenho. Passa a aceitar as duas fontes.
+
+Fallback é proposital em todo lugar: sessão sem servidor, tabela inexistente e
+pool vazio caem em `settings.WAHA_URL`. A 071 não pode ser um degrau que quebra
+ambiente antigo, nem no instante do deploy, antes do backfill.
+
+O resolvedor tem cache em memória com TTL de 60 s — sem ele seria uma query por
+mensagem enviada. É seguro porque a alocação é definitiva; o TTL existe só para
+o caso de um admin editar `base_url`/`api_key`.
+
+⚠️ **A migration tem duas metades.** Sem
+`scripts/backfill_waha_servidor.py --apply`, as sessões vivas ficam com
+`servidor_id` nulo: nada quebra (o fallback cobre), mas o cap global conta
+errado e a alocação enxerga o pool mais vazio do que está. Rodar no mesmo dia.
+
+### Capacidade, antes e depois
+
+| | Antes | Agora |
+|---|---|---|
+| Envios simultâneos | 4 | 8 |
+| Sessões | 60 (constante no código) | soma do pool, com o env travando |
+| Adicionar servidor | migração de infra | `INSERT` |
+
+O teto que sobra é **configuração, não hardware**:
+`WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA=5000` amarra em ~20 afiliadas MAX, e a caixa
+de 11 GB livres quase certamente aguenta mais.
+
 ## [Não versionado] - 2026-08-31 (Dispositivos: um card por número, com os grupos dentro)
 
 A aba **Configurações › Dispositivos › Números** era uma lista crua de números
