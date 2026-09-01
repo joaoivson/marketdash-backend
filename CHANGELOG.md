@@ -92,6 +92,32 @@ o caso de um admin editar `base_url`/`api_key`.
 `servidor_id` nulo: nada quebra (o fallback cobre), mas o cap global conta
 errado e a alocação enxerga o pool mais vazio do que está. Rodar no mesmo dia.
 
+### Fila dedicada do envio, e o incidente que a `create_all` causou em hml
+
+`roteiros.processar_execucao`, replicação de captura e sonda de proxy passam a
+ter **fila própria**. Motivo: a task dorme com o slot na mão por até 15 min, e na
+fila única o upload de CSV da afiliada ficava atrás desse sono.
+
+O risco era repetir pela terceira vez o bug histórico do broker — task roteada
+para fila que ninguém consome é aceita, enfileirada e **nunca executa**, sem erro
+nem log (foi assim com `priority=5` e com a fila derivada de `ENVIRONMENT`).
+Resolvido por construção: as duas filas entram em `task_queues`, e worker sem
+`-Q` consome todas as filas declaradas ali. O worker atual cobre as duas sozinho;
+o dedicado é otimização, não pré-requisito. `test_celery_filas.py` trava isso.
+
+⚠️ **Incidente durante esta rodada, e vale como aviso permanente.** O push do
+model `waha_servidores` para `develop` disparou o deploy de hml, e o
+`create_all` do boot **criou a tabela antes da migration** — exatamente o cenário
+da seção 0 do runbook de promoção. Pior: `create_all` não altera tabela
+existente, então `whatsapp_instancias.servidor_id` **não** foi criada e toda
+query em `whatsapp_instancias` passou a falhar com `UndefinedColumn`. A aba
+Números de homologação ficou fora do ar até a 071 ser aplicada.
+
+Duas lições: (a) a corrida `create_all` × migration **não é teórica e não espera
+o merge para produção** — ela acontece no push para `develop`; (b) migration com
+`ALTER TABLE` é a metade perigosa, porque a tabela "existir" esconde que a coluna
+não existe. A 071 é idempotente e a aplicação a consertou sem perda de dado.
+
 ### Capacidade, antes e depois
 
 | | Antes | Agora |
