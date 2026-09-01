@@ -150,17 +150,16 @@ e conta em quantas filas a mensagem cai; verifiquei que ele falha no código
 anterior. Config que "parece certa" precisa de teste de comportamento, não de
 teste de config.
 
-⚠️ **Pendência:** o passo de deploy do worker novo está no
-`deploy-homologation.yml`, mas **avisa e segue** enquanto o secret
-`COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML` não existir. Sem ele o dedicado fica no
-código do último deploy manual. Cadastrar e trocar o bloco por chamada direta ao
-`trigger-deploy.sh`, que falha alto.
+O passo de deploy do worker novo entrou no `deploy-homologation.yml` e **falha
+alto** como os outros dois — worker de envio com código velho manda mensagem com
+a lógica errada, o que é pior que um deploy vermelho.
 
-⚠️ **Achado de infra:** o servidor `busy` no Coolify tem o IP gravado como
-`http:31.97.22.173` e está inalcançável (`is_usable=false`). Quem criar recurso
-apontando para ele recebe um deploy falho com erro confuso
-(`ssh: Could not resolve hostname http:31.97.22.173`). O servidor que funciona é
-o `localhost`. Vale limpar o registro quebrado.
+**Servidor `busy` removido do Coolify.** O registro tinha o IP gravado como
+`http:31.97.22.173` (com o esquema colado) e estava inalcançável — o primeiro
+deploy do worker novo caiu nele com `ssh: Could not resolve hostname
+http:31.97.22.173`. Conferido antes de apagar: 0 recursos nele, e os 8 apps mais
+os 2 Redis todos no `localhost`, que é o servidor real (o Coolify roda no próprio
+VPS). Registro órfão que só servia para fazer alguém tropeçar.
 
 ### Capacidade, antes e depois
 

@@ -90,20 +90,14 @@ jobs:
       # disparo — recurso sem passo de deploy é exatamente como o Celery rodou
       # código de semanas atrás com o CI todo verde.
       #
-      # ⚠️ Enquanto o secret não existir, este passo AVISA e segue. Assim que
-      # ele for cadastrado, troque o bloco por uma chamada direta ao
-      # trigger-deploy.sh (que falha alto), igual aos dois de cima: o estado
-      # "avisa e segue" é aceitável para estrear, não para conviver.
+      # Falha alto igual aos dois de cima (secret cadastrado em 01/09/2026): um
+      # worker de envio com código velho manda mensagem com a lógica errada, o
+      # que é pior que um deploy vermelho.
       - name: Trigger Coolify deployment (worker WhatsApp)
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-          URL_WORKER_WHATSAPP: ${{ secrets.COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML }}
         run: |
-          if [ -z "$URL_WORKER_WHATSAPP" ]; then
-            echo "::warning title=worker-whatsapp NÃO foi atualizado::O secret COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML não está cadastrado. O worker dedicado de envio continua com o código do último deploy manual. Cadastre o secret para que ele acompanhe a develop."
-            exit 0
-          fi
-          .github/scripts/trigger-deploy.sh worker-whatsapp "$URL_WORKER_WHATSAPP"
+          .github/scripts/trigger-deploy.sh worker-whatsapp "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML }}"
 
       - name: Deployment status
         run: |
