@@ -1,41 +1,63 @@
 #!/bin/sh
-# Entrypoint do worker Celery — uma imagem só, dois papéis.
+# Entrypoint do worker Celery — uma imagem, três papéis.
 #
-# Existem dois workers em cada ambiente e a diferença entre eles é UMA variável:
+# `CELERY_PAPEL` decide de quais filas este container consome:
 #
-#   worker           (padrão)                   consome TODAS as filas
-#   worker-whatsapp  CELERY_SOMENTE_WHATSAPP=true  consome só a fila de envio
+#   comum      só a fila geral (CSV, Shopee, Facebook, jobs)
+#   whatsapp   só a fila de envio em grupos
+#   todas      as duas (default)
 #
-# Por que não dois Dockerfiles: duplicar a imagem é como o dedicado fica para
-# trás quando alguém mexe no outro. Foi assim que o worker rodou com código de
-# semanas atrás — recurso separado que ninguém lembrava de atualizar.
+# Por que não dois Dockerfiles: duplicar a imagem é como o worker dedicado fica
+# para trás quando alguém mexe no outro. Já aconteceu aqui, por semanas.
 #
-# ⚠️ O worker PADRÃO continua sem `-Q` de propósito, e isso é o fail-safe: sem
-# `-Q` ele consome todas as filas declaradas em `task_queues`, inclusive a do
-# WhatsApp. Ou seja, se o worker dedicado cair ou nunca for criado, os envios
-# continuam saindo — mais devagar, mas saem. Restringir o padrão a `-Q $FILA`
-# daria isolamento total e é o passo seguinte, DEPOIS de o dedicado provar que
-# fica de pé. Não faça os dois no mesmo dia.
+# ⚠️ `todas` é o default de propósito: um container que suba SEM a variável
+# consome tudo e nada fica parado. Só saia dele quando os dois papéis estiverem
+# de pé — com `comum` e `whatsapp` separados NÃO existe mais rede: se o worker
+# de WhatsApp cair, os envios ficam enfileirados até alguém perceber. Isso é
+# isolamento de verdade, e o preço dele é vigilância.
 #
 # O nome da fila deriva do BANCO em runtime (ver _fila_do_banco em
-# app/tasks/celery_app.py): hardcodar aqui faria homologação consumir a fila de
+# app/tasks/celery_app.py): hardcodar faria homologação consumir a fila de
 # produção, que dividem o mesmo Redis.
 set -e
+
+PAPEL="${CELERY_PAPEL:-todas}"
+# Compatibilidade com a variável anterior, para não haver janela durante a troca.
+if [ "${CELERY_SOMENTE_WHATSAPP}" = "true" ]; then
+    PAPEL="whatsapp"
+fi
 
 CONCURRENCY="${CELERY_CONCURRENCY:-8}"
 ARGS="--loglevel=info --uid=1000 --concurrency=${CONCURRENCY}"
 
-if [ "${CELERY_SOMENTE_WHATSAPP}" = "true" ]; then
-    FILA=$(python -c 'from app.tasks.celery_app import FILA_WHATSAPP; print(FILA_WHATSAPP)')
-    if [ -z "$FILA" ]; then
-        echo "ERRO: não consegui resolver o nome da fila do WhatsApp." >&2
+filas() {
+    python -c "from app.tasks.celery_app import $1; print($1)"
+}
+
+case "$PAPEL" in
+    whatsapp)
+        F=$(filas FILA_WHATSAPP)
+        ARGS="${ARGS} -Q ${F}"
+        ;;
+    comum)
+        F=$(filas FILA)
+        ARGS="${ARGS} -Q ${F}"
+        ;;
+    todas)
+        F="(todas as filas de task_queues)"
+        ;;
+    *)
+        echo "ERRO: CELERY_PAPEL='${PAPEL}' inválido. Use comum, whatsapp ou todas." >&2
         exit 1
-    fi
-    echo "worker dedicado: consumindo apenas ${FILA} (concorrência ${CONCURRENCY})"
-    ARGS="${ARGS} -Q ${FILA}"
-else
-    echo "worker padrão: consumindo todas as filas de task_queues (concorrência ${CONCURRENCY})"
+        ;;
+esac
+
+if [ -z "$F" ]; then
+    echo "ERRO: não consegui resolver o nome da fila para o papel '${PAPEL}'." >&2
+    exit 1
 fi
+
+echo "worker [${PAPEL}]: consumindo ${F} (concorrência ${CONCURRENCY})"
 
 # shellcheck disable=SC2086
 exec celery -A app.tasks.celery_app worker ${ARGS}
