@@ -39,10 +39,6 @@ services:
       # Upload de arquivos grandes: grava em disco e envia só o caminho ao Celery
       UPLOAD_TEMP_DIR: /app/uploads
       USE_JOBS_PIPELINE: "true"
-      # Pool menor POR PROCESSO porque são 8 processos — ver o comentário do
-      # command acima e DB_POOL_SIZE em app/core/config.py.
-      DB_POOL_SIZE: "2"
-      DB_MAX_OVERFLOW: "3"
       S3_BUCKET: marketDash_bucket
       S3_ENDPOINT: https://rsejwvxealraianensoz.storage.supabase.co/storage/v1/s3
       S3_ACCESS_KEY: b66c95e91947d71dc6c85880b59aafd3
@@ -101,6 +97,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
       UPLOAD_TEMP_DIR: /app/uploads
       USE_JOBS_PIPELINE: "true"
+      # Pool menor POR PROCESSO porque são 8 processos: 8 × (2+3) = 40 conexões,
+      # o mesmo total de antes (4 × 10). O Dockerfile.worker já traz isto no
+      # ENV; aqui é preciso porque o compose builda o Dockerfile padrão.
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "3"
       S3_BUCKET: marketDash_bucket
       S3_ENDPOINT: https://rsejwvxealraianensoz.storage.supabase.co/storage/v1/s3
       S3_ACCESS_KEY: b66c95e91947d71dc6c85880b59aafd3

@@ -20,4 +20,25 @@ RUN adduser --disabled-password --gecos "" --uid 1000 celeryuser
 # Ensure libpq looks for SSL certs in a path readable by celeryuser (fixes "postgresql.crt: Permission denied")
 ENV HOME=/home/celeryuser
 
-CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--uid=1000"]
+# Pool de banco POR PROCESSO. Fica na IMAGEM, não no painel: a concorrência de 8
+# e o pool menor são a MESMA decisão, e separar as duas em lugares diferentes é
+# como alguém sobe uma sem a outra e estoura o Supabase. Aqui elas não têm como
+# se desencontrar — e o ambiente ainda pode sobrepor se precisar.
+# 8 processos × (2+3) = 40 conexões, o mesmo total de antes (4 × 10).
+ENV DB_POOL_SIZE=2 \
+    DB_MAX_OVERFLOW=3
+
+# --concurrency EXPLÍCITO: sem a flag o Celery usa o nº de vCPUs (4 no VPS), um
+# default pensado para trabalho de CPU. As tasks de envio em grupo fazem o
+# oposto — dormem entre mensagens (pausa 8-20s por rodada) e seguram o slot por
+# até 15 min. Eram 4 afiliadas enviando por vez, com CSV e Shopee disputando os
+# mesmos slots.
+#
+# ⚠️ Anda junto com o ENV acima: o pool é POR PROCESSO, então 8 processos com o
+# default da API (5+5) abririam 80 conexões contra as 40 de hoje e estourariam o
+# Supabase antes de o WhatsApp virar gargalo. Mexer numa sem a outra é o erro.
+#
+# Sem `-Q`: o worker consome todas as filas de `task_queues` (a comum e a do
+# WhatsApp). É isso que torna a fila dedicada segura antes de existir worker
+# dedicado — ver FILA_WHATSAPP em app/tasks/celery_app.py.
+CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--uid=1000", "--concurrency=8"]
