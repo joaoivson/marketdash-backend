@@ -50,7 +50,13 @@ existe em produção**, e a divergência com hml é real.
 
 ---
 
-## 1. Estado medido em 26/08/2026
+## 1. Estado medido em 26/08/2026 (produção) e 31/08/2026 (homologação)
+
+> **Homologação remedida em 31/08/2026 e está completa**: as 22 tabelas do
+> módulo existem, as 8 colunas de `ALTER TABLE` estão presentes (incluindo
+> `envio_pausado`/`pausado_em` da `070`) e os três crons — `roteiros-tick-5min`,
+> `grupos-snapshot-3am-brt` e `proxy-health-horario` — estão agendados.
+> **Produção segue intocada**, por decisão.
 
 ### Módulo de Grupos
 
@@ -115,6 +121,20 @@ SELECT table_name, column_name FROM information_schema.columns
 -- crons agendados
 SELECT jobname, schedule FROM cron.job ORDER BY jobid;
 ```
+
+> ⚠️ **`policies=0` não é defeito — não "conserte".** Onze tabelas do módulo
+> aparecem com RLS ligado e zero policies: `whatsapp_grupo_instancias`,
+> `campanha_grupos`, `template_variacoes`, `roteiro_passos`, `campanha_links`,
+> `campanha_link_eventos`, `grupo_eventos`, `grupo_snapshots`,
+> `campanha_anuncios`, `monitoramento_capturas` e `whatsapp_proxies`.
+> **Nenhuma delas tem `user_id`** — o dono chega por join com a tabela pai — e
+> as migrations ligam RLS sem policy de propósito (o comentário está na `063` e
+> na `066`). RLS sem policy **nega tudo**, que é o estado mais restritivo
+> possível. Escrever uma policy ali exigiria inventar um `user_id` que não
+> existe. Conferido em hml em 31/08/2026.
+>
+> A leitura que **é** defeito é a inversa: tabela **com** `user_id`, RLS ligado
+> e zero policies — foi o caso do Instagram em produção (seção 0).
 
 **Toda migration daqui é idempotente e aditiva** — `IF NOT EXISTS` em tudo e
 `DROP POLICY IF EXISTS` antes de cada `CREATE POLICY` (conferido nas dez).
