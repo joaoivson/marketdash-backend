@@ -24,6 +24,8 @@ def rodar_resumo_diario(apenas_user_id: Optional[int] = None) -> dict:
         servico = WhatsappEnvioService(
             db=db,
             repo=WhatsappRepository(db),
+            # Mesma sessão global do resumo — fora do pool da 071 de propósito
+            # (ver _cliente_resumo em routes/whatsapp.py).
             cliente=WahaClient(
                 settings.WAHA_URL,
                 settings.WAHA_API_KEY,

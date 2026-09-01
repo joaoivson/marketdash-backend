@@ -90,6 +90,19 @@ def listar_instancias(
     return [_instancia_out(i) for i in servico.listar(current_user.id)]
 
 
+def _ha_servidor_waha(db: Session) -> bool:
+    """Existe alguma caixa para hospedar sessão nova? Pool primeiro, env depois."""
+    from app.repositories.waha_servidor_repository import WahaServidorRepository
+
+    try:
+        if any(s.disponivel for s in WahaServidorRepository(db).listar(ativos_apenas=True)):
+            return True
+    except Exception:
+        # Tabela ainda não existe (071 não aplicada) — cai no env.
+        logger.debug("Pool de servidores WAHA indisponível", exc_info=True)
+    return bool(settings.WAHA_URL and settings.WAHA_API_KEY)
+
+
 @router.post("/instancias", response_model=InstanciaOut, status_code=201)
 def criar_instancia(
     payload: InstanciaCriar,
@@ -97,7 +110,10 @@ def criar_instancia(
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
-    if not (settings.WAHA_URL and settings.WAHA_API_KEY):
+    # Duas fontes de servidor desde a 071: o pool e o env de antes. Exigir o env
+    # travaria um ambiente 100% pool (servidores só na tabela), que é o destino
+    # do desenho — o env vira legado, não pré-requisito.
+    if not _ha_servidor_waha(db):
         raise INDISPONIVEL
     try:
         instancia = _servico(db, request, current_user).criar(current_user.id, payload.nome_exibicao)

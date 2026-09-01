@@ -19,7 +19,7 @@ from app.models.whatsapp_grupos import (
     INSTANCIA_CONECTADA, INSTANCIA_CRIADA, INSTANCIA_DESCONECTADA,
     INSTANCIA_REMOVIDA, WhatsappInstancia,
 )
-from app.services import proxy_pool_service
+from app.services import proxy_pool_service, waha_servidor_service
 from app.services.waha_client import ErroWhatsapp, WahaClient, numero_de_jid
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,17 @@ def nome_de_instancia(user_id: int) -> str:
 
 
 def cliente_da_sessao(nome_instancia: str) -> WahaClient:
-    return WahaClient(settings.WAHA_URL, settings.WAHA_API_KEY, nome_instancia)
+    """Ponto ÚNICO por onde quase todo acesso ao WAHA passa (migration 071).
+
+    Antes do pool era `settings.WAHA_URL` fixo. Agora o endereço vem do
+    servidor da própria sessão, com cache em memória — a alternativa seria uma
+    query por mensagem enviada. Sessão sem servidor (anterior ao pool, ou
+    ambiente que não cadastrou nenhum) cai no env de antes.
+    """
+    from app.services import waha_servidor_service
+
+    base_url, api_key = waha_servidor_service.endereco_da_sessao(nome_instancia)
+    return WahaClient(base_url, api_key, nome_instancia)
 
 
 def eventos_desejados(precisa_de_message: bool) -> List[str]:
@@ -247,13 +257,15 @@ class WhatsappInstanciaService:
                 raise LimiteDeNumeros("PLANO_INSUFICIENTE: Números de WhatsApp são exclusivos do plano Max")
             if len(ativas) >= self.plan_limit_numeros:
                 raise LimiteDeNumeros(f"Limite de {self.plan_limit_numeros} números atingido")
-        if self.repo.total_global_ativas() >= settings.WHATSAPP_MAX_INSTANCIAS_GLOBAL:
-            logger.error("Cap global de sessões WAHA atingido (%s)",
-                         settings.WHATSAPP_MAX_INSTANCIAS_GLOBAL)
+        # Cap global: com pool cadastrado é SUM(max_sessoes) dos servidores
+        # ativos (migration 071); sem pool, o env de antes. Ver capacidade_global.
+        teto = waha_servidor_service.capacidade_global(self.db) if self.db is not None \
+            else settings.WHATSAPP_MAX_INSTANCIAS_GLOBAL
+        if self.repo.total_global_ativas() >= teto:
+            logger.error("Cap global de sessões WAHA atingido (%s)", teto)
             raise LimiteGlobal("Estamos no limite de conexões da plataforma. Tente mais tarde.")
 
         nome = nome_de_instancia(user_id)
-        cliente = cliente_da_sessao(nome)
         if not self.webhook_url or not settings.WAHA_WEBHOOK_TOKEN:
             # Sem webhook a sessão pareia, mas o estado nunca chega: número
             # caído continua "conectada" na tela até alguém abrir o QR.
@@ -266,6 +278,17 @@ class WhatsappInstanciaService:
             nome_instancia=nome,
             status=INSTANCIA_CRIADA,
         )
+        # Servidor ANTES do WAHA: é ele que diz com qual caixa falar para criar
+        # a sessão. A alocação é DEFINITIVA — o estado do whatsmeow fica no
+        # Postgres daquele WAHA e não migra depois (migration 071).
+        servidor = waha_servidor_service.escolher(self.db, user_id) if self.db is not None else None
+        waha_servidor_service.fixar(instancia, servidor)
+        if servidor is not None:
+            cliente = WahaClient(servidor.base_url, waha_servidor_service.api_key(servidor), nome)
+        else:
+            # Pool vazio (ambiente anterior à 071) — servidor único das envs.
+            cliente = cliente_da_sessao(nome)
+
         # Proxy ANTES do WAHA: a sessão precisa nascer já atrás do IP dela.
         # Aplicar depois exigiria stop→PUT→start numa sessão recém-pareada —
         # justamente a troca de IP que o desenho existe para evitar.

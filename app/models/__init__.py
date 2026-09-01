@@ -32,6 +32,7 @@ from app.models.sync_error_log import SyncErrorLog
 from app.models.sync_run import SyncRun
 from app.models.whatsapp import WhatsappOptin, WhatsappEnvio
 from app.models.whatsapp_proxies import WhatsappProxy
+from app.models.waha_servidores import WahaServidor
 from app.models.whatsapp_grupos import WhatsappInstancia, WhatsappGrupo, WhatsappGrupoInstancia
 from app.models.campanha_grupos import Campanha, CampanhaGrupo
 from app.models.integracao import Integracao

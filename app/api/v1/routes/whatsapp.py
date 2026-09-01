@@ -42,6 +42,9 @@ EVENTOS_DA_SESSAO_RESUMO = ["message", "session.status"]
 
 
 def _cliente_resumo() -> WahaClient:
+    # Sessão GLOBAL do resumo diário (o número do MarketDash), não de afiliada:
+    # não tem linha em whatsapp_instancias, logo não entra no pool da 071 e
+    # continua no servidor das envs. Para movê-la, mude WAHA_URL.
     return WahaClient(
         settings.WAHA_URL, settings.WAHA_API_KEY, settings.WAHA_SESSAO_RESUMO
     )

@@ -52,6 +52,9 @@ if PG_OK:
             "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS "
             "envio_pausado BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS pausado_em TIMESTAMPTZ",
+            # 071 (WAHA multi-servidor): idem. A FK fica de fora de propósito —
+            # aqui só interessa a coluna existir para o INSERT do model passar.
+            "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS servidor_id INTEGER",
         ):
             _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)

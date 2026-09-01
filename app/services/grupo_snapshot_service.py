@@ -7,7 +7,7 @@ hora aqui desde o incidente de 20/07.
 """
 import logging
 from datetime import date
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -61,34 +61,75 @@ def reconciliar_orfas(db: Session) -> int:
         cliente_da_sessao, pertence_a_este_ambiente,
     )
 
-    if not (settings.WAHA_URL and settings.WAHA_API_KEY):
-        return 0
-    cliente = WahaClient(settings.WAHA_URL, settings.WAHA_API_KEY, "-")
-    try:
-        status, dados = cliente._pedir("GET", "/api/sessions")
-    except ErroWhatsapp as e:
-        logger.warning("Reconciliação: não deu para listar sessões (%s)", e.motivo)
-        return 0
-    if status >= 400 or not isinstance(dados, list):
+    from app.services import waha_servidor_service
+
+    # ⚠️ Multi-servidor (migration 071): varrer só o servidor padrão deixaria
+    # órfã em shard não visitado viva PARA SEMPRE, consumindo a RAM que o pool
+    # existe para administrar. E `cliente_da_sessao` não serve para apagar
+    # órfã: ela não tem linha no banco (é essa a definição de órfã), então o
+    # resolvedor cairia no padrão e o DELETE iria para a caixa errada — em
+    # silêncio. Por isso o cliente é montado com o endereço de ONDE a sessão
+    # foi encontrada.
+    enderecos = _enderecos_para_varrer(db)
+    if not enderecos:
         return 0
 
     repo = WhatsappInstanciaRepository(db)
     removidas = 0
-    for sessao in dados:
-        nome = str((sessao or {}).get("name") or "")
-        if not nome or nome == settings.WAHA_SESSAO_RESUMO:
+    for rotulo, base_url, api_key in enderecos:
+        try:
+            status, dados = WahaClient(base_url, api_key, "-")._pedir("GET", "/api/sessions")
+        except ErroWhatsapp as e:
+            logger.warning("Reconciliação: não deu para listar sessões de %s (%s)",
+                           rotulo, e.motivo)
             continue
-        # Só mexe em sessão DESTE ambiente — hml e prod dividem o servidor.
-        if not pertence_a_este_ambiente(nome):
+        if status >= 400 or not isinstance(dados, list):
             continue
-        if repo.por_nome(nome) is None:
+
+        for sessao in dados:
+            nome = str((sessao or {}).get("name") or "")
+            if not nome or nome == settings.WAHA_SESSAO_RESUMO:
+                continue
+            # Só mexe em sessão DESTE ambiente — hml e prod dividem o servidor.
+            if not pertence_a_este_ambiente(nome):
+                continue
+            if repo.por_nome(nome) is not None:
+                continue
             try:
-                cliente_da_sessao(nome).deletar_sessao()
+                WahaClient(base_url, api_key, nome).deletar_sessao()
                 removidas += 1
-                logger.warning("Sessão órfã removida do WAHA: %s", nome)
+                logger.warning("Sessão órfã removida de %s: %s", rotulo, nome)
             except ErroWhatsapp as e:
-                logger.warning("Falha ao remover órfã %s: %s", nome, e.motivo)
+                logger.warning("Falha ao remover órfã %s em %s: %s", nome, rotulo, e.motivo)
     return removidas
+
+
+def _enderecos_para_varrer(db: Session) -> List[Tuple[str, str, Optional[str]]]:
+    """(rótulo, base_url, api_key) de todo servidor que pode hospedar sessão
+    nossa: os do pool + o padrão das envs, sem repetir base_url.
+
+    O padrão entra mesmo com pool cadastrado porque sessão anterior à 071
+    (servidor_id nulo) ainda vive lá.
+    """
+    from app.core.config import settings
+    from app.services import waha_servidor_service
+    from app.repositories.waha_servidor_repository import WahaServidorRepository
+
+    enderecos: List[Tuple[str, str, Optional[str]]] = []
+    vistos = set()
+
+    try:
+        for s in WahaServidorRepository(db).listar(ativos_apenas=True):
+            if s.base_url and s.base_url not in vistos:
+                vistos.add(s.base_url)
+                enderecos.append((s.rotulo, s.base_url, waha_servidor_service.api_key(s)))
+    except Exception:
+        # Tabela ainda não existe (071 não aplicada) — o padrão abaixo cobre.
+        logger.debug("Pool de servidores WAHA indisponível na reconciliação", exc_info=True)
+
+    if settings.WAHA_URL and settings.WAHA_API_KEY and settings.WAHA_URL not in vistos:
+        enderecos.append(("padrão (env)", settings.WAHA_URL, settings.WAHA_API_KEY))
+    return enderecos
 
 
 def reconciliar_eventos_de_sessao(db: Session) -> int:

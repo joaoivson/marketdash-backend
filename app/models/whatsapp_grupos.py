@@ -43,6 +43,12 @@ class WhatsappInstancia(Base):
                       nullable=True, index=True)
     proxy_fixado_em = Column(DateTime(timezone=True), nullable=True)
     proxy_trocas = Column(Integer, nullable=False, default=0)
+    # --- servidor WAHA (migration 071). DEFINITIVO: o estado do whatsmeow vive
+    # no Postgres do WAHA que pareou a sessão, então mudar isto depois não move
+    # a sessão — só faz o backend falar com a caixa errada. Nulo = sessão
+    # anterior ao pool; o resolvedor cai em settings.WAHA_URL.
+    servidor_id = Column(Integer, ForeignKey("waha_servidores.id", ondelete="SET NULL"),
+                         nullable=True, index=True)
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     atualizado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
