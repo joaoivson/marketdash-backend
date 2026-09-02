@@ -11,6 +11,22 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Mobile: Instagram no drawer "Mais" + nota botão×texto)
+
+- **fix(mobile) `main 65862fe`**: em `main`, a sidebar e o `MobileBottomNav`
+  têm listas separadas (a config única `dashboard-menu.ts` é só do develop).
+  O gate foi aberto na sidebar (2d336a8) mas o nav mobile nunca teve o item —
+  celular em produção ficou sem caminho até `/dashboard/automacoes`. Agora
+  "Automação Instagram" está no drawer "Mais" (validado em prod, viewport
+  390px, navegação ok, zero 5xx). develop não precisa do fix (deriva do
+  `DASHBOARD_MENU`); no futuro merge, manter a versão de develop.
+- **Esclarecimento botão×texto na DM** (não é bug): a regra do backend é o
+  PAR — link+botão = template `button`; link sem botão / botão sem link =
+  422 com mensagem dizendo o que falta; **os dois vazios = DM de texto puro**
+  (`instagram_login_client.py:381-395`). Para texto puro, limpar os DOIS
+  campos do Card 4. `INSTAGRAM_DM_FORMATO=texto` segue sendo só o interruptor
+  global de emergência.
+
 ## [Não versionado] - 2026-09-02 (Plano Max lançado na página de vendas)
 
 Com o Instagram no ar, o Max saiu do modo "só por link direto da Kiwify" e
