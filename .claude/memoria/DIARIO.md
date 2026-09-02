@@ -11,6 +11,41 @@
 
 ---
 
+## 2026-09-02 (noite) — Rodada 9 do painel admin: as 3 causas eram outras
+
+O que mudou: MRR mensaliza sempre ("annually" entrou nos apelidos de
+frequência, agora centralizados em `_norm_freq`); bruto do MRR lê
+`Commissions.product_base_price` do raw_payload (fallback tabela → bruto
+real); "Cancelado pelo produtor" conta churn (exceção segue sendo o par de
+upgrade); pareamento de upgrade compara plano NORMALIZADO; backfill desfez 3
+flags falsos em produção (Bruna Cabral + par do Deivit; Ana Ariel e Luiz
+Fernando mantidos). Na sequência, "Telas mais acessadas" aprendeu as telas
+novas (rótulos do menu; /dashboard/admin, /auth e /g/ excluídos do ranking).
+
+Por quê assim: o doc do Luiz apontava sintomas certos com causas erradas — o
+diagnóstico assinante a assinante contra produção mostrou que (1) o problema
+não era o afiliado: a Kiwify manda "annually" numas assinaturas anuais e
+"yearly" noutras, e a lista de apelidos existia em DUAS versões divergentes
+(daí a decisão: apelido de frequência vive num lugar só); (2) o webhook manda
+`cancel_reason` VAZIO — a exclusão por motivo nunca filtrou nada de webhook;
+quem escondia a Bruna do churn era um falso upgrade criado pela comparação de
+rótulo cru ("Pro" do import vs "PRO - Mensal" do webhook). Efeitos
+retroativos INTENCIONAIS da regra: julho 6→7 canceladas (Deivit, simétrico
+com as 7 novas dele) e abril 1→2 (Lara Luiza, produtor do import).
+
+Gotchas de deploy: o `Deploy to Production` do frontend caiu no curl 28
+runner→Coolify (intermitência conhecida) — disparado direto na API do Coolify
+da máquina local; `CHANGELOG.md` não existia na `main` do backend e o
+cherry-pick conflitou (DU) — o arquivo agora existe nos dois branches. A
+suíte na `main` coleta com 25 erros AMBIENTAIS (Settings antigo rejeita
+chaves novas do `.env` local) — não é regressão. Validação visual com o
+supabase.co inalcançável da máquina: gate do /admin é 100% localStorage +
+interceptação de rotas no Playwright com JSON real da service.
+
+Pendente: nada da rodada. Avisar o Luiz dos retroativos de julho/abril.
+
+---
+
 ## 2026-09-02 (tarde) — Automação em STORY nasce em hml
 
 O que mudou: reply de story vira DM automática. Webhook assina

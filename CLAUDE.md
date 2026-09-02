@@ -83,7 +83,19 @@ KPIs are calculated from `DatasetRow.raw_data` JSONB (original CSV fields):
   frágil por natureza: qualquer mudança na lógica de `is_plan_change`
   precisa reconferir os 4 achados da Rodada 6 (zero-rows, contaminação de
   total por CPF, candidatura efêmera) — todos com teste de regressão
-  sintético em `test_admin_metrics_service.py`.
+  sintético em `test_admin_metrics_service.py`. Desde a Rodada 9 o
+  pareamento compara plano NORMALIZADO (essencial/pro/max + frequência),
+  nunca `plan_name` cru — "Pro" (import) e "PRO - Mensal" (webhook) são o
+  mesmo plano, e a comparação crua marcava cancelamento real como upgrade.
+- **Apelidos de frequência da Kiwify só em `_norm_freq`** (`app/core/plans.py`).
+  A Kiwify manda "yearly" numas assinaturas anuais e "annually" noutras;
+  qualquer lista própria de apelidos diverge e reintroduz o bug da Rodada 9
+  (anual entrando no MRR sem ÷12). `_freq_divisor`, labels de CSV e o
+  espelho do frontend derivam todos dela.
+- **"Cancelado pelo produtor" CONTA como churn** (Rodada 9). A exceção é o
+  par de upgrade (`is_plan_change`), não o motivo — até porque o webhook
+  manda `cancel_reason` vazio e filtro por motivo nunca pegou nada de
+  produção.
 - **`cast(coluna_timestamptz, Date)` trunca no fuso da SESSÃO do Postgres
   (não BRT).** Bucketing por dia civil (7d/30d/90d, "dias ativos", etc.)
   precisa do padrão `_brt_date()`/`BRT` já em `admin_metrics_service.py`

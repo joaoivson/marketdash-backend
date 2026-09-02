@@ -1,7 +1,7 @@
 # Contexto — MarketDash Backend
 
 > **Estado atual do repositório.** Sobrescreva as seções ao mudarem — o
-> histórico vive em `DIARIO.md`. Última atualização: **2026-08-21**.
+> histórico vive em `DIARIO.md`. Última atualização: **2026-09-02**.
 >
 > Esta primeira versão foi montada por inspeção do código, do `CHANGELOG.md`
 > da raiz e do `git log` de `develop`. Onde ela divergir do código, **o código
@@ -137,9 +137,12 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   ⚠️ Em hml/produção **implantados** a flag não muda nada ainda: o backend
   desta feature não foi commitado nem deployado.
 
-- **Rodada 7 do painel admin** validada só contra **homologação**. Itens 1, 2,
-  3 e o achado card×lista precisam de reconfirmação contra **produção** — ver
-  a seção de pendências no `CHANGELOG.md` da raiz.
+- **Painel admin: Rodada 9 FECHADA em 02/09, validada contra PRODUÇÃO**
+  (diagnóstico assinante a assinante + backfill de `is_plan_change` rodado em
+  prod; hml tinha 0 eventos). Regras vigentes: frequência normalizada só em
+  `_norm_freq` (plans.py); bruto do MRR = `product_base_price` do webhook;
+  produtor conta churn; pareamento de upgrade por plano normalizado. A nota
+  antiga da Rodada 7 (validada só contra hml) está superada por esta.
 - **Automação Instagram: EM PRODUÇÃO desde 02/09** (App Review aprovado
   01/09, as 3 permissões com Advanced Access). Migrations 052–056 aplicadas
   em produção, cron de token agendado (202 validado), envs `INSTAGRAM_*` na
