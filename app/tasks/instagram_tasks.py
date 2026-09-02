@@ -58,6 +58,54 @@ def processar_comentario_instagram_task(self, ig_user_id: str, valor: dict):
         db.close()
 
 
+@celery_app.task(bind=True, max_retries=3, soft_time_limit=120, time_limit=150)
+def processar_story_reply_instagram_task(self, ig_user_id: str, evento: dict):
+    """Processa UM reply de story: matching, dedupe e a DM de resposta.
+
+    Mesma política de retry da task de comentário: só rede/5xx, com o throttle
+    horário reenfileirando sem queimar tentativa.
+    """
+    from app.db.session import SessionLocal
+    from app.repositories.instagram_automation_repository import InstagramAutomationRepository
+    from app.services import instagram_login_client as ig
+    from app.services.instagram_comment_pipeline import (
+        InstagramCommentPipeline,
+        ThrottleExcedido,
+    )
+
+    db = SessionLocal()
+    try:
+        pipeline = InstagramCommentPipeline(InstagramAutomationRepository(db))
+        resultado = asyncio.run(pipeline.processar_story_reply(ig_user_id, evento or {}))
+        logger.info(
+            "Instagram story reply %s ig_user_id=%s -> %s",
+            (evento or {}).get("mid"), ig_user_id, resultado,
+        )
+        return resultado
+    except ThrottleExcedido as exc:
+        db.rollback()
+        raise self.retry(exc=exc, countdown=exc.segundos_para_tentar, max_retries=10)
+    except ig.InstagramApiError as exc:
+        db.rollback()
+        if exc.permanente:
+            logger.info(
+                "Instagram: erro permanente story mid=%s (%s) — sem retry",
+                (evento or {}).get("mid"), exc.codigo_curto,
+            )
+            return {"status": "falhou", "permanente": True, "erro": exc.mensagem}
+        espera = 60 * (2 ** self.request.retries)
+        raise self.retry(exc=exc, countdown=espera)
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "processar_story_reply_instagram_task falhou mid=%s: %s",
+            (evento or {}).get("mid"), exc,
+        )
+        raise self.retry(exc=RuntimeError(str(exc)), countdown=120)
+    finally:
+        db.close()
+
+
 @celery_app.task
 def renovar_tokens_instagram_task():
     """Renova os tokens que vencem em menos de 10 dias.

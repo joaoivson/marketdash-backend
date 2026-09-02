@@ -150,6 +150,35 @@ async def receber_webhook(
         ig_user_id = str(entrada.get("id") or "")
         if not ig_user_id:
             continue
+
+        # Replies de STORY chegam pelo campo `messages` (story não tem
+        # comentário): cada item de entry.messaging é uma DM. Assinar `messages`
+        # faz TODAS as DMs da conta baterem aqui — o descarte do que não é reply
+        # de story acontece NESTE primeiro filtro, e nada além do necessário
+        # segue adiante (mesma política do monitoramento de grupos).
+        for msg_evt in entrada.get("messaging") or []:
+            mensagem = msg_evt.get("message") or {}
+            if mensagem.get("is_echo"):
+                continue  # eco do que NÓS enviamos — responder seria loop
+            story = (mensagem.get("reply_to") or {}).get("story") or {}
+            if not story.get("id"):
+                continue  # DM comum/reação — não é reply de story, descarta
+            remetente = str(((msg_evt.get("sender") or {}).get("id")) or "")
+            if not remetente or remetente == ig_user_id:
+                continue
+            _enfileirar_story_reply(
+                ig_user_id,
+                {
+                    "mid": mensagem.get("mid"),
+                    "sender_id": remetente,
+                    "story_id": str(story.get("id")),
+                    "text": mensagem.get("text") or "",
+                    # epoch em MILISSEGUNDOS na mensageria (o parse normaliza)
+                    "timestamp": msg_evt.get("timestamp"),
+                },
+            )
+            enfileirados += 1
+
         for mudanca in entrada.get("changes") or []:
             if mudanca.get("field") != "comments":
                 continue
@@ -181,6 +210,21 @@ def _enfileirar(ig_user_id: str, valor: dict) -> None:
         logger.error(
             "Instagram: falha ao enfileirar comentário ig_user_id=%s comment=%s: %s",
             ig_user_id, (valor or {}).get("id"), exc,
+        )
+
+
+def _enfileirar_story_reply(ig_user_id: str, evento: dict) -> None:
+    """Mesma política do _enfileirar: broker fora do ar não derruba o webhook."""
+    try:
+        from app.tasks.instagram_tasks import processar_story_reply_instagram_task
+
+        processar_story_reply_instagram_task.apply_async(
+            kwargs={"ig_user_id": ig_user_id, "evento": evento}, priority=0
+        )
+    except Exception as exc:
+        logger.error(
+            "Instagram: falha ao enfileirar reply de story ig_user_id=%s mid=%s: %s",
+            ig_user_id, (evento or {}).get("mid"), exc,
         )
 
 

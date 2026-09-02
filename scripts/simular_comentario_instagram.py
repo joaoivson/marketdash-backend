@@ -53,6 +53,15 @@ def main() -> int:
         default=0.0,
         help="envelhece o comentário — use 8 para testar a janela de 7 dias",
     )
+    p.add_argument(
+        "--story",
+        action="store_true",
+        help=(
+            "simula um REPLY DE STORY (webhook `messages`) em vez de comentário. "
+            "--media-id vira o id do story; --comment-id vira o mid; a janela é "
+            "de 24h (use --idade-dias 1.1 para testar)."
+        ),
+    )
     args = p.parse_args()
 
     segredo = os.environ.get("INSTAGRAM_APP_SECRET")
@@ -64,30 +73,61 @@ def main() -> int:
     ts = agora - int(args.idade_dias * 86_400)
     comment_id = args.comment_id or f"sim-{agora}"
 
-    payload = {
-        "object": "instagram",
-        "entry": [
-            {
-                "id": args.ig_user_id,
-                "time": ts,
-                "changes": [
-                    {
-                        "field": "comments",
-                        "value": {
-                            "id": comment_id,
-                            "text": args.texto,
-                            "timestamp": ts,
-                            "from": {
-                                "id": args.commenter_id,
-                                "username": args.commenter_username,
+    if args.story:
+        # Reply de story: formato do webhook `messages` (timestamp em MILISSEGUNDOS,
+        # mid no lugar de comment_id, story em reply_to). O pipeline responde com a
+        # Send API por recipient id — dali em diante tudo é real.
+        payload = {
+            "object": "instagram",
+            "entry": [
+                {
+                    "id": args.ig_user_id,
+                    "time": ts,
+                    "messaging": [
+                        {
+                            "sender": {"id": args.commenter_id},
+                            "recipient": {"id": args.ig_user_id},
+                            "timestamp": ts * 1000,
+                            "message": {
+                                "mid": comment_id,
+                                "text": args.texto,
+                                "reply_to": {
+                                    "story": {
+                                        "id": args.media_id,
+                                        "url": "https://cdn.example.invalid/story.mp4",
+                                    }
+                                },
                             },
-                            "media": {"id": args.media_id, "media_product_type": "FEED"},
-                        },
-                    }
-                ],
-            }
-        ],
-    }
+                        }
+                    ],
+                }
+            ],
+        }
+    else:
+        payload = {
+            "object": "instagram",
+            "entry": [
+                {
+                    "id": args.ig_user_id,
+                    "time": ts,
+                    "changes": [
+                        {
+                            "field": "comments",
+                            "value": {
+                                "id": comment_id,
+                                "text": args.texto,
+                                "timestamp": ts,
+                                "from": {
+                                    "id": args.commenter_id,
+                                    "username": args.commenter_username,
+                                },
+                                "media": {"id": args.media_id, "media_product_type": "FEED"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
 
     # A assinatura é sobre os BYTES enviados — reserializar muda espaços e quebra o HMAC.
     corpo = json.dumps(payload).encode("utf-8")
