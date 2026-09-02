@@ -11,6 +11,31 @@
 
 ---
 
+## 2026-09-02 (tarde) — Automação em STORY nasce em hml
+
+O que mudou: reply de story vira DM automática. Webhook assina
+`comments,messages` e descarta na entrada toda DM que não é reply de story;
+pipeline espelha o de comentário (dedupe pelo mid — migration 072 alargou
+comment_id p/ 160 e criou `tipo` —, janela 24h da mensageria, teto horário
+compartilhado, sem resposta pública). Editor: Card 1 virou toggle
+Publicações×Stories (sugestão do João) com seletor de stories ativos.
+
+Por quê assim: pesquisa na doc da Meta ANTES de codar (3 leitores + refutação
+adversarial) fixou os limites — story não tem comentário; `messages` não tem
+filtro (todas as DMs chegam, o descarte é nosso); arquivo/highlights NÃO
+existem na API; republicar exigiria content_publish + App Review (João
+descartou). A dúvida que a doc não fechou (`/stories` na variante Instagram
+Login) foi fechada na prática: 200 com o story real do João em hml.
+
+Gotcha operacional: o CI de homologação do frontend falhou 2× em silêncio no
+passo do Coolify (conectividade runner→IP conhecida) — hml rodou bundle velho
+o dia todo e o primeiro teste do João pegou a UI antiga. Deploy disparado
+direto na API do Coolify resolve; conferir o CI antes de confiar no hml.
+
+Pendente: promoção para produção (072 em prod ANTES do push; cherry-picks;
+assinar `messages` no painel; re-inscrever contas; E2E real com story), e o
+preview do editor ainda mostra mock de comentário no escopo story (cosmético).
+
 ## 2026-09-02 — Instagram entra em produção (App Review aprovado)
 
 O que mudou: migrations 052–056 aplicadas no Supabase de produção (052 criou

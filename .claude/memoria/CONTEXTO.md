@@ -144,9 +144,13 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   01/09, as 3 permissões com Advanced Access). Migrations 052–056 aplicadas
   em produção, cron de token agendado (202 validado), envs `INSTAGRAM_*` na
   API e no worker, gate de ambiente removido no frontend (o de plano MAX
-  fica). Pendente: swap da URL do webhook no painel Meta (única por app —
-  depois disso hml só testa via `scripts/simular_comentario_instagram.py`)
-  e E2E real com conta MAX. Ver CHANGELOG 2026-09-02.
+  fica). Swap do webhook e E2E real FEITOS na manhã de 02/09 (reply+DM
+  `enviado`; hml testa via `scripts/simular_comentario_instagram.py`).
+  **Automação em STORY** (reply→DM via webhook `messages`, migration 072,
+  escopos story_especifico/story_qualquer) no ar em HOMOLOGAÇÃO desde a
+  tarde de 02/09 — promoção pendente de aprovação do João; checklist no
+  CHANGELOG. `GET /me/stories` confirmado na nossa variante (200 com o
+  story real). Ver CHANGELOG 2026-09-02.
 - **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **070**
   (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
   hml em 31/08 — ⚠️ é `ALTER TABLE`, a armadilha *inversa* do `create_all`:
