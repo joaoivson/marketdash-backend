@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.plans import _norm_freq
 from app.db.session import get_db
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.services.subscription_service import SubscriptionService, UNSET
@@ -567,8 +568,13 @@ async def kiwify_webhook(
                 # cliente novo, entra no mínimo. Melhor tier errado que sem acesso.
                 current = subscription_service.repo.get_by_user_id(user.id)
                 plan_id = (current.plan if current and current.plan else None) or "essencial"
+                # _norm_freq: o webhook manda "monthly"/"annually"; a coluna
+                # guarda mensal|trimestral|anual (Rodada 9 — "annually" cru
+                # quebraria o match de período nos links de checkout).
                 periodo = (current.plano_periodo if current else None) or (
-                    transaction_data.get("plan_frequency") or None
+                    _norm_freq(transaction_data.get("plan_frequency"))
+                    if transaction_data.get("plan_frequency")
+                    else None
                 )
             else:
                 plan_id = "essencial"

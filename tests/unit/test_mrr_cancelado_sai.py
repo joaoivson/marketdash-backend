@@ -53,7 +53,9 @@ def test_is_canceled_reconhece_evento_e_status():
     assert _is_canceled(_ev()) is False
 
 
-def test_cancel_instants_ignora_plan_change_e_ajuste_do_produtor():
+def test_cancel_instants_ignora_plan_change_mas_conta_produtor():
+    """Rodada 9, item 2: "Cancelado pelo produtor" é saída real e conta como
+    cancelamento; só upgrade/continuação (is_plan_change) fica de fora."""
     real = _ev(
         id=1,
         event_type="subscription_canceled",
@@ -61,11 +63,17 @@ def test_cancel_instants_ignora_plan_change_e_ajuste_do_produtor():
     )
     upgrade = _ev(id=2, event_type="subscription_canceled", is_plan_change=True)
     produtor = _ev(
-        id=3, event_type="subscription_canceled", cancel_reason="Cancelado pelo produtor"
+        id=3,
+        event_type="subscription_canceled",
+        cancel_reason="Cancelado pelo produtor",
+        canceled_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
     )
     instantes = cancel_instants([real, upgrade, produtor])
-    todos = [dt for lista in instantes.values() for dt in lista]
-    assert todos == [datetime(2026, 7, 20, tzinfo=timezone.utc)]
+    todos = sorted(dt for lista in instantes.values() for dt in lista)
+    assert todos == [
+        datetime(2026, 7, 20, tzinfo=timezone.utc),
+        datetime(2026, 7, 25, tzinfo=timezone.utc),
+    ]
 
 
 def test_renewing_exclui_cancelada_com_acesso():

@@ -97,8 +97,9 @@ def admin_clients(
 # — o CSV é gerado aqui no backend, então a tradução não pode vir só do TS.
 _CSV_FREQUENCY_LABELS = {
     "monthly": "Mensal", "mensal": "Mensal",
-    "quarterly": "Trimestral", "trimestral": "Trimestral",
-    "yearly": "Anual", "annual": "Anual", "anual": "Anual",
+    "quarterly": "Trimestral", "trimestral": "Trimestral", "quarter": "Trimestral",
+    # "annually" existe em produção (Rodada 9) — mesma lista de apelidos de _norm_freq
+    "yearly": "Anual", "annual": "Anual", "annually": "Anual", "anual": "Anual", "year": "Anual",
 }
 _CSV_STATUS_LABELS = {
     "ativo": "Ativo", "atrasado": "Atrasado", "inativo": "Inativo",

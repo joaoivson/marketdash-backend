@@ -259,11 +259,10 @@ def test_cancelamento_real_da_chave_nova_do_upgrade_desfaz_renovacao():
     assert svc.renewal_rate(2026, 8) == 0.0
 
 
-def test_cancelamento_ajuste_produtor_no_ciclo_nao_desfaz_renovacao():
-    """Finding 2b: cancelamento com cancel_reason="cancelado pelo produtor"
-    dentro da janela do ciclo não é churn real (ajuste administrativo) —
-    cancel_instants() já exclui esse motivo, e renewal_rate() precisa
-    reaproveitar essa exclusão."""
+def test_cancelamento_ajuste_produtor_no_ciclo_desfaz_renovacao():
+    """Rodada 9, item 2: "cancelado pelo produtor" é saída real — a cliente
+    pediu pelo suporte e o Luiz cancelou pela Kiwify. Um cancelamento assim
+    dentro da janela do ciclo desfaz a renovação como qualquer outro."""
     monica_jul = _cobranca("M-JUL", "777", datetime(2026, 7, 6, tzinfo=timezone.utc))
     monica_ago = _cobranca(
         "M-AGO", "777", datetime(2026, 8, 6, 8, 0, tzinfo=timezone.utc)
@@ -278,4 +277,4 @@ def test_cancelamento_ajuste_produtor_no_ciclo_nao_desfaz_renovacao():
     svc._all_events = lambda: [monica_jul, monica_ago, monica_cancel_produtor]
     svc._agora = lambda: datetime(2026, 8, 11, 23, 0, tzinfo=timezone.utc)
 
-    assert svc.renewal_rate(2026, 8) == 1.0
+    assert svc.renewal_rate(2026, 8) == 0.0

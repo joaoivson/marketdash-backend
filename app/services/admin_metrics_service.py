@@ -19,7 +19,7 @@ from app.models.user_login import UserLogin
 from app.models.ad_spend import AdSpend
 from app.models.dataset_row import DatasetRow
 from app.services.charges import extract_paid_charges, total_paid_net
-from app.core.plans import list_price_cents
+from app.core.plans import _norm_freq, list_price_cents
 
 PAID_EVENTS = {
     "order_approved",
@@ -33,10 +33,11 @@ REFUND_EVENTS = {
     "compra_reembolsada",
 }
 CANCEL_EVENTS = {"subscription_canceled"}
-# Cancelamento feito pelo produtor (ajuste/teste do Luiz no painel Kiwify) não é
-# churn real — cliente não saiu, foi um ajuste administrativo. is_plan_change
-# não serve pra isso (é semântica de continuação/upgrade); cancel_reason sim.
-PRODUTOR_ADJUSTMENT_REASONS = {"cancelado pelo produtor"}
+# Rodada 9, item 2: "Cancelado pelo produtor" CONTA como churn normal — quando
+# a cliente pede o cancelamento pelo suporte, o Luiz cancela pela Kiwify e o
+# motivo vem como produtor, mas a saída é real. A única exceção é cancelamento
+# casado com upgrade/reassinatura em ≤30 dias, e essa exceção já é o
+# `is_plan_change` (encontrar_par_de_plan_change) — motivo não entra na conta.
 FAILED_PAY_EVENTS = {
     "subscription_late",
     "order_refused",
@@ -67,12 +68,10 @@ def _brt_date(dt: datetime) -> date:
 
 
 def _freq_divisor(frequency: Optional[str]) -> int:
-    f = (frequency or "").lower()
-    if f in ("quarterly", "trimestral", "quarter"):
-        return 3
-    if f in ("yearly", "annual", "anual", "year"):
-        return 12
-    return 1
+    # Delega a normalização pra `_norm_freq` (app/core/plans) — a lista de
+    # apelidos da Kiwify vive num lugar só. Ter duas listas foi o bug da
+    # Rodada 9: "annually" existia numa e não na outra.
+    return {"mensal": 1, "trimestral": 3, "anual": 12}[_norm_freq(frequency)]
 
 
 def _add_months(dt: datetime, months: int) -> datetime:
@@ -91,6 +90,33 @@ def _utc(value):
     if not isinstance(value, datetime):
         return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _product_base_price_cents(ev) -> Optional[int]:
+    """Preço base real da venda — `Commissions.product_base_price` do webhook.
+
+    Rodada 9, item 1: o bruto do MRR lê o preço base que a Kiwify mandou NAQUELA
+    venda, não o preço de tabela presumido — numa venda com cupom a tabela
+    erraria. O campo não tem coluna própria (fica no raw_payload); evento do
+    import histórico não o tem e cai no fallback de quem chamou.
+    """
+    raw = getattr(ev, "raw_payload", None) or {}
+    if not isinstance(raw, dict):
+        return None
+    order = raw.get("order") or raw
+    if not isinstance(order, dict):
+        return None
+    comm = order.get("Commissions") or order.get("commissions") or {}
+    if not isinstance(comm, dict):
+        return None
+    valor = comm.get("product_base_price")
+    if valor is None or valor == "":
+        return None
+    try:
+        # mesmo contrato do recorder (_as_cents): a Kiwify manda centavos
+        return int(round(float(valor)))
+    except (TypeError, ValueError):
+        return None
 
 
 def build_coverage_periods(events: List["SubscriptionEvent"]) -> Dict[str, List[Dict[str, Any]]]:
@@ -362,16 +388,15 @@ def cancel_instants(events) -> Dict[str, List[datetime]]:
 
     Rodada 6, item 2. Base pro MRR histórico: uma assinatura só conta no mês M
     se cobria o fim de M E não estava cancelada até lá. Upgrade/downgrade
-    (`is_plan_change`) e ajuste do produtor não são saída de cliente.
+    (`is_plan_change`) não é saída de cliente. "Cancelado pelo produtor" É
+    (Rodada 9, item 2): a cliente pediu pra sair pelo suporte e o Luiz cancelou
+    pela Kiwify — o motivo administrativo não muda o fato.
     """
     por_assinante: Dict[str, List[datetime]] = defaultdict(list)
     for ev in events:
         if (ev.event_type or "").lower() not in CANCEL_EVENTS:
             continue
         if getattr(ev, "is_plan_change", False):
-            continue
-        motivo = (getattr(ev, "cancel_reason", None) or "").strip().lower()
-        if motivo in PRODUTOR_ADJUSTMENT_REASONS:
             continue
         quando = _utc(getattr(ev, "canceled_at", None) or ev.received_at)
         if quando:
@@ -549,13 +574,17 @@ class AdminMetricsService:
             # última cobrança paga da assinatura
             paid = self._last_paid_for(ev)
             n = (paid.amount_net_cents if paid else ev.amount_net_cents) or 0
-            # Bruto (Rodada 7, item 3) = preço de TABELA vigente, não a última
-            # cobrança real — evita que desconto/cupom histórico distorça o
-            # "faturamento potencial" que o bruto representa. Sem preço
-            # cadastrado pro plano/frequência, cai no valor real pago.
+            # Bruto (Rodada 9, item 1) = preço BASE real da venda, lido do
+            # webhook (`product_base_price`) — não o preço de tabela presumido:
+            # em venda com cupom a tabela erraria. Sem o campo (import
+            # histórico), cai na tabela; sem tabela, no valor real pago.
+            fonte = paid or ev
             plano = _normalize_plan_label(ev.plan_name, ev.plan_id)
-            tabela = list_price_cents(plano, ev.plan_frequency)
-            g = tabela if tabela is not None else ((paid.amount_gross_cents if paid else ev.amount_gross_cents) or 0)
+            g = _product_base_price_cents(fonte)
+            if g is None:
+                g = list_price_cents(plano, ev.plan_frequency)
+            if g is None:
+                g = fonte.amount_gross_cents or 0
             net_frac += n / div
             gross_frac += g / div
         return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
@@ -694,11 +723,6 @@ class AdminMetricsService:
             )
             .all()
         )
-        # Ajuste do produtor não é churn real — cliente não saiu.
-        cancels = [
-            c for c in cancels
-            if (c.cancel_reason or "").strip().lower() not in PRODUTOR_ADJUSTMENT_REASONS
-        ]
         # uma saída por PESSOA (mesma régua do denominador)
         keys = {pessoa.get(_subscriber_key(c), _identidade_da_pessoa(c) or _subscriber_key(c))
                 for c in cancels}
@@ -805,8 +829,9 @@ class AdminMetricsService:
                 for quando in candidatos_pagamento
             )
             # Uma cobrança perto do vencimento que é desfeita por um
-            # cancelamento REAL (cancel_instants já exclui troca de plano e
-            # ajuste do produtor) no mesmo ciclo não é renovação de verdade —
+            # cancelamento REAL (cancel_instants exclui só troca de plano;
+            # "cancelado pelo produtor" conta — Rodada 9) no mesmo ciclo não
+            # é renovação de verdade —
             # a assinante não está continuando. Janela do próprio ciclo, não do
             # mês: um cancelamento semanas depois (ainda dentro do mês) não
             # pode retroagir e desfazer uma renovação genuína — ela já conta
@@ -1000,8 +1025,8 @@ class AdminMetricsService:
         """Novas × canceladas nos últimos 12 meses — saldo líquido que move o MRR.
 
         Rodada 6, item 11. Reaproveita new_subscriptions/churn_for_month, então
-        herda as mesmas regras: upgrade não conta dos dois lados (is_plan_change)
-        e "Cancelado pelo produtor" não conta churn.
+        herda as mesmas regras: upgrade não conta dos dois lados (is_plan_change);
+        "Cancelado pelo produtor" conta churn normal (Rodada 9, item 2).
         """
         hoje = self._agora().date()
         serie: List[Dict[str, Any]] = []
@@ -1025,13 +1050,7 @@ class AdminMetricsService:
         buckets: Dict[Tuple[str, str], Dict[str, int]] = defaultdict(lambda: {"count": 0, "revenue_net": 0})
         for ev in actives:
             plan = _normalize_plan_label(ev.plan_name, ev.plan_id)
-            freq = (ev.plan_frequency or "monthly").lower()
-            if freq in ("quarterly", "trimestral"):
-                freq_label = "trimestral"
-            elif freq in ("yearly", "annual", "anual"):
-                freq_label = "anual"
-            else:
-                freq_label = "mensal"
+            freq_label = _norm_freq(ev.plan_frequency)
             paid = self._last_paid_for(ev)
             net = (paid.amount_net_cents if paid else ev.amount_net_cents) or 0
             buckets[(plan, freq_label)]["count"] += 1
