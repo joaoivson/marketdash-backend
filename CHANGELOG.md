@@ -11,6 +11,66 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Painel Admin — Rodada 9: MRR "annually", churn do produtor, gráfico)
+
+Doc do Luiz de 25/08 (3 itens). Nada tinha sido implementado (nem em develop);
+implementado e no ar nos 2 ambientes. Testes de aceite validados contra os
+dados reais de produção antes do deploy (diagnóstico assinante a assinante).
+
+### Item 1 — MRR não mensalizava (R$651 inflados)
+
+A causa NÃO era o afiliado em si: a Kiwify manda a frequência da assinatura
+anual como **"annually"** em parte dos webhooks (João Victor e Alice) e como
+"yearly" em outros — e `_freq_divisor`/`_norm_freq` só conheciam
+yearly/annual/anual. "annually" caía no ramo mensal e o líquido inteiro
+(R$292,41 / R$417,73) entrava no MRR sem dividir por 12. Excesso somado:
+R$650,96 — exatamente os R$651 do doc.
+
+- Apelidos de frequência agora vivem num lugar só: `_norm_freq`
+  (`app/core/plans.py`, ganhou "annually" e "quarter"); `_freq_divisor` delega;
+  `plan_frequency_distribution`, labels do CSV de clientes
+  (`_CSV_FREQUENCY_LABELS`), `translateFrequency` do frontend e o fallback de
+  `plano_periodo` no webhook Kiwify alinhados (os três últimos: achado da
+  revisão adversarial — mostravam "annually" cru).
+- **Bruto do MRR lê `Commissions.product_base_price`** do raw_payload do último
+  evento pago (campo real da venda) — não presume preço de tabela; fallback:
+  tabela → bruto real pago. Import histórico (sem o campo) segue na tabela.
+- Card validado em produção: líquido R$2.016,08 · bruto R$2.289,00 · ARPU
+  R$48,00 (aceites eram 2.019,62/2.291,00/48,09 na base de 25/08 — a diferença
+  é a base ter mudado: Vivian cancelou 27/08 e houve vendas novas). João Victor
+  contribui R$24,37 líq / R$37,25 bruto ✓. Líquido < bruto ✓.
+
+### Item 2 — "Cancelado pelo produtor" conta churn
+
+Duas correções, porque o motivo NUNCA foi o filtro real em produção (o webhook
+da Kiwify manda `cancel_reason` vazio — a exclusão por motivo só pegava import):
+
+- Exclusão por `cancel_reason` removida de `cancel_instants()` e
+  `churn_for_month()` — produtor é saída real. Exceção continua sendo upgrade
+  (`is_plan_change`). Efeito retroativo intencional: Lara Luiza (produtor,
+  abril, import) passa a contar — abril vai de 1 → 2 canceladas no gráfico.
+- **Bruna Cabral estava fora do churn por um FALSO upgrade**: o pareamento
+  comparava `plan_name` cru, e "Pro" (import) vs "PRO - Mensal" (webhook)
+  parecia plano diferente ≤30d. Agora compara plano normalizado
+  (essencial/pro/max) + frequência normalizada. Backfill
+  (`scripts/backfill_rodada9_plan_changes.py`, rodado em prod e hml) desmarcou
+  3 eventos: Bruna (24/08) e o par do Deivit (31/07, mesmo falso-par — julho
+  vai de 6 → 7 canceladas, simétrico com as 7 novas que ele já contava);
+  Ana Ariel e Luiz Fernando (upgrades reais) mantidos fora.
+- Churn de agosto: **8** (os 7 do aceite + Vivian, que cancelou 27/08, depois
+  do doc). `renewal_rate` herda a regra: produtor no ciclo desfaz renovação.
+
+### Item 3 — Gráfico Novas × canceladas
+
+- Meses sem movimento no início da série saem (`trimLeadingNoMovement`, mesma
+  lógica do corte do MRR/DRE) — abril/2026 em diante.
+- `margin={CHART_MARGIN}` (o mesmo dos gráficos vizinhos, que faltava aqui) dá
+  o respiro no topo — label "32" da maior barra visível inteiro.
+
+Commits: backend `develop` + cherry-pick em `main`; frontend idem. Sem
+migration. Suíte: 1006 testes ✓. Validação visual (Playwright, dados reais de
+produção interceptados): MRR/ARPU/gráfico conferidos em tela.
+
 ## [Não versionado] - 2026-09-02 (Comentário de story: sem API — dica no editor)
 
 Pergunta do João depois do E2E: dá para automatizar também o COMENTÁRIO de
