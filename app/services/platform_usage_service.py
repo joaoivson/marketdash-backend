@@ -28,22 +28,44 @@ PERIODOS_VALIDOS = {"hoje": 1, "7d": 7, "30d": 30, "90d": 90}
 DIAS_SEM_ACESSO = 10
 
 # Rotas que não são uso do produto por aluna logada.
-_PREFIXOS_EXCLUIDOS = ("/admin", "/login", "/l/", "/c/")
+# /dashboard/admin é o painel interno (Afiliados Pendentes) — uso do time, não
+# de aluna. /g/ é página pública de link de grupo (irmã de /l/ e /c/) e /auth
+# é fluxo de senha — aparecem no beacon mas não são tela do produto.
+_PREFIXOS_EXCLUIDOS = ("/admin", "/dashboard/admin", "/login", "/auth", "/l/", "/c/", "/g/")
 _EXATOS_EXCLUIDOS = ("/", "", "/login", "/admin")
 
-# Rota → nome amigável. Prefixo mais longo primeiro (o match é por prefixo).
+# Rota → nome amigável, com o MESMO rótulo do menu lateral (dashboard-menu.ts)
+# — o ranking tem que falar a língua que o Luiz vê no produto. Rotas legadas
+# ficam na lista (histórico de page_views antigo ainda aponta pra elas).
+# Prefixo mais longo primeiro quando um é prefixo do outro (o match é por prefixo).
 NOMES_DE_TELA = [
     ("/dashboard/upload-cliques", "Upload Cliques"),
     ("/dashboard/upload", "Upload"),
     ("/dashboard/investimentos", "Investimentos"),
-    ("/dashboard/campanhas", "Campanhas"),
+    # O menu renomeou a tela: /dashboard/campanhas é "Anúncios" desde a rodada
+    # dos grupos; "Campanhas" hoje é o módulo de grupos de WhatsApp.
+    ("/dashboard/campanhas", "Anúncios"),
+    ("/dashboard/grupos", "Campanhas (WhatsApp)"),
     ("/dashboard/captura-site", "Página de Captura"),
+    ("/dashboard/captura", "Página de Captura"),
     ("/dashboard/meus-links", "Meus Links"),
+    ("/dashboard/links", "Meus Links"),
+    ("/dashboard/automacoes", "Instagram"),
+    ("/dashboard/ofertas", "Ofertas"),
+    ("/dashboard/templates", "Templates"),
+    ("/dashboard/indique", "Indique & Ganhe"),
+    ("/dashboard/planos", "Planos"),
+    ("/dashboard/integracoes", "Integrações"),
+    ("/dashboard/impostos", "Impostos"),
     ("/dashboard/configuracoes", "Configurações"),
     ("/dashboard/settings", "Configurações"),  # mesma tela, rota alternativa — não duplicar no ranking
     ("/dashboard/assinatura", "Assinatura"),
     ("/dashboard/afiliados", "Afiliados"),
     ("/dashboard/relatorios", "Relatórios"),
+    ("/dashboard/reports", "Relatórios"),
+    ("/dashboard/modules", "Módulos"),
+    # Feature removida em 22/08 — views antigas ainda estão na janela de 30d.
+    ("/dashboard/diagnostico-ia", "Diagnóstico IA"),
     ("/dashboard", "Dashboard"),
 ]
 
