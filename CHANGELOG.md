@@ -11,6 +11,21 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Hotfix: mid real estourou o VARCHAR — 073)
+
+O PRIMEIRO reply de story real em produção (11:52 BRT, @imagineteen__ →
+"Manda 🙏") revelou que o mid da Meta tem ~180+ caracteres — os 160 da 072
+não bastaram: o INSERT caía em `StringDataRightTruncation` e a task ficava em
+retry (a cada 120s, máx. 3) sem a DM sair. **O ALTER para VARCHAR(512) foi
+aplicado à mão em prod e hml segundos antes do último retry** — que então
+gravou `story_reply|enviado` às 11:58:21 e a DM chegou. Migration **073**
+versiona o que já está nos bancos; model e teste de regressão atualizados
+(nota: o SQLite dos testes NÃO valida length de VARCHAR — por isso a suíte
+não pegou; quem valida é o Postgres). Commits: develop e `main 0a33571`.
+
+Cadeia real completa validada em produção: story → reply de outra conta →
+webhook `messages` → fila → pipeline → Send API → **DM entregue**.
+
 ## [Não versionado] - 2026-09-02 (Automação em STORY — no ar em homologação)
 
 Pedido do João de manhã ("dá pra selecionar um story também?"), no ar em hml à
