@@ -26,7 +26,6 @@ from app.db.session import SessionLocal  # noqa: E402
 from app.services.admin_metrics_service import (  # noqa: E402
     AdminMetricsService,
     CANCEL_EVENTS,
-    PRODUTOR_ADJUSTMENT_REASONS,
     _month_bounds,
     _subscriber_key,
     assinaturas_atrasadas_em,
@@ -80,7 +79,8 @@ def main() -> int:
                 SubscriptionEvent.received_at <= end,
                 SubscriptionEvent.is_plan_change.is_(False),
             ).all()
-            if (c.cancel_reason or "").strip().lower() not in PRODUTOR_ADJUSTMENT_REASONS
+            # Regra da época da Rodada 8 (mudou na 9): produtor não contava churn.
+            if (c.cancel_reason or "").strip().lower() not in {"cancelado pelo produtor"}
         ]
         email = {}
         for ev in eventos:

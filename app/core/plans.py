@@ -102,10 +102,13 @@ PLAN_LIST_PRICE_CENTS: Dict[tuple[str, str], int] = {
 
 
 def _norm_freq(frequency: Optional[str]) -> str:
+    # A Kiwify não é consistente no rótulo: assinatura anual chega como
+    # "yearly" em umas e "annually" em outras (caso real, Rodada 9 — a
+    # "annually" caía no ramo mensal e o MRR entrava sem dividir por 12).
     f = (frequency or "monthly").lower()
-    if f in ("quarterly", "trimestral"):
+    if f in ("quarterly", "trimestral", "quarter"):
         return "trimestral"
-    if f in ("yearly", "annual", "anual", "year"):
+    if f in ("yearly", "annual", "annually", "anual", "year"):
         return "anual"
     return "mensal"
 

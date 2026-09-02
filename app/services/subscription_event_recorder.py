@@ -8,9 +8,10 @@ from typing import Any, Dict, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.plans import _norm_freq
 from app.models.subscription_event import SubscriptionEvent
 from app.models.user import User
-from app.services.charges import unknown_array_charges
+from app.services.charges import _normalize_plan_label, unknown_array_charges
 
 logger = logging.getLogger(__name__)
 
@@ -203,9 +204,16 @@ def encontrar_par_de_plan_change(
         if recebido is not None and recebido.tzinfo is None:
             recebido = recebido.replace(tzinfo=timezone.utc)
         gap = abs(agora - (recebido or agora))
-        mesmo_plano = (ev.plan_name or "") == (fields.get("plan_name") or "") and (
-            ev.plan_frequency or ""
-        ) == (fields.get("plan_frequency") or "")
+        # Compara plano NORMALIZADO (essencial/pro/max + periodicidade), nunca o
+        # rótulo cru: o import histórico grava "Pro" e o webhook "PRO - Mensal" —
+        # mesmo plano com nomes diferentes. Comparar string crua fazia um
+        # cancelamento real 21 dias depois da assinatura parecer "plano
+        # diferente" e casar como upgrade (caso Bruna Cabral, Rodada 9, item 2).
+        mesmo_plano = _normalize_plan_label(
+            ev.plan_name, getattr(ev, "plan_id", None)
+        ) == _normalize_plan_label(
+            fields.get("plan_name"), fields.get("plan_id")
+        ) and _norm_freq(ev.plan_frequency) == _norm_freq(fields.get("plan_frequency"))
         if mesmo_plano and gap <= timedelta(days=1):
             # Direcional: cancelamento tem que ter acontecido ANTES (ou junto)
             # do pagamento — nunca depois. `evento` é o tipo do evento que está
