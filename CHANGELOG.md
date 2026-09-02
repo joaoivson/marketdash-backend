@@ -11,6 +11,27 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 ("Telas mais acessadas" aprende as telas novas)
+
+Pedido do João na sequência da Rodada 9. O mapa rota→nome do ranking
+(`NOMES_DE_TELA`, `platform_usage_service.py`) tinha parado no tempo: tela
+desconhecida caía num nome gerado do path ("Automacoes", sem acento) e rotas
+renomeadas não eram reconhecidas. Agora:
+
+- Todas as telas atuais entram com o MESMO rótulo do menu lateral: Instagram,
+  Campanhas (WhatsApp), Planos, Indique & Ganhe, Integrações, Impostos,
+  Ofertas, Templates, Módulos. Rotas renomeadas apontam pro mesmo nome da
+  legada (`/dashboard/links` = Meus Links, `/dashboard/captura` = Página de
+  Captura, `/dashboard/reports` = Relatórios) — nada duplica no ranking.
+- `/dashboard/campanhas` agora aparece como **Anúncios** (o menu renomeou;
+  "Campanhas" hoje é o módulo de grupos de WhatsApp).
+- Excluídos do ranking: `/dashboard/admin/*` (painel interno), `/auth/*`
+  (fluxo de senha) e `/g/*` (página pública de link de grupo, irmã de /l/ e
+  /c/) — apareciam via fallback e não são uso do produto.
+
+Validado contra os page_views reais de produção (30d): Planos 62, Indique &
+Ganhe 57, Instagram 57 já aparecem nomeados. Só backend; sem migration.
+
 ## [Não versionado] - 2026-09-02 (Painel Admin — Rodada 9: MRR "annually", churn do produtor, gráfico)
 
 Doc do Luiz de 25/08 (3 itens). Nada tinha sido implementado (nem em develop);

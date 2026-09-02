@@ -12,7 +12,9 @@ from app.services.sync_monitoring_service import classificar_erro
 
 def test_exclui_admin_login_raiz_e_paginas_publicas():
     for rota in ("/admin", "/admin/clientes", "/ADMIN/uso", "/login", "/", "",
-                 "/l/abc123", "/c/minha-pagina"):
+                 "/l/abc123", "/c/minha-pagina", "/g/meu-grupo",
+                 "/g/preview/853e5324", "/auth/set-password",
+                 "/auth/forgot-password"):
         assert rota_excluida(rota) is True, rota
 
 
@@ -29,14 +31,46 @@ def test_rota_nula_e_excluida():
 
 
 def test_nomes_amigaveis():
-    assert nome_da_tela("/dashboard/campanhas") == "Campanhas"
+    # O menu renomeou: /dashboard/campanhas virou "Anúncios"; "Campanhas" é o
+    # módulo de grupos de WhatsApp (/dashboard/grupos).
+    assert nome_da_tela("/dashboard/campanhas") == "Anúncios"
     assert nome_da_tela("/dashboard/upload-cliques") == "Upload Cliques"
     assert nome_da_tela("/dashboard") == "Dashboard"
     assert nome_da_tela("/dashboard/investimentos") == "Investimentos"
 
 
+def test_telas_novas_tem_nome_do_menu():
+    """Telas que entraram depois do mapa original (Rodada 9, pedido do João):
+    o ranking usa o MESMO rótulo do menu lateral, não o path title-case."""
+    assert nome_da_tela("/dashboard/automacoes") == "Instagram"
+    assert nome_da_tela("/dashboard/automacoes/nova") == "Instagram"
+    assert nome_da_tela("/dashboard/grupos") == "Campanhas (WhatsApp)"
+    assert nome_da_tela("/dashboard/grupos/12/roteiros/3") == "Campanhas (WhatsApp)"
+    assert nome_da_tela("/dashboard/links") == "Meus Links"
+    assert nome_da_tela("/dashboard/captura") == "Página de Captura"
+    assert nome_da_tela("/dashboard/planos") == "Planos"
+    assert nome_da_tela("/dashboard/indique") == "Indique & Ganhe"
+    assert nome_da_tela("/dashboard/integracoes") == "Integrações"
+    assert nome_da_tela("/dashboard/impostos") == "Impostos"
+    assert nome_da_tela("/dashboard/ofertas") == "Ofertas"
+    assert nome_da_tela("/dashboard/templates") == "Templates"
+    assert nome_da_tela("/dashboard/reports") == "Relatórios"
+
+
+def test_rota_nova_e_legada_caem_na_mesma_tela():
+    """Rota renomeada não pode virar 2 entradas no ranking."""
+    assert nome_da_tela("/dashboard/links") == nome_da_tela("/dashboard/meus-links")
+    assert nome_da_tela("/dashboard/captura") == nome_da_tela("/dashboard/captura-site")
+    assert nome_da_tela("/dashboard/reports") == nome_da_tela("/dashboard/relatorios")
+
+
+def test_admin_interno_sob_dashboard_e_excluido():
+    """/dashboard/admin/* é painel do time (Afiliados Pendentes), não uso de aluna."""
+    assert rota_excluida("/dashboard/admin/afiliados") is True
+
+
 def test_subrota_cai_na_tela_pai():
-    assert nome_da_tela("/dashboard/campanhas/42") == "Campanhas"
+    assert nome_da_tela("/dashboard/campanhas/42") == "Anúncios"
 
 
 def test_settings_e_configuracoes_sao_a_mesma_tela():
