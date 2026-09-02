@@ -11,6 +11,60 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Instagram EM PRODUÇÃO)
+
+A Automação Instagram (comentário → direct, exclusiva do MAX) saiu de
+homologação e entrou em produção na noite de 01→02/09. O que destravou: o
+**App Review da Meta foi aprovado em 01/09** (instagram_business_basic,
+instagram_business_manage_comments, instagram_business_manage_messages, todas
+Advanced Access; as 6 permissões do Facebook foram renovadas juntas).
+
+### O que foi feito (na ordem)
+
+- **Migrations 052→056 aplicadas no Supabase de produção** (via psql com a
+  connection string de produção). Antes, medido: 3 tabelas criadas pelo
+  `create_all` com RLS ligado e **zero policies**; depois: 1 policy `*_iso`
+  por tabela, cron `instagram-token-refresh-diario` agendado (`15 5 * * *`,
+  job 92). Disparo manual da função devolveu **202 background-inline** do
+  backend de produção — cadeia Vault → pg_net → endpoint validada.
+- **Envs `INSTAGRAM_*` criadas via API do Coolify** na API de produção E no
+  worker (o direct sai pelo worker): APP_ID, APP_SECRET, OAUTH_REDIRECT_URI
+  (`https://marketdash.com.br/dashboard/automacoes/callback`), WEBHOOK_VERIFY_TOKEN
+  (mesmo de hml — o app Meta é um só) e API_VERSION=v25.0. `INSTAGRAM_DM_FORMATO`
+  **não** foi criada (é o interruptor de emergência). Redeploy dos dois recursos.
+- **Handshake do webhook validado em produção**: token errado → 403; token
+  real → devolve o `hub.challenge` em texto puro. (Antes das envs: 503.)
+- **Frontend SEM merge develop→main** — o código já estava em `main` desde o
+  acidente de 22/08. Dois commits cirúrgicos e divergentes de propósito:
+  `main 2d336a8` (remove o gate das 4 rotas, item volta ao menu — o cadeado
+  por plano MAX continua —, aba em Configurações, + fix mobile da barra do
+  editor) e `develop 06a396d` (gate compartilhado **separado**: Instagram sai,
+  Grupos/Ofertas/Templates continuam hml-only).
+- **Validação Playwright em produção** (desktop 1440 + mobile 390, logado):
+  menu mostra "Automação Instagram" com cadeado (conta de teste não é MAX),
+  `/dashboard/automacoes` redireciona para `/dashboard/planos` (gate de plano
+  correto), `?tab=instagram` abre o card, e `/dashboard/grupos|ofertas|templates`
+  continuam bloqueadas. **Zero respostas 5xx.**
+
+### No painel da Meta (feito pelo dono do app)
+
+Redirect URIs adicionadas (hml + `marketdash.com.br` + `www.marketdash.com.br` —
+o redirect_uri sai de `window.location.origin` e a Meta exige match literal,
+então o www é obrigatório), deauthorize e data-deletion apontando para
+`api.marketdash.com.br`.
+
+### Pendências desta rodada
+
+- **Swap do webhook** (única URL por app): trocar a callback de
+  `api.hml.marketdash.com.br` → `api.marketdash.com.br/webhooks/instagram` no
+  painel + conferir a assinatura do campo `comments` + botão Test. A partir daí
+  **hml não recebe comentário real** — testar com
+  `scripts/simular_comentario_instagram.py`.
+- E2E real em produção com conta MAX (conectar, automação, comentário → reply + DM).
+- D+1: conferir 1ª execução do cron em `cron.job_run_details`.
+- Assets `public/instagram/passo-{1,2,3}*.png` continuam pendentes de design
+  (degradação silenciosa, não quebra).
+
 ## [Não versionado] - 2026-09-01 (Escala: o servidor WAHA vira pool, e o worker deixa de ter 4 slots)
 
 Rodada de infraestrutura para o degrau de escala — nada disso muda tela, e tudo

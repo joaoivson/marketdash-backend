@@ -11,6 +11,24 @@
 
 ---
 
+## 2026-09-02 — Instagram entra em produção (App Review aprovado)
+
+O que mudou: migrations 052–056 aplicadas no Supabase de produção (052 criou
+as 3 policies que faltavam — as tabelas já existiam via `create_all` com RLS
+sem policy; 053 agendou o cron de token, job 92, e o disparo manual devolveu
+202 do backend de produção). Envs `INSTAGRAM_*` gravadas via API do Coolify na
+API E no worker + redeploy dos dois. Handshake do webhook: 503 → 403 (token
+errado) → challenge em texto puro (token real). Frontend: `main 2d336a8` e
+`develop 06a396d`, patches DIVERGENTES de propósito (em main o bloco gated só
+tinha Instagram; em develop o bloco é compartilhado com Grupos e foi separado).
+
+Por quê assim: NÃO houve merge develop→main — teria arrastado 61 commits do
+módulo de Grupos + migrations 058–071 não aplicadas (o acidente de 22/08 de
+novo). O checklist externo pedia o merge; substituído por commits cirúrgicos.
+
+Pendente: swap do webhook no painel Meta (dono do app), E2E com conta MAX,
+D+1 do cron, prints do checklist (design).
+
 ## 2026-08-31 — Pausar o envio por um número (e por que não virou um `status`)
 
 A tela de Dispositivos ganhou renomear e pausar. Renomear é trivial —

@@ -140,19 +140,19 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 - **Rodada 7 do painel admin** validada só contra **homologação**. Itens 1, 2,
   3 e o achado card×lista precisam de reconfirmação contra **produção** — ver
   a seção de pendências no `CHANGELOG.md` da raiz.
-- **Automação Instagram**: Rodadas 1 e 2 no ar em homologação. Falta o
-  **App Review** — em Standard Access só admin/dev/tester do app completam o
-  OAuth, então aluna comum trava na autorização. O screencast é gravado depois
-  da Rodada 2, para o vídeo bater com a tela final.
-  ⚠️ Em 22/08 o código foi parar em `main` por acidente (merge de branch
-  inteiro). **A UI está oculta em produção** por `isProductionHost()`: menu,
-  aba de Configurações e as 4 rotas `/dashboard/automacoes*`. As migrations
-  052–056 seguem **não aplicadas** em produção, de propósito.
+- **Automação Instagram: EM PRODUÇÃO desde 02/09** (App Review aprovado
+  01/09, as 3 permissões com Advanced Access). Migrations 052–056 aplicadas
+  em produção, cron de token agendado (202 validado), envs `INSTAGRAM_*` na
+  API e no worker, gate de ambiente removido no frontend (o de plano MAX
+  fica). Pendente: swap da URL do webhook no painel Meta (única por app —
+  depois disso hml só testa via `scripts/simular_comentario_instagram.py`)
+  e E2E real com conta MAX. Ver CHANGELOG 2026-09-02.
 - **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **070**
   (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
   hml em 31/08 — ⚠️ é `ALTER TABLE`, a armadilha *inversa* do `create_all`:
-  subir o model antes dela quebra `GET /instancias` com `UndefinedColumn`; 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
-  produção enquanto as features estiverem desligadas lá. ⚠️ A nota anterior
+  subir o model antes dela quebra `GET /instancias` com `UndefinedColumn`; **052–056 (Instagram) APLICADAS em produção em 02/09** (a feature
+  ligou); 045–046 (WhatsApp) seguem fora de produção enquanto a feature
+  estiver desligada lá. ⚠️ A nota anterior
   dizia que 049–055 não estavam em produção, mas isso é **falso para 049/050**:
   a tela de Campanhas carrega em produção usando `ad_review_issue` e
   `status_active_since` via ORM, o que seria `UndefinedColumn` se as colunas não
