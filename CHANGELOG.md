@@ -11,6 +11,23 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Comentário de story: sem API — dica no editor)
+
+Pergunta do João depois do E2E: dá para automatizar também o COMENTÁRIO de
+story (o "Manda 🔥" que aparece na aba Comentários do story)? **Não — limitação
+da Meta, verificada empiricamente**: o comentário de story não gera webhook
+nenhum (o evento de comments no mesmo minuto era de um post da
+promosdabeatrizz_, coincidência), o objeto dá 400 na Graph API
+("does not support this operation") e não existe campo de webhook para isso na
+lista exaustiva do painel. Só a RESPOSTA (reply) chega — como DM, e essa a
+automação já pega.
+
+Consequência de produto: **o CTA do story precisa pedir RESPOSTA, não
+comentário** ("Responda com QUERO") — o CTA errado mata a automação em
+silêncio. Dica adicionada ao Card 1 do editor para os dois escopos de story
+(`develop a0104d8` / `main 6d6da74`). Reavaliar se a Meta um dia expor um
+campo novo de webhook para comentários de story.
+
 ## [Não versionado] - 2026-09-02 (Hotfix: mid real estourou o VARCHAR — 073)
 
 O PRIMEIRO reply de story real em produção (11:52 BRT, @imagineteen__ →
