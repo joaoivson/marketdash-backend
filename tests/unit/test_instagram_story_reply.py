@@ -230,10 +230,17 @@ class TestPipelineStory:
         assert cliente.dms_story == []
 
     def test_mid_longo_cabe_na_coluna(self, db, conexao, cliente):
-        """Mids da Meta passam de 64 chars — a migration 072 alargou para 160."""
+        """O mid REAL da Meta tem ~180+ chars (estourou os 160 da migration 072
+        no primeiro reply de produção — migration 073 alargou para 512).
+        SQLite não valida length de VARCHAR, então este teste documenta a
+        intenção; quem valida de verdade é o Postgres."""
         _automacao(db, conexao)
-        mid = "aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDcxMDc5NTkxNjM2OjM0MD" * 2
-        assert len(mid) > 64
+        mid = (
+            "aWdfZAG1faXRlbToxOklHTWVzc2FnZAUlEOjE3ODQxNDAxMTIyODE1NTA3OjM0MDI4"
+            "MjM2Njg0MTcxMDMwMTI0NDI1ODQzODQ5MTI0MjQ5ODc2MTozMjk4OTQzMjc1NDM4OT"
+            "c2NTQzMjEwOTg3NjU0MzIxMDk4NzY1NDMyMTA5ODc2NTQzMjEwOTg3NjU0MzIxMDo"
+        )
+        assert len(mid) > 160
         assert _rodar(db, _reply(mid=mid))["status"] == "enviado"
 
     def test_automacao_de_feed_nao_responde_story(self, db, conexao, cliente):
