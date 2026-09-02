@@ -195,9 +195,10 @@ class InstagramEvent(Base):
         Integer, ForeignKey("instagram_automations.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
-    # comment_id do comentário OU mid da mensagem (reply de story) — mids são
-    # longos, daí 160 (migration 072). Continua sendo a trava UNIQUE.
-    comment_id = Column(String(160), nullable=False)
+    # comment_id do comentário OU mid da mensagem (reply de story). O mid REAL
+    # da Meta tem ~180+ chars e estourou os 160 da migration 072 no primeiro
+    # reply de produção — daí 512 (migration 073). Continua sendo a trava UNIQUE.
+    comment_id = Column(String(512), nullable=False)
     # comentario | story_reply (migration 072)
     tipo = Column(String(16), nullable=False, default=EVENTO_COMENTARIO)
     media_id = Column(String(64), nullable=True)
