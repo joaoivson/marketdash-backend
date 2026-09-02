@@ -296,6 +296,22 @@ async def list_media(access_token: str, limit: int = 24, after: Optional[str] = 
     return await _request("GET", _graph_url("me/media"), params=params)
 
 
+async def list_stories(access_token: str) -> dict[str, Any]:
+    """Stories ATIVOS (últimas 24h) da conta, para o seletor da automação.
+
+    O edge /stories não pagina como o /media (um dia tem poucas dezenas no
+    máximo) e não devolve caption pesquisável — devolvemos o envelope cru.
+    Stories de Live não vêm; reshares também não (limitação documentada).
+    """
+    params = {
+        "fields": (
+            "id,caption,media_type,media_product_type,media_url,thumbnail_url,timestamp"
+        ),
+        "access_token": access_token,
+    }
+    return await _request("GET", _graph_url("me/stories"), params=params)
+
+
 async def get_media(access_token: str, media_id: str) -> dict[str, Any]:
     params = {
         "fields": "id,caption,media_type,media_product_type,permalink,thumbnail_url,media_url,timestamp",
@@ -321,7 +337,10 @@ async def get_media(access_token: str, media_id: str) -> dict[str, Any]:
 # Só `comments`: é o único campo que a feature usa, e ele exige apenas
 # `instagram_business_basic` + `instagram_business_manage_comments`. Incluir
 # `messages` aqui arrastaria um requisito de permissão que o v1 não precisa.
-CAMPOS_WEBHOOK = ["comments"]
+# `messages` cobre TODAS as DMs da conta (a Meta não filtra por tipo) — o
+# webhook descarta o que não é reply de story. Necessário para a automação de
+# story: o reply chega como mensagem com reply_to.story.
+CAMPOS_WEBHOOK = ["comments", "messages"]
 
 
 async def subscribe_account_to_webhooks(access_token: str, ig_user_id: str) -> bool:
@@ -417,6 +436,31 @@ async def send_private_reply(
         _graph_url(f"{ig_user_id}/messages"),
         json_body={
             "recipient": {"comment_id": str(comment_id)},
+            "message": montar_mensagem_dm(texto, link, botao_texto),
+        },
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+
+async def send_story_reply_dm(
+    access_token: str,
+    ig_user_id: str,
+    recipient_id: str,
+    texto: str,
+    link: Optional[str] = None,
+    botao_texto: Optional[str] = None,
+) -> dict[str, Any]:
+    """DM em resposta a um reply de story — Send API com recipient por IGSID.
+
+    Diferente do private reply (recipient por comment_id), aqui a pessoa JÁ nos
+    mandou uma mensagem (o reply do story), então vale a janela padrão de 24h
+    da mensageria — respondemos a conversa que ela abriu.
+    """
+    return await _request(
+        "POST",
+        _graph_url(f"{ig_user_id}/messages"),
+        json_body={
+            "recipient": {"id": str(recipient_id)},
             "message": montar_mensagem_dm(texto, link, botao_texto),
         },
         headers={"Authorization": f"Bearer {access_token}"},

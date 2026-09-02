@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 from app.models.instagram_automation import (
     AUTOMACAO_ATIVA,
     ESCOPO_POST_ESPECIFICO,
+    ESCOPO_STORY_ESPECIFICO,
+    ESCOPO_STORY_QUALQUER,
+    ESCOPOS_DE_STORY,
     ESCOPO_QUALQUER,
     TRIGGER_PALAVRAS,
     InstagramAutomation,
@@ -97,6 +100,25 @@ class InstagramAutomationService:
             from_cache=False,
         )
 
+    async def listar_stories(self, user_id: int) -> InstagramMediaPage:
+        """Stories ATIVOS (últimas 24h) para o seletor da automação de story.
+
+        Sem cache: a lista muda ao longo do dia e é curta — buscar sempre é
+        mais barato que explicar um story fantasma no seletor.
+        """
+        conexao = self.conexao_service.require_conexao_ativa(user_id)
+        try:
+            bruto = await ig.list_stories(self.conexao_service.token_de(conexao))
+        except ig.InstagramApiError as exc:
+            if exc.codigo == 190:
+                self.conexao_service.handle_token_invalido(conexao)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.mensagem)
+        return InstagramMediaPage(
+            items=[_media_item(m) for m in bruto.get("data") or []],
+            next_cursor=None,
+            from_cache=False,
+        )
+
     # ----------------------------- automações ---------------------------- #
 
     async def _exigir_webhook_ativo(self, user_id: int) -> None:
@@ -160,6 +182,11 @@ class InstagramAutomationService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Escolha a publicação em que a automação vai funcionar.",
             )
+        if dados.escopo == ESCOPO_STORY_ESPECIFICO and not dados.media_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Escolha o story em que a automação vai funcionar.",
+            )
         if dados.trigger_tipo == TRIGGER_PALAVRAS and not dados.palavras:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -170,6 +197,10 @@ class InstagramAutomationService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Escreva a mensagem que será enviada no direct.",
             )
+        if dados.escopo in ESCOPOS_DE_STORY:
+            # Story não tem comentário público — a resposta pública não se
+            # aplica e é forçada a False em _aplicar; não exigir variações.
+            return
         if dados.resposta_publica_ativa and not dados.resposta_publica_variacoes:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -197,18 +228,14 @@ class InstagramAutomationService:
         )
         automacao.nome = dados.nome.strip()
         automacao.escopo = dados.escopo
-        # 'qualquer' não aponta pra post nenhum — guardar um media_id aqui faria
-        # `cobre_media` responder pelo post errado.
-        automacao.media_id = dados.media_id if dados.escopo == ESCOPO_POST_ESPECIFICO else None
-        automacao.media_thumbnail_url = (
-            dados.media_thumbnail_url if dados.escopo == ESCOPO_POST_ESPECIFICO else None
-        )
-        automacao.media_caption_preview = (
-            dados.media_caption_preview if dados.escopo == ESCOPO_POST_ESPECIFICO else None
-        )
-        automacao.media_permalink = (
-            dados.media_permalink if dados.escopo == ESCOPO_POST_ESPECIFICO else None
-        )
+        # Os escopos 'qualquer'/'story_qualquer' não apontam pra mídia nenhuma —
+        # guardar um media_id aqui faria cobre_media/cobre_story responder pela
+        # mídia errada. No story_especifico, media_id guarda o ID DO STORY.
+        com_midia = dados.escopo in (ESCOPO_POST_ESPECIFICO, ESCOPO_STORY_ESPECIFICO)
+        automacao.media_id = dados.media_id if com_midia else None
+        automacao.media_thumbnail_url = dados.media_thumbnail_url if com_midia else None
+        automacao.media_caption_preview = dados.media_caption_preview if com_midia else None
+        automacao.media_permalink = dados.media_permalink if com_midia else None
 
         automacao.trigger_tipo = dados.trigger_tipo
         exibicao = list(dados.palavras or [])
@@ -222,8 +249,13 @@ class InstagramAutomationService:
                 normalizadas.append(norm)
         automacao.palavras = normalizadas
 
-        automacao.resposta_publica_ativa = bool(dados.resposta_publica_ativa)
-        automacao.resposta_publica_variacoes = list(dados.resposta_publica_variacoes or [])
+        if dados.escopo in ESCOPOS_DE_STORY:
+            # Story não tem comentário público para responder.
+            automacao.resposta_publica_ativa = False
+            automacao.resposta_publica_variacoes = []
+        else:
+            automacao.resposta_publica_ativa = bool(dados.resposta_publica_ativa)
+            automacao.resposta_publica_variacoes = list(dados.resposta_publica_variacoes or [])
         automacao.dm_texto = dados.dm_texto or ""
         automacao.status = dados.status
 

@@ -39,9 +39,19 @@ AUTOMACAO_RASCUNHO = "rascunho"
 
 ESCOPO_POST_ESPECIFICO = "post_especifico"
 ESCOPO_QUALQUER = "qualquer"
+# Escopos de STORY (reply de story → DM). Story não tem comentário: o gatilho
+# chega pelo webhook `messages` com reply_to.story. Um story vive 24h, então
+# `story_especifico` morre junto com ele — `story_qualquer` é o modo durável.
+ESCOPO_STORY_ESPECIFICO = "story_especifico"
+ESCOPO_STORY_QUALQUER = "story_qualquer"
+ESCOPOS_DE_STORY = frozenset({ESCOPO_STORY_ESPECIFICO, ESCOPO_STORY_QUALQUER})
 
 TRIGGER_PALAVRAS = "palavras"
 TRIGGER_QUALQUER = "qualquer"
+
+# Origem do evento em instagram_events (migration 072).
+EVENTO_COMENTARIO = "comentario"
+EVENTO_STORY_REPLY = "story_reply"
 
 # dm_status
 DM_ENVIADO = "enviado"
@@ -158,9 +168,20 @@ class InstagramAutomation(Base):
         novo), então a aluna não sabia em qual post a automação ia grudar até
         acontecer, e ficava esperando indefinidamente se ninguém comentasse.
         """
+        if self.escopo in ESCOPOS_DE_STORY:
+            # Automação de story nunca reage a comentário de post.
+            return False
         if self.escopo == ESCOPO_QUALQUER:
             return True
         return bool(self.media_id) and str(self.media_id) == str(media_id)
+
+    def cobre_story(self, story_id: str) -> bool:
+        """A automação vale para este story? (media_id guarda o id do story)"""
+        if self.escopo == ESCOPO_STORY_QUALQUER:
+            return True
+        if self.escopo == ESCOPO_STORY_ESPECIFICO:
+            return bool(self.media_id) and str(self.media_id) == str(story_id)
+        return False
 
 
 class InstagramEvent(Base):
@@ -174,7 +195,11 @@ class InstagramEvent(Base):
         Integer, ForeignKey("instagram_automations.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
-    comment_id = Column(String(64), nullable=False)
+    # comment_id do comentário OU mid da mensagem (reply de story) — mids são
+    # longos, daí 160 (migration 072). Continua sendo a trava UNIQUE.
+    comment_id = Column(String(160), nullable=False)
+    # comentario | story_reply (migration 072)
+    tipo = Column(String(16), nullable=False, default=EVENTO_COMENTARIO)
     media_id = Column(String(64), nullable=True)
     commenter_id = Column(String(64), nullable=True)
     commenter_username = Column(String(255), nullable=True)

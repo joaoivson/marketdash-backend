@@ -111,6 +111,15 @@ def disconnect(
 # --------------------------------------------------------------------------- #
 
 
+@router.get("/stories", response_model=InstagramMediaPage)
+async def listar_stories(
+    current_user: User = Depends(exige_plano_max),
+    db: Session = Depends(get_db),
+):
+    """Stories ATIVOS (últimas 24h) para a automação de story."""
+    return await _automacoes(db).listar_stories(current_user.id)
+
+
 @router.get("/media", response_model=InstagramMediaPage)
 async def listar_midias(
     cursor: str | None = Query(default=None, description="Cursor de 'Carregar mais'"),

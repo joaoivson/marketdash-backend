@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.instagram_automation import (
     DM_ENVIADO,
+    EVENTO_COMENTARIO,
+    EVENTO_STORY_REPLY,
     DM_EXPIRADO,
     DM_FALHOU,
     DM_IGNORADO,
@@ -49,6 +51,10 @@ logger = logging.getLogger(__name__)
 # A Meta aceita private reply só nos 7 dias seguintes à criação do comentário.
 JANELA_PRIVATE_REPLY_DIAS = 7
 
+# Reply de story é uma MENSAGEM da pessoa — vale a janela padrão de 24h da
+# mensageria para responder. Fila atrasada não pode gastar chamada perdida.
+JANELA_STORY_REPLY_HORAS = 24
+
 REPLY_ENVIADO = "enviado"
 REPLY_FALHOU = "falhou"
 REPLY_PULADO = "pulado"
@@ -68,10 +74,17 @@ def parse_comment_timestamp(valor) -> Optional[datetime]:
     if valor in (None, ""):
         return None
     if isinstance(valor, (int, float)):
-        return datetime.fromtimestamp(float(valor), tz=timezone.utc)
+        num = float(valor)
+        # Mensageria manda epoch em MILISSEGUNDOS; comentário, em segundos.
+        if num > 1e12:
+            num /= 1000.0
+        return datetime.fromtimestamp(num, tz=timezone.utc)
     texto = str(valor).strip()
     if texto.isdigit():
-        return datetime.fromtimestamp(int(texto), tz=timezone.utc)
+        num = float(texto)
+        if num > 1e12:
+            num /= 1000.0
+        return datetime.fromtimestamp(num, tz=timezone.utc)
     # A Graph API manda "+0000" (sem dois-pontos), que o fromisoformat do
     # Python 3.10 recusa.
     if len(texto) >= 5 and texto[-5] in "+-" and ":" not in texto[-5:]:
@@ -268,6 +281,115 @@ class InstagramCommentPipeline:
         self.db.commit()
         return {"status": "enviado", "reply": evento.reply_status}
 
+    # --------------------------- reply de STORY --------------------------- #
+
+    async def processar_story_reply(self, ig_user_id: str, evento: dict) -> dict:
+        """Processa UM reply de story vindo do webhook `messages`.
+
+        Espelha o processar_comentario com três diferenças de natureza:
+        o dedupe é pelo `mid` da mensagem (na mesma coluna UNIQUE), a janela é a
+        de 24h da mensageria, e NÃO existe resposta pública — story não tem
+        comentário. A DM sai pela Send API com recipient por id (a pessoa abriu
+        a conversa ao responder o story).
+        """
+        mid = str((evento or {}).get("mid") or "")
+        if not mid:
+            return {"status": "ignorado", "motivo": "sem mid"}
+
+        conexao = self.repo.get_connection_by_ig_user_id(ig_user_id)
+        if not conexao:
+            return {"status": "ignorado", "motivo": "conta não conectada"}
+
+        sender_id = str((evento or {}).get("sender_id") or "")
+        story_id = str((evento or {}).get("story_id") or "")
+        texto = (evento or {}).get("text") or ""
+        msg_ts = parse_comment_timestamp((evento or {}).get("timestamp"))
+
+        if sender_id and sender_id == str(conexao.ig_user_id):
+            return {"status": "ignorado", "motivo": "mensagem da própria conta"}
+
+        if self.repo.get_event_by_comment(mid):
+            return {"status": "duplicado", "motivo": "mid já processado"}
+
+        ativas = self.repo.active_automations_for_connection(conexao.id)
+        candidatas = [a for a in ativas if a.cobre_story(story_id)]
+        if not candidatas:
+            return {"status": "ignorado", "motivo": "nenhuma automação cobre este story"}
+
+        automacao = next((a for a in candidatas if automacao_dispara(a, texto)), None)
+        if automacao is None:
+            self._registrar(
+                conexao, None, mid, story_id, sender_id, None,
+                texto, msg_ts, DM_SEM_MATCH, reply_status=REPLY_NAO_APLICAVEL,
+                tipo=EVENTO_STORY_REPLY,
+            )
+            return {"status": "sem_match"}
+
+        if self.repo.já_enviou_para_pessoa(automacao.id, story_id, sender_id):
+            self._registrar(
+                conexao, automacao, mid, story_id, sender_id, None,
+                texto, msg_ts, "duplicado", reply_status=REPLY_NAO_APLICAVEL,
+                tipo=EVENTO_STORY_REPLY,
+            )
+            return {"status": "duplicado", "motivo": "pessoa já recebeu neste story"}
+
+        if msg_ts is not None and (
+            datetime.now(timezone.utc) - msg_ts
+        ) > timedelta(hours=JANELA_STORY_REPLY_HORAS):
+            self._registrar(
+                conexao, automacao, mid, story_id, sender_id, None,
+                texto, msg_ts, DM_EXPIRADO, reply_status=REPLY_NAO_APLICAVEL,
+                erro_codigo="JANELA_24H",
+                erro_mensagem="Reply de story fora da janela de 24h da mensageria.",
+                tipo=EVENTO_STORY_REPLY,
+            )
+            return {"status": "expirado"}
+
+        self._checar_teto_horario(conexao.user_id)
+
+        registro = self._registrar(
+            conexao, automacao, mid, story_id, sender_id, None,
+            texto, msg_ts, DM_PROCESSANDO, tipo=EVENTO_STORY_REPLY,
+        )
+        if registro is None:
+            return {"status": "duplicado", "motivo": "corrida no mid"}
+
+        token = self.conexao_service.token_de(conexao)
+        await self._espacar_envio()
+        try:
+            com_botao = dm_com_botao()
+            resposta = await ig.send_story_reply_dm(
+                token,
+                conexao.ig_user_id,
+                sender_id,
+                automacao.dm_texto,
+                link=automacao.dm_link,
+                botao_texto=automacao.dm_botao_texto if com_botao else None,
+            )
+        except ig.InstagramApiError as exc:
+            registro.dm_status = DM_FALHOU
+            registro.reply_status = REPLY_NAO_APLICAVEL
+            registro.erro_codigo = exc.codigo_curto
+            registro.erro_mensagem = exc.mensagem[:2000]
+            self.db.commit()
+            if exc.codigo == 190:
+                self.conexao_service.handle_token_invalido(conexao)
+            if not exc.permanente:
+                raise
+            logger.info(
+                "Instagram: DM de story não enviada (erro permanente) mid=%s: %s",
+                mid, exc.mensagem,
+            )
+            return {"status": "falhou", "permanente": True, "erro": exc.mensagem}
+
+        registro.dm_status = DM_ENVIADO
+        registro.dm_message_id = (
+            str(resposta.get("message_id") or resposta.get("id") or "")[:128] or None
+        )
+        registro.reply_status = REPLY_NAO_APLICAVEL
+        self.db.commit()
+        return {"status": "enviado", "reply": REPLY_NAO_APLICAVEL}
+
     async def _responder_publicamente(
         self, token: str, automacao: InstagramAutomation, comment_id: str
     ) -> str:
@@ -307,12 +429,14 @@ class InstagramCommentPipeline:
         reply_status: Optional[str] = None,
         erro_codigo: Optional[str] = None,
         erro_mensagem: Optional[str] = None,
+        tipo: str = EVENTO_COMENTARIO,
     ) -> Optional[InstagramEvent]:
-        """Grava o evento. Devolve None se o comment_id já existia (corrida)."""
+        """Grava o evento. Devolve None se o comment_id/mid já existia (corrida)."""
         evento = InstagramEvent(
             user_id=conexao.user_id,
             automation_id=automacao.id if automacao else None,
             comment_id=str(comment_id),
+            tipo=tipo,
             media_id=str(media_id) if media_id else None,
             commenter_id=str(commenter_id) if commenter_id else None,
             commenter_username=commenter_username,

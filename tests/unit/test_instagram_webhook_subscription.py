@@ -226,10 +226,12 @@ class TestReassinatura:
 
 
 class TestCamposInscritos:
-    def test_so_assina_comments(self):
-        """`messages` arrastaria a exigência de `instagram_business_manage_messages`,
-        que o v1 não precisa — a automação só reage a comentário."""
-        assert ig.CAMPOS_WEBHOOK == ["comments"]
+    def test_assina_comments_e_messages(self):
+        """Desde a automação de STORY (09/2026) assinamos os dois campos:
+        `comments` (posts/reels) e `messages` (reply de story chega como DM —
+        `instagram_business_manage_messages` já era aprovado desde o v1).
+        O webhook descarta toda DM que não é reply de story."""
+        assert ig.CAMPOS_WEBHOOK == ["comments", "messages"]
 
 
 class TestForceReauth:
