@@ -52,7 +52,23 @@ codar; a implementação reaproveita o pipeline de comentário inteiro.
 - **Republicar story**: descartado (exigiria instagram_business_content_publish
   + App Review novo + mídia re-hospedada).
 
-### Checklist da promoção para produção (quando o João aprovar em hml)
+### ✅ PROMOVIDO PARA PRODUÇÃO em 02/09 (~10h50 BRT), autorizado pelo João
+
+Executado na ordem: 072 aplicada em prod (colunas medidas) → backend
+`main 6eeb8b8` (cherry-pick de d05e53d; 601 testes verdes no código promovido;
+worker reiniciou com `processar_story_reply_instagram_task` no banner) →
+frontend `main 8bb872b` (cherry-picks de 18d7045+3e172dd; tsc baseline 26) →
+**3 contas ativas re-inscritas** com `subscribed_fields=comments,messages`
+(joaoivsonn, promosdabeatrizz_ e achadinhosdalua00 — a terceira conectou
+sozinha em 02/09) → Playwright em prod: toggle/opções OK, `GET /stories`
+devolveu 200 com o story real, zero 5xx.
+
+**Único passo restante (manual, dono do app):** assinar o campo `messages`
+no painel de Webhooks da Meta — sem ele a Meta não ENTREGA as DMs ao app,
+mesmo com as contas inscritas. Depois: E2E real (responder um story de outra
+conta → DM).
+
+### Checklist da promoção (como foi planejado)
 
 1. Aplicar a **072** em produção ANTES de qualquer push na main (ALTER TABLE —
    armadilha inversa do create_all).

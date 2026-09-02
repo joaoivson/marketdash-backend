@@ -147,9 +147,10 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   fica). Swap do webhook e E2E real FEITOS na manhã de 02/09 (reply+DM
   `enviado`; hml testa via `scripts/simular_comentario_instagram.py`).
   **Automação em STORY** (reply→DM via webhook `messages`, migration 072,
-  escopos story_especifico/story_qualquer) no ar em HOMOLOGAÇÃO desde a
-  tarde de 02/09 — promoção pendente de aprovação do João; checklist no
-  CHANGELOG. `GET /me/stories` confirmado na nossa variante (200 com o
+  escopos story_especifico/story_qualquer) EM PRODUÇÃO desde 02/09 ~10h50
+  (autorizada pelo João; 072 aplicada em prod, 3 contas re-inscritas com
+  comments+messages). Falta só o João assinar o campo `messages` no painel
+  Meta para as DMs serem entregues. `GET /me/stories` confirmado na nossa variante (200 com o
   story real). Ver CHANGELOG 2026-09-02.
 - **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **070**
   (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
