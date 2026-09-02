@@ -1,7 +1,7 @@
 # Contexto — MarketDash Backend
 
 > **Estado atual do repositório.** Sobrescreva as seções ao mudarem — o
-> histórico vive em `DIARIO.md`. Última atualização: **2026-08-21**.
+> histórico vive em `DIARIO.md`. Última atualização: **2026-09-02**.
 >
 > Esta primeira versão foi montada por inspeção do código, do `CHANGELOG.md`
 > da raiz e do `git log` de `develop`. Onde ela divergir do código, **o código
@@ -30,7 +30,7 @@ Supabase Storage (S3) · Docker Compose local.
 | `db` | PostgreSQL local | 5432 |
 | `redis` | Broker + backend do Celery | 6379 |
 | `minio` | S3 local | 9000 |
-| `evolution` | API de WhatsApp (Evolution) | — |
+| `waha` | API de WhatsApp (WAHA, engine GOWS — substituiu a Evolution em 25/08) | perfil `whatsapp`, porta 3001 |
 
 ⚠️ O `CLAUDE.md` da raiz manda subir uvicorn na **8081**; o compose e o proxy
 do Vite usam a **8000**. O caminho oficial é o compose — **backend roda em
@@ -86,7 +86,8 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
-| **Evolution (WhatsApp)** | `whatsapp_*` (4 services) | Resumo diário; no ar em **hml**, oculto em produção |
+| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Resumo diário (sessão global) + números/grupos das alunas (F1 do módulo de grupos); hml; **o número do resumo precisa re-parear (QR) pós-migração** |
+| **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migrations 068 **e 069** em hml (cron horário ativo); **no ar em hml** (API+worker+admin, verificado ponta a ponta em 31/08); produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
 
 ## Planos
 
@@ -118,19 +119,48 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 
 ## Em voo / pendente de humano
 
-- **Rodada 7 do painel admin** validada só contra **homologação**. Itens 1, 2,
-  3 e o achado card×lista precisam de reconfirmação contra **produção** — ver
-  a seção de pendências no `CHANGELOG.md` da raiz.
-- **Automação Instagram**: Rodadas 1 e 2 no ar em homologação. Falta o
-  **App Review** — em Standard Access só admin/dev/tester do app completam o
-  OAuth, então aluna comum trava na autorização. O screencast é gravado depois
-  da Rodada 2, para o vídeo bater com a tela final.
-  ⚠️ Em 22/08 o código foi parar em `main` por acidente (merge de branch
-  inteiro). **A UI está oculta em produção** por `isProductionHost()`: menu,
-  aba de Configurações e as 4 rotas `/dashboard/automacoes*`. As migrations
-  052–056 seguem **não aplicadas** em produção, de propósito.
-- **Migrations**: 052–056 (Instagram) e 045–046 (WhatsApp) **não** vão para
-  produção enquanto as features estiverem desligadas lá. ⚠️ A nota anterior
+- **Proxy por sessão (27/08)**: implementado, **flag ligada** e **pool vazio** —
+  ou seja, ainda sem efeito prático: cada sessão continua saindo pelo IP do
+  servidor, agora com WARNING no log. O que falta, em ordem:
+  1. **comprar 2 proxies BR** (1 móvel, 1 residencial — datacenter é queimado)
+     e cadastrá-los no admin (Uso e Sistema › Sistema › "IPs das conexões");
+  2. rodar o **spike**: aplicar proxy novo numa sessão já pareada em hml e
+     responder se o WhatsApp pede novo QR (registrar em `docs/whatsapp-waha.md`);
+  3. aplicar a **migration 069** (cron da sonda) — só depois de haver pool, ou
+     ela cria um `sync_run` vazio por hora;
+  4. `WHATSAPP_PROXY_OBRIGATORIO=true` **só em produção e só com pool com
+     capacidade** — com pool cheio/vazio e obrigatório ligado, nenhum número
+     novo é criado.
+  ⚠️ Números **já pareados não migram sozinhos**: a mudança de IP de um número
+  ativo é justamente o sinal a evitar, então é o botão *Realocar*, em lote
+  pequeno (um por dia por usuária).
+  ⚠️ Em hml/produção **implantados** a flag não muda nada ainda: o backend
+  desta feature não foi commitado nem deployado.
+
+- **Painel admin: Rodada 9 FECHADA em 02/09, validada contra PRODUÇÃO**
+  (diagnóstico assinante a assinante + backfill de `is_plan_change` rodado em
+  prod; hml tinha 0 eventos). Regras vigentes: frequência normalizada só em
+  `_norm_freq` (plans.py); bruto do MRR = `product_base_price` do webhook;
+  produtor conta churn; pareamento de upgrade por plano normalizado. A nota
+  antiga da Rodada 7 (validada só contra hml) está superada por esta.
+- **Automação Instagram: EM PRODUÇÃO desde 02/09** (App Review aprovado
+  01/09, as 3 permissões com Advanced Access). Migrations 052–056 aplicadas
+  em produção, cron de token agendado (202 validado), envs `INSTAGRAM_*` na
+  API e no worker, gate de ambiente removido no frontend (o de plano MAX
+  fica). Swap do webhook e E2E real FEITOS na manhã de 02/09 (reply+DM
+  `enviado`; hml testa via `scripts/simular_comentario_instagram.py`).
+  **Automação em STORY** (reply→DM via webhook `messages`, migration 072,
+  escopos story_especifico/story_qualquer) EM PRODUÇÃO desde 02/09 ~10h50
+  (autorizada pelo João; 072 aplicada em prod, 3 contas re-inscritas com
+  comments+messages). Falta só o João assinar o campo `messages` no painel
+  Meta para as DMs serem entregues. `GET /me/stories` confirmado na nossa variante (200 com o
+  story real). Ver CHANGELOG 2026-09-02.
+- **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **070**
+  (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
+  hml em 31/08 — ⚠️ é `ALTER TABLE`, a armadilha *inversa* do `create_all`:
+  subir o model antes dela quebra `GET /instancias` com `UndefinedColumn`; **052–056 (Instagram) APLICADAS em produção em 02/09** (a feature
+  ligou); 045–046 (WhatsApp) seguem fora de produção enquanto a feature
+  estiver desligada lá. ⚠️ A nota anterior
   dizia que 049–055 não estavam em produção, mas isso é **falso para 049/050**:
   a tela de Campanhas carrega em produção usando `ad_review_issue` e
   `status_active_since` via ORM, o que seria `UndefinedColumn` se as colunas não
