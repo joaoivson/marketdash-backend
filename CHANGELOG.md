@@ -11,6 +11,26 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Plano Max lançado na página de vendas)
+
+Com o Instagram no ar, o Max saiu do modo "só por link direto da Kiwify" e
+entrou na vitrine — landing (`SalesPrecos.tsx`, 3º card dourado com badge
+"Novo") e `/dashboard/planos` (`PLAN_ORDER` ganhou `"max"`). Preços que já
+existiam no catálogo dos dois lados: **R$ 97/mês · R$ 207/trimestre (−29%,
+eq. R$ 69/mês) · R$ 627/ano (−46%, eq. R$ 52,25/mês)**. Os teasers do toggle
+subiram para "até 29%"/"até 46%" (os maiores descontos agora são do Max).
+
+- A copy do Max vende **Automação de Instagram + páginas/links ilimitados** e
+  NÃO menciona o módulo de grupos de WhatsApp, que segue fora de produção.
+- Nenhuma mudança de backend: `PRICES`/`CHECKOUT_LINKS` do Max já estavam em
+  produção desde o merge de 22/08; o modal de upgrade já oferecia Max pelo
+  cadeado. Foi só vitrine.
+- Commits: `develop 60931a6`, `main b0eefd5` (cherry-pick limpo — os dois
+  arquivos eram idênticos entre os branches).
+- Conta `relacionamento@` (user 1) promovida a Max direto no banco de
+  produção em 02/09 (`UPDATE subscriptions SET plan='max' WHERE user_id=1`,
+  era `pro`) para validação — reverter quando quiser.
+
 ## [Não versionado] - 2026-09-02 (Instagram EM PRODUÇÃO)
 
 A Automação Instagram (comentário → direct, exclusiva do MAX) saiu de
