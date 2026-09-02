@@ -75,12 +75,18 @@ então o www é obrigatório), deauthorize e data-deletion apontando para
 
 ### Pendências desta rodada
 
-- **Swap do webhook** (única URL por app): trocar a callback de
-  `api.hml.marketdash.com.br` → `api.marketdash.com.br/webhooks/instagram` no
-  painel + conferir a assinatura do campo `comments` + botão Test. A partir daí
-  **hml não recebe comentário real** — testar com
-  `scripts/simular_comentario_instagram.py`.
-- E2E real em produção com conta MAX (conectar, automação, comentário → reply + DM).
+- ✅ **Swap do webhook FEITO** (manhã de 02/09): callback agora é
+  `api.marketdash.com.br/webhooks/instagram`, handshake verificou verde,
+  `comments` seguiu assinado em v25.0 (não resetou). Botão Test confirmado
+  ponta a ponta no log do worker (12:03 UTC: task recebida, payload de
+  exemplo `17865799348089039`, descartado com `conta não conectada` — o
+  correto para ids fake). **hml não recebe mais comentário real** — testar
+  lá com `scripts/simular_comentario_instagram.py`.
+- ✅ **E2E real em produção FEITO** (09:23 BRT de 02/09): `joaoivsonn`
+  conectado do zero (`webhook_subscrito=true`, 3 escopos), automação em post
+  real, comentário de `orquestraia` → `reply_status=enviado` +
+  `dm_status=enviado`, DM com a mensagem completa entregue. Bônus: a conta
+  `promosdabeatrizz_` (user 9) também já conectou.
 - D+1: conferir 1ª execução do cron em `cron.job_run_details`.
 - Assets `public/instagram/passo-{1,2,3}*.png` continuam pendentes de design
   (degradação silenciosa, não quebra).
