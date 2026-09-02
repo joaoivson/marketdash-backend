@@ -11,6 +11,61 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-02 (Automação em STORY — no ar em homologação)
+
+Pedido do João de manhã ("dá pra selecionar um story também?"), no ar em hml à
+tarde. Pesquisa na doc da Meta (3 leitores + verificação adversarial) antes de
+codar; a implementação reaproveita o pipeline de comentário inteiro.
+
+### O que existe agora (hml)
+
+- **Reply de story → DM automática.** Story não tem comentário: o gatilho chega
+  pelo webhook `messages` (assinamos `comments,messages`; o webhook descarta DM
+  comum/echo/reação no primeiro filtro). Escopos `story_especifico` (morre com o
+  story em 24h) e `story_qualquer`. Sem resposta pública (não existe em story).
+  Dedupe pelo `mid` (migration **072** alargou `comment_id` p/ 160 e criou
+  `tipo`), janela de 24h da mensageria, teto horário compartilhado.
+- **Card 1 do editor virou toggle Publicações × Stories** (sugestão do João —
+  4 opções empilhadas escondiam as de story abaixo da dobra), com seletor de
+  stories ativos (`GET /instagram/stories`), thumbs 9:16 e aviso de validade.
+- **fix (também em produção, `main 1ce08d2`)**: a barra Salvar/Publicar cobria
+  o sidebar (fixed inset-x-0 → `md:left-72`) e ganhou o botão **Voltar**.
+- Simulador ganhou `--story`. Testes: 108 Instagram / 986 unit, verdes.
+
+### Validações (02/09 à tarde)
+
+- E2E simulado em hml: sem_match ✅ · match→Send API real (Meta recusou o token
+  sintético com 190, provando o caminho) ✅ · dedupe por mid ✅.
+- **`GET /me/stories` FUNCIONA na nossa variante** (graph.instagram.com +
+  instagram_business_basic): com a conexão real do João em hml devolveu 200 com
+  o story ativo dele (media_product_type=STORY) — a doc da Meta era ambígua
+  nesse ponto; confirmado na prática. O story apareceu no seletor.
+- Playwright em hml (toggle/opções/cards) e em prod (barra x=288 + Voltar).
+- ⚠️ CI de homologação do frontend falhou 2× no passo "Trigger Coolify
+  deployment" (conectividade runner→IP conhecida) — deploy disparado direto na
+  API do Coolify. Conferir o CI antes de confiar que hml atualizou.
+
+### O que NÃO entrou (decisão do João, 02/09)
+
+- **Stories arquivados**: a API da Meta não expõe (nenhum endpoint, nem
+  highlights) — confirmado adversarialmente na doc.
+- **Republicar story**: descartado (exigiria instagram_business_content_publish
+  + App Review novo + mídia re-hospedada).
+
+### Checklist da promoção para produção (quando o João aprovar em hml)
+
+1. Aplicar a **072** em produção ANTES de qualquer push na main (ALTER TABLE —
+   armadilha inversa do create_all).
+2. Backend: promover `d05e53d` (develop→main é proibido; cherry-pick).
+3. Frontend: promover `18d7045` + `3e172dd` (o fix da barra `624f0ac` já está
+   na main como `1ce08d2`).
+4. Painel Meta (dono do app): **assinar o campo `messages`** no webhook.
+5. Re-inscrever as contas conectadas de produção (`/connection/subscribe` ou
+   aguardar o refresh diário) para incluir `messages` no subscribed_fields.
+6. E2E real: responder um story de outra conta → DM.
+7. Pendência menor: o preview do editor ainda mostra o mock de comentário no
+   escopo story (cosmético).
+
 ## [Não versionado] - 2026-09-02 (Mobile: Instagram no drawer "Mais" + nota botão×texto)
 
 - **fix(mobile) `main 65862fe`**: em `main`, a sidebar e o `MobileBottomNav`
