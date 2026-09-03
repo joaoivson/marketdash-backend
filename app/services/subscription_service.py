@@ -97,6 +97,8 @@ class SubscriptionService:
         keep_access_until: Any = UNSET,
     ):
         """Atualiza ou cria subscription com dados do provider (Cakto/Kiwify)."""
+        incoming_txn = (provider_transaction_id or cakto_transaction_id or "").strip() or None
+
         # Guard anti-cancelamento-de-assinatura-antiga: webhooks chegam FORA DE ORDEM
         # (ex.: "Assinatura cancelada" da sub velha depois da "Compra aprovada" da nova).
         # Como há uma linha por usuário (last-write-wins), um cancelamento de OUTRA transação
@@ -104,7 +106,21 @@ class SubscriptionService:
         # vigente; cancelamento de transação diferente (sub antiga) é ignorado.
         if not is_active:
             current = self.repo.get_by_user_id(user_id)
-            incoming_txn = (provider_transaction_id or cakto_transaction_id or "").strip() or None
+            # (10.2) Cancelamento da compra PENDENTE: só some a pendência —
+            # a principal (tier maior, ainda vigente) não é tocada.
+            if (
+                current is not None
+                and incoming_txn
+                and getattr(current, "pending_provider_transaction_id", None) == incoming_txn
+            ):
+                logger.info(
+                    "Cancelamento da assinatura PENDENTE p/ user %s (txn=%s): limpa pending_*, principal intacta.",
+                    user_id, incoming_txn,
+                )
+                self._limpar_pendente(current)
+                self.repo.db.commit()
+                self.repo.db.refresh(current)
+                return current
             current_txn = (current.provider_transaction_id or current.cakto_transaction_id) if current else None
             if current and current.is_active and incoming_txn and current_txn and incoming_txn != current_txn:
                 logger.info(
@@ -184,6 +200,40 @@ class SubscriptionService:
         if status_assinatura is None:
             status_assinatura = "ativa" if is_active_value else "cancelada"
 
+        # (10.2) Guard de ativação: comprar tier MENOR com tier maior ainda
+        # vigente NÃO pode rebaixar na hora (uma linha por usuário = last-write-
+        # wins derrubava acesso pago). A compra fica pendente e é promovida
+        # quando a principal perder o acesso (_promover_pendente_se_devido).
+        if is_active:
+            from app.core.plans import PLAN_RANK
+
+            current = self.repo.get_by_user_id(user_id)
+            if current is not None:
+                current_txn = current.provider_transaction_id or current.cakto_transaction_id
+                rank_atual = PLAN_RANK.get(normalize_plan(current.plan), 0)
+                rank_novo = PLAN_RANK.get(plan_value, 0)
+                if (
+                    rank_novo < rank_atual
+                    and incoming_txn
+                    and current_txn
+                    and incoming_txn != current_txn
+                    and subscription_has_access(current)
+                ):
+                    logger.info(
+                        "Ativação de tier menor p/ user %s (%s < %s, txn=%s): "
+                        "principal vigente mantida, compra gravada como pendente.",
+                        user_id, plan_value, normalize_plan(current.plan), incoming_txn,
+                    )
+                    current.pending_plan = plan_value
+                    current.pending_periodo = plano_periodo
+                    # Mesma precedência do `vence` da principal, com o due date
+                    # do provider como reforço (Kiwify manda os dois).
+                    current.pending_vence_em = vence or provider_due_date
+                    current.pending_provider_transaction_id = incoming_txn
+                    self.repo.db.commit()
+                    self.repo.db.refresh(current)
+                    return current
+
         subscription = self.repo.upsert(
             user_id=user_id,
             plan=plan_value,
@@ -212,6 +262,80 @@ class SubscriptionService:
             assinatura_status=status_assinatura,
             assinatura_vence_em=vence,
         )
+
+        # (10.2) A txn ativada era justamente a pendente (ex.: principal já sem
+        # acesso quando a ativação chegou) — a pendência deixa de existir.
+        if (
+            is_active
+            and incoming_txn
+            and getattr(subscription, "pending_provider_transaction_id", None) == incoming_txn
+        ):
+            self._limpar_pendente(subscription)
+            self.repo.db.commit()
+            self.repo.db.refresh(subscription)
+
+        return subscription
+
+    @staticmethod
+    def _limpar_pendente(subscription) -> None:
+        subscription.pending_plan = None
+        subscription.pending_periodo = None
+        subscription.pending_vence_em = None
+        subscription.pending_provider_transaction_id = None
+
+    def _promover_pendente_se_devido(self, subscription) -> bool:
+        """(10.2) Promove a compra pendente quando a principal perde o acesso.
+
+        Muda o objeto em memória e retorna True se algo mudou — o CALLER
+        comita. A promoção acontece nos caminhos de leitura/checagem de acesso
+        (get_effective_subscription / check_and_update_subscription), sem
+        depender de webhook novo.
+        """
+        if subscription is None or not getattr(subscription, "pending_plan", None):
+            return False
+        if subscription_has_access(subscription):
+            return False
+
+        pendente_vence = _as_utc(subscription.pending_vence_em)
+        if pendente_vence is None or pendente_vence < datetime.now(timezone.utc):
+            # A pendente também já venceu — só limpa, sem ressuscitar acesso.
+            self._limpar_pendente(subscription)
+            return True
+
+        logger.info(
+            "Promovendo assinatura pendente p/ user %s: %s (txn=%s) vira a principal.",
+            subscription.user_id if hasattr(subscription, "user_id") else "?",
+            subscription.pending_plan,
+            subscription.pending_provider_transaction_id,
+        )
+        subscription.plan = subscription.pending_plan
+        subscription.plano_periodo = subscription.pending_periodo
+        subscription.assinatura_vence_em = subscription.pending_vence_em
+        subscription.expires_at = subscription.pending_vence_em
+        subscription.provider_due_date = subscription.pending_vence_em
+        subscription.provider_transaction_id = subscription.pending_provider_transaction_id
+        subscription.is_active = True
+        subscription.assinatura_status = "ativa"
+        # Os status de cancelamento eram da assinatura ANTIGA — mantê-los
+        # deixaria a promovida "cancelada" aos olhos de subscription_has_access.
+        subscription.provider_subscription_status = None
+        subscription.provider_status = None
+        # O offer_name também era da antiga, e NÃO é decorativo: a revalidação
+        # de 30 dias faz `plan = provider_offer_name or cakto_offer_name`
+        # (check_and_update_subscription). Deixá-lo aqui reverteria o plano
+        # promovido para o tier que expirou, na primeira revalidação — o
+        # downgrade que a 10.2 existe para impedir, com um mês de atraso.
+        subscription.provider_offer_name = None
+        subscription.cakto_offer_name = None
+        self._limpar_pendente(subscription)
+        return True
+
+    def get_effective_subscription(self, user_id: int):
+        """Assinatura efetiva do usuário, já aplicando a promoção pendente."""
+        subscription = self.repo.get_by_user_id(user_id)
+        if subscription is not None and self._promover_pendente_se_devido(subscription):
+            self.repo.db.commit()
+            self.repo.db.refresh(subscription)
         return subscription
 
     def needs_validation(self, user_id: int) -> bool:
@@ -268,6 +392,10 @@ class SubscriptionService:
             elif not subscription.is_active:
                 subscription.expires_at = None
 
+            # (10.2) Principal acabou de perder o acesso e existe compra
+            # pendente vigente → ela assume aqui, sem esperar webhook.
+            self._promover_pendente_se_devido(subscription)
+
             self.repo.db.commit()
             self.repo.db.refresh(subscription)
 
@@ -286,7 +414,8 @@ class SubscriptionService:
 
     def get_subscription_status(self, user_id: int) -> Dict[str, Any]:
         """Retorna status completo da assinatura do usuário."""
-        subscription = self.repo.get_by_user_id(user_id)
+        # Leitura de acesso já aplica a promoção da pendente (10.2)
+        subscription = self.get_effective_subscription(user_id)
         
         from app.core.plans import normalize_plan
 

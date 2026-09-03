@@ -29,9 +29,19 @@ class FacebookAdAccountSelect(BaseModel):
     ad_account_name: Optional[str] = None
 
 
+class FacebookAdAccountRef(BaseModel):
+    """Referência leve a uma conta selecionada: id 'act_123' + nome de exibição."""
+    id: str
+    # None = nome desconhecido (ex.: seleção gravada antes da coluna de nomes existir)
+    name: Optional[str] = None
+
+
 class FacebookAdAccountsSelect(BaseModel):
     """Seleção de uma ou mais contas de anúncio (formato 'act_123' ou só o número)."""
     account_ids: List[str]
+    # Opcional: id+nome das contas selecionadas, para persistir os nomes e o
+    # status não depender da Graph. account_ids segue sendo a fonte da seleção.
+    accounts: Optional[List[FacebookAdAccountRef]] = None
 
 
 class FacebookIntegrationResponse(BaseModel):
@@ -42,6 +52,8 @@ class FacebookIntegrationResponse(BaseModel):
     ad_account_name: Optional[str] = None
     # Contas selecionadas (preenchido pelo service a partir de account_ids_list()).
     ad_account_ids: List[str] = []
+    # Contas selecionadas com nome persistido (name None quando desconhecido).
+    ad_accounts: List[FacebookAdAccountRef] = []
     is_active: bool
     # conectado | nunca | desconectado
     connection_state: str = "nunca"

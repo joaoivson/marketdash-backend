@@ -227,6 +227,11 @@ class RoteiroService:
                 motivo = None
                 if not grupo.ativo:
                     status, motivo = MSG_PULADA, "grupo_inativo"
+                elif not grupo.ativado:
+                    # Toggle da usuária (spec §6.3): grupo desativado NUNCA
+                    # recebe envio — nem ação. A linha nasce `pulado` (mesmo
+                    # padrão do permite_envio) para constar no relatório.
+                    status, motivo = MSG_PULADA, "grupo_desativado"
                 elif not grupo.permite_envio and passo.tipo_conteudo != CONTEUDO_ACAO:
                     status, motivo = MSG_PULADA, "sem_permissao"
                 elif (passo.tipo_conteudo == CONTEUDO_ACAO

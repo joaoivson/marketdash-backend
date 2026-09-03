@@ -79,14 +79,25 @@ class FacebookIntegrationRepository:
         self.db.flush()
         return integration
 
-    def set_ad_accounts(self, user_id: int, account_ids: List[str]) -> Optional[FacebookIntegration]:
-        """Salva a lista de contas selecionadas (JSON). Mantém ad_account_id legado = primeira."""
+    def set_ad_accounts(
+        self,
+        user_id: int,
+        account_ids: List[str],
+        account_names: Optional[dict] = None,
+    ) -> Optional[FacebookIntegration]:
+        """Salva a lista de contas selecionadas (JSON). Mantém ad_account_id legado = primeira.
+
+        `account_names` ({"act_123": "Nome"}) é opcional: None preserva o que já
+        está gravado (payload legado sem nomes não pode apagar o metadado).
+        """
         integration = self.get_by_user_id(user_id)
         if not integration:
             return None
         ids = [a for a in account_ids if a]
         integration.ad_accounts_json = json.dumps(ids) if ids else None
         integration.ad_account_id = ids[0] if ids else None
+        if account_names is not None:
+            integration.ad_accounts_names_json = json.dumps(account_names) if account_names else None
         self.db.flush()
         return integration
 

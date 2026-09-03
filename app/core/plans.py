@@ -72,6 +72,11 @@ FEATURES: Dict[str, Dict[str, Any]] = {
 # assinatura pra Optional). -1 nunca é um limite real válido.
 UNLIMITED = -1
 
+# Ordem dos tiers p/ comparação (upgrade x downgrade). Fonte única: o
+# require_plan e o guard de ativação da assinatura (10.2) leem DAQUI —
+# duplicar este dict é como o rebaixamento indevido nasceria de novo.
+PLAN_RANK: Dict[str, int] = {"essencial": 1, "pro": 2, "max": 3}
+
 
 def is_unlimited(value: int) -> bool:
     return value == UNLIMITED

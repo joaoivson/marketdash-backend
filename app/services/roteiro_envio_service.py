@@ -7,8 +7,9 @@ aparecem no loop:
 
   claim atômico   dois workers nunca seguram a mesma linha (SKIP LOCKED);
   presa=falhou    worker morto entre claim e envio NUNCA gera reenvio;
-  janela          fecha no meio → execução volta a `agendada` na próxima
-                  abertura (a linha claimada volta a `pendente`);
+  janela          decidida UMA vez, no INÍCIO da fatia (spec §7.4): começou
+                  dentro → o lote CONCLUI, mesmo passando do fim; começou
+                  fora → volta a `agendada` na próxima abertura;
   tetos           plano → global → instância; instância no teto sai do pool;
                   nenhum pool → `pausada`, retomável;
   rodadas         N mensagens + pausa longa (padrão humano), jitter entre
@@ -43,6 +44,7 @@ from app.services.janela_envio_service import (
 )
 from app.services.roteiro_service import RoteiroService
 from app.services.template_mensagem_service import montar_texto, sortear_variacao
+from app.services.whatsapp_grupo_service import garantir_atribuicao
 from app.services.waha_client import ErroWhatsapp
 from app.services.whatsapp_instancia_service import cliente_da_sessao
 
@@ -123,6 +125,15 @@ class RoteiroEnvioService:
             grupo = self._grupo_de(m)
             passo = self._passo_de(m)
             try:
+                # Auto-cura da atribuição: desde que o sub_id passou a nascer na
+                # ATIVAÇÃO (spec §6.3), o sync não backfilla mais — um grupo que
+                # chegou aqui por caminho que não passou pelo toggle (vínculo por
+                # API, dado legado) enviaria com sub_id NULL e a comissão do
+                # grupo cairia em lugar nenhum, sem erro. É idempotente: quem já
+                # tem sub_id passa ileso, e sub_id existente NUNCA é regenerado.
+                if not grupo.sub_id or not grupo.custom_link_id:
+                    garantir_atribuicao(self.db, grupo)
+                    self.db.commit()
                 gerar = self.short_link_factory or (
                     lambda uid, url, sid: asyncio.run(svc.generate_short_link(uid, url, sid))
                 )
@@ -241,6 +252,40 @@ class RoteiroEnvioService:
               .filter(UserSettings.user_id == execucao.user_id).first())
         config_janela = carregar_config(getattr(us, "whatsapp_envio_config", None))
 
+        # Janela UMA vez, no início da fatia (spec §7.4) — e a unidade da regra
+        # é a EXECUÇÃO, não a fatia: "execução que começa dentro da janela é
+        # concluída, mesmo que ultrapasse o horário de fim". Um lote grande
+        # gasta várias fatias (cada uma limitada por orçamento de tempo), então
+        # olhar só o início da fatia atual pararia às 22:05 um envio começado
+        # às 21:50 — metade dos grupos com a oferta, metade sem, que é
+        # exatamente o corte no meio que a regra existe para evitar.
+        #
+        # `iniciado_em` é gravado no primeiro flip agendada→enviando e nunca
+        # mais muda (COALESCE no tick), então a comparação de dia civil BRT
+        # impede que execução parqueada ONTEM se considere liberada hoje de
+        # madrugada.
+        agora = datetime.now(timezone.utc)
+        comecou_dentro_da_janela = (
+            execucao.iniciado_em is not None
+            and execucao.iniciado_em.astimezone(BRT).date() == agora.astimezone(BRT).date()
+            and janela_aberta(config_janela, execucao.iniciado_em)
+        )
+        if not janela_aberta(config_janela, agora) and not comecou_dentro_da_janela:
+            abertura = proxima_abertura(config_janela, agora)
+            if abertura is None:
+                # Janela que nunca abre (todos os dias inativos): pausar com
+                # motivo claro — re-agendar seria livelock no tick.
+                self._pausar(execucao, r, "janela_sem_dia_ativo")
+            else:
+                execucao.status = EXEC_AGENDADA
+                execucao.proxima_execucao_em = abertura
+                self.db.commit()
+                r.motivo_parada = "janela"
+                logger.info("Execução %s fora da janela — retoma %s",
+                            execucao.id, abertura.isoformat())
+            self._atualizar_contadores(execucao)
+            return r.to_dict()
+
         sub = SubscriptionRepository(self.db).get_by_user_id(execucao.user_id)
         teto_plano = plan_limit(normalize_plan(sub.plan if sub else None),
                                 "whatsapp_msgs_dia")
@@ -266,21 +311,6 @@ class RoteiroEnvioService:
                 break
 
             agora = datetime.now(timezone.utc)
-
-            if not janela_aberta(config_janela, agora):
-                abertura = proxima_abertura(config_janela, agora)
-                if abertura is None:
-                    # Janela que nunca abre (todos os dias inativos): pausar
-                    # com motivo claro — re-agendar seria livelock no tick.
-                    self._pausar(execucao, r, "janela_sem_dia_ativo")
-                    break
-                execucao.status = EXEC_AGENDADA
-                execucao.proxima_execucao_em = abertura
-                self.db.commit()
-                r.motivo_parada = "janela"
-                logger.info("Execução %s fora da janela — retoma %s",
-                            execucao.id, abertura.isoformat())
-                break
 
             inicio_dia, fim_dia = _janela_do_dia_brt(agora)
             if not is_unlimited(teto_plano):
@@ -318,6 +348,16 @@ class RoteiroEnvioService:
                     r.motivo_parada = "aguardando_proximo_passo"
                 break
 
+            grupo = self._grupo_de(mensagem)
+            if not grupo.ativado:
+                # Toggle "Ativo" da usuária (spec §6.3): desativar DEPOIS do
+                # agendamento também vale — grupo desativado NUNCA recebe
+                # envio, mesmo com a linha já materializada por uma campanha
+                # antiga. Mesmo padrão de skip do `permite_envio` no agendar.
+                self.repo.marcar(mensagem, MSG_PULADA, erro="grupo_desativado")
+                r.puladas += 1
+                continue
+
             instancia = self._instancia_para_grupo(mensagem.grupo_id, elegiveis,
                                                    vinculos)
             if instancia is None:
@@ -343,7 +383,6 @@ class RoteiroEnvioService:
                 self.dormir(random.uniform(settings.WHATSAPP_GRUPO_JITTER_MIN_S,
                                            settings.WHATSAPP_GRUPO_JITTER_MAX_S))
 
-            grupo = self._grupo_de(mensagem)
             texto = self._texto_final(execucao, mensagem)
             mensagem.texto_final = texto
             mensagem.instancia_id = instancia.id

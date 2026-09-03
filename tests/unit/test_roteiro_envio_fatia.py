@@ -6,7 +6,8 @@ Os invariantes que não podem regredir:
   * matar o worker no meio NÃO duplica mensagem (presa vira falhou);
   * claim concorrente nunca entrega a mesma linha a dois workers;
   * pausar vale no meio da fatia;
-  * janela fechada devolve a execução para `agendada` na próxima abertura;
+  * janela é decidida UMA vez, no INÍCIO da fatia (§7.4): começou fora →
+    `agendada` na próxima abertura; fechou no meio → o lote CONCLUI;
   * teto por instância tira o número do pool; pool vazio pausa (retomável);
   * grupo_invalido pula e desativa o grupo; disjuntor faz failover.
 """
@@ -55,6 +56,15 @@ if PG_OK:
             # 071 (WAHA multi-servidor): idem. A FK fica de fora de propósito —
             # aqui só interessa a coluna existir para o INSERT do model passar.
             "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS servidor_id INTEGER",
+            # 074 (toggle "Ativo" da usuária): idem.
+            "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS "
+            "ativado BOOLEAN NOT NULL DEFAULT FALSE",
+            # 076 (tier pendente da assinatura): o model já tem as colunas.
+            "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_plan VARCHAR",
+            "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_periodo VARCHAR(32)",
+            "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_vence_em TIMESTAMPTZ",
+            "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "
+            "pending_provider_transaction_id VARCHAR",
         ):
             _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
@@ -161,8 +171,10 @@ def _cenario(db, n_grupos=3, n_instancias=1, teto_instancia=None,
     grupos = []
     quando = datetime.now(timezone.utc) + timedelta(seconds=agendado_delta_s)
     for i in range(n_grupos):
+        # `ativado=True`: o motor pula grupo que a usuária não ligou (§6.3).
         g = WhatsappGrupo(user_id=user.id, jid=f"12036{suf}{i}@g.us",
-                          nome=f"G{i}", ativo=True, permite_envio=True)
+                          nome=f"G{i}", ativo=True, ativado=True,
+                          permite_envio=True)
         db.add(g); db.flush()
         for inst in instancias:
             db.add(WhatsappGrupoInstancia(grupo_id=g.id, instancia_id=inst.id))
@@ -271,6 +283,67 @@ def test_janela_fechada_devolve_para_agendada_na_proxima_abertura(db):
     assert execucao.status == EXEC_AGENDADA
     assert execucao.proxima_execucao_em is not None
     assert r["enviadas"] == 0
+
+
+def test_janela_que_fecha_no_meio_da_fatia_nao_para_o_lote(db, monkeypatch):
+    """
+    Regra de borda (§7.4): a janela é consultada UMA vez, no INÍCIO da fatia.
+
+    Antes, o motor re-checava a cada mensagem e o lote parava no meio — metade
+    dos grupos com a oferta, metade sem. Aqui a janela "fecha" logo depois da
+    primeira consulta e, ainda assim, as 3 mensagens saem.
+    """
+    import app.services.roteiro_envio_service as mod
+
+    user, _, _, execucao = _cenario(db, n_grupos=3)
+    consultas = {"n": 0}
+
+    def janela_que_fecha(config, momento=None):
+        consultas["n"] += 1
+        return consultas["n"] <= 1     # aberta só na primeira consulta
+
+    monkeypatch.setattr(mod, "janela_aberta", janela_que_fecha)
+    r = _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["enviadas"] == 3
+    assert r["motivo_parada"] == "concluida"
+    assert execucao.status == EXEC_CONCLUIDA
+    assert consultas["n"] == 1, "a janela deve ser decidida UMA vez, no início"
+
+
+def test_janela_que_nunca_abre_pausa_na_entrada_da_fatia(db):
+    """Todos os dias inativos: reagendar seria livelock no tick — a proteção
+    continua valendo com a checagem movida para o início da fatia."""
+    nunca = {"ativo": True, "dias": {str(i): {"ativo": False} for i in range(7)}}
+    user, _, _, execucao = _cenario(db, janela_config=nunca)
+    r = _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["motivo_parada"] == "janela_sem_dia_ativo"
+    assert execucao.status == EXEC_PAUSADA
+    assert r["enviadas"] == 0
+
+
+def test_grupo_desativado_depois_do_agendamento_nao_recebe(db):
+    """Toggle da usuária (§6.3): desativar DEPOIS de a linha existir também
+    vale — grupo desativado NUNCA recebe, mesmo vinculado a campanha antiga."""
+    user, _, grupos, execucao = _cenario(db, n_grupos=3)
+    grupos[0].ativado = False
+    db.add(grupos[0]); db.commit()
+
+    cliente = _FakeWaha()
+    r = _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert r["enviadas"] == 2 and r["puladas"] == 1
+    assert execucao.status == EXEC_CONCLUIDA
+    assert grupos[0].jid not in {c for c, _ in cliente.enviadas}
+    linha = (db.query(RoteiroMensagem)
+             .filter(RoteiroMensagem.execucao_id == execucao.id,
+                     RoteiroMensagem.grupo_id == grupos[0].id).one())
+    assert linha.status == MSG_PULADA
+    assert linha.erro_motivo == "grupo_desativado"
 
 
 def test_teto_da_instancia_esvazia_o_pool_e_pausa(db):
@@ -455,7 +528,8 @@ def _cenario_acao(db, acao, parametro=None, sou_admin=True, com_campanha=True):
     db.add(passo); db.flush()
 
     g = WhatsappGrupo(user_id=user.id, jid=f"120363{suf}@g.us", nome="Antigo",
-                      ativo=True, permite_envio=True, sou_admin=sou_admin)
+                      ativo=True, ativado=True, permite_envio=True,
+                      sou_admin=sou_admin)
     db.add(g); db.flush()
     db.add(WhatsappGrupoInstancia(grupo_id=g.id, instancia_id=inst.id))
     if campanha_id:

@@ -11,6 +11,65 @@
 
 ---
 
+## 2026-09-03 — Rodada Configurações: dois eixos de "ativo" e o tier que não podia cair
+
+O que mudou: coluna `whatsapp_grupos.ativado` (074) com PATCH próprio, e o
+`sub_id`/`custom_link` do grupo migraram do sync para o momento da ATIVAÇÃO;
+`rebuild_ad_spend_from_meta` passou a filtrar por conta de anúncio e o
+FacebookIntegration ganhou dicionário de nomes (075); colunas `pending_*` em
+subscriptions para "maior tier vence" (076); Resumo diário e Blacklist
+removidos por inteiro (077 desagenda o cron e derruba as tabelas); janela de
+envio nasce DESLIGADA e a regra de borda passou a valer por execução.
+
+Por quê assim:
+
+**`ativo` vs `ativado` não podiam ser a mesma coluna.** `ativo` é lifecycle do
+sync — some do WhatsApp vira FALSE, reaparece vira TRUE, incondicionalmente,
+todo dia. Se o toggle da usuária morasse ali, o sync da madrugada desfaria a
+escolha dela e ninguém entenderia por quê. São perguntas diferentes ("o grupo
+existe?" e "eu quero operar nele?") e por isso são duas colunas.
+
+**Atribuição nasce na ativação, e isso não é detalhe de implementação.** O
+`sub_id` é o que liga comissão ao grupo. Nascendo no primeiro envio ou na
+criação da campanha, todo o tráfego que entrou antes disso perde atribuição de
+forma permanente — não dá pra reprocessar. Ativar já entrega o link de entrada
+pronto pra anúncio, antes de existir qualquer campanha. Como o sync deixou de
+criar (e de backfillar), a invariante "ativado ⇒ tem sub_id" ficou dependendo
+de um ponto só; por isso o motor de envio auto-cura quem chegar sem ela, e o
+backfill da 074 inclui grupo de monitoramento — não só de campanha, senão
+monitoramento vivo morreria calado no deploy.
+
+**"Maior tier vence" num schema de uma linha por usuário.** `user_id` é UNIQUE,
+então duas assinaturas simultâneas nunca existiram no estado — o último webhook
+sobrescrevia. Quem tinha Max até dezembro e assinasse Pro hoje perdia o Max
+pago na hora. A saída foi pendurar a compra menor em `pending_*` e promovê-la
+quando a principal expira, na LEITURA (sem depender de webhook novo). O detalhe
+que quase passou: `provider_offer_name` continuava apontando pro plano antigo, e
+a revalidação de 30 dias reescreve `plan` a partir dele — o downgrade voltaria
+um mês depois, longe da causa.
+
+**Tirar a Graph API do mount cobrou um preço escondido.** `GET /ad-accounts`
+era, sem que ninguém tivesse decidido isso, o detector de token morto do
+Facebook: ao falhar, marcava a integração desconectada. Com a chamada movida
+pro modal, o sync virou o único lugar que ainda toca a Graph com regularidade —
+e ele engolia o erro e seguia pra próxima conta. Sem mexer nisso, a tela diria
+"Conectado" enquanto o gasto parava de entrar.
+
+Migrations 074-077 **aplicadas em homologação em 03/09** (colunas conferidas
+uma a uma, 3 tabelas derrubadas, cron desagendado, API religada limpa) e
+**pendentes em produção**. A 077 é a que não pode ser esquecida lá: o
+`whatsapp-resumo-9am-brt` está agendado em produção e o código que ele chama
+deixou de existir. Ela também descarta os opt-ins reais das alunas — em hml
+eram 1 opt-in e 6 envios de teste, em produção é dado de gente.
+
+Outras pendências: Contas do Facebook selecionadas antes da 075 não têm nome gravado —
+mostram o id até a afiliada re-salvar a seleção no modal. Quem nunca abriu a
+aba Envio tinha 08–22 implícito e passa a enviar sem trava de horário: não há
+backfill, e vale avisar antes do deploy (risco anti-ban). Pausa por dia já
+salva continua no banco, invisível na tela, até a usuária salvar de novo.
+
+---
+
 ## 2026-09-02 (noite) — Rodada 9 do painel admin: as 3 causas eram outras
 
 O que mudou: MRR mensaliza sempre ("annually" entrou nos apelidos de

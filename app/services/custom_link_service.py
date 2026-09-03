@@ -28,6 +28,12 @@ class CustomLinkService:
             if l.id not in ids_de_grupo
         ]
 
+    def contar_links_do_plano(self, user_id: int) -> int:
+        """Quantos links contam para o limite do plano. Mesma regra de
+        `_links_do_plano`, mas por COUNT — para quem só quer o número (o
+        contador de uso da tela de Assinatura) e não a lista."""
+        return self.repository.contar_do_plano(user_id)
+
     def get_link(self, link_id: int) -> Optional[CustomLink]:
         return self.repository.get(link_id)
 

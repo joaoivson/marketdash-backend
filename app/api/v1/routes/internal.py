@@ -173,41 +173,6 @@ async def cron_instagram_token_refresh(
     return {"status": "accepted", "mode": "background-inline"}
 
 
-@router.post("/cron/whatsapp-resumo", status_code=status.HTTP_202_ACCEPTED)
-async def cron_whatsapp_resumo(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    authorization: str | None = Header(default=None, alias="Authorization"),
-    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
-):
-    """
-    Resumo diário no WhatsApp — pg_cron às 12h UTC (9h de Brasília).
-
-    Inline num BackgroundTask, como o sync do Facebook: o lote dorme alguns
-    segundos entre mensagens (anti-banimento), então levaria minutos e estouraria
-    o timeout de 5s do pg_net se fosse síncrono. Idempotência é do banco, não
-    daqui — o índice único de (user_id, tipo, dia) impede repetir a mensagem se
-    este endpoint for chamado duas vezes.
-
-    Query:
-      - user_id=<int> opcional — manda só para essa afiliada (teste / ops).
-    """
-    caller_ip = request.client.host if request.client else "unknown"
-    _validate_cron_secret(_extract_secret(authorization, x_cron_secret), caller_ip)
-
-    from app.services.whatsapp_runner import rodar_resumo_diario
-
-    bruto = request.query_params.get("user_id")
-    try:
-        apenas = int(bruto) if bruto else None
-    except ValueError:
-        raise HTTPException(status_code=400, detail="user_id inválido")
-
-    background_tasks.add_task(rodar_resumo_diario, apenas_user_id=apenas)
-    logger.info("cron.whatsapp-resumo aceito caller_ip=%s user_id=%s", caller_ip, apenas)
-    return {"status": "accepted", "mode": "background-inline"}
-
-
 @router.post("/cron/roteiros", status_code=status.HTTP_202_ACCEPTED)
 def cron_roteiros(
     request: Request,
@@ -305,14 +270,53 @@ def _rodar_snapshot_de_grupos() -> None:
         expurgadas = servico_mon.expurgar_antigas(
             settings.MONITORAMENTO_RETENCAO_DIAS
         )
+        # §6.5: número criado que NUNCA pareou (status `criada` há mais de
+        # 24h) é lixo de fluxo abandonado — some da lista e devolve a vaga do
+        # plano. SEMPRE via service.remover (WAHA + proxy + soft-delete):
+        # UPDATE direto deixaria sessão zumbi no WAHA e proxy preso.
+        removidas = _limpar_instancias_nunca_pareadas(db)
         logger.info("Snapshot diário: %s | órfãs removidas: %s | sessões "
                     "realinhadas: %s | capturas destravadas: %s | "
-                    "expurgadas: %s", total, orfas, eventos, destravadas,
-                    expurgadas)
+                    "expurgadas: %s | nunca pareadas removidas: %s",
+                    total, orfas, eventos, destravadas, expurgadas, removidas)
     except Exception:
         logger.exception("Snapshot diário de grupos falhou por inteiro")
     finally:
         db.close()
+
+
+def _limpar_instancias_nunca_pareadas(db) -> int:
+    """Remove instâncias `criada` com mais de 24h (spec §6.5). Devolve quantas."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.repositories.whatsapp_instancia_repository import (
+        WhatsappInstanciaRepository,
+    )
+    from app.services.whatsapp_instancia_service import WhatsappInstanciaService
+
+    repo = WhatsappInstanciaRepository(db)
+    limite = datetime.now(timezone.utc) - timedelta(hours=24)
+    velhas = repo.criadas_antes_de(limite)
+    if not velhas:
+        return 0
+    servico = WhatsappInstanciaService(
+        repo=repo, plan_limit_numeros=0,
+        webhook_url=settings.WAHA_WEBHOOK_URL, db=db,
+    )
+    removidas = 0
+    for instancia in velhas:
+        try:
+            servico.remover(instancia)
+            removidas += 1
+        except Exception:
+            db.rollback()
+            # Uma instância problemática não pode travar a limpeza das demais.
+            logger.exception("Falha ao remover instância nunca pareada %s",
+                             getattr(instancia, "nome_instancia", "?"))
+    if removidas:
+        logger.info("Limpeza §6.5: %s instância(s) nunca pareada(s) removida(s)",
+                    removidas)
+    return removidas
 
 
 @router.post("/cron/proxy-health", status_code=status.HTTP_202_ACCEPTED)

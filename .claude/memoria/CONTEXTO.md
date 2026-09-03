@@ -86,7 +86,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
-| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Resumo diário (sessão global) + números/grupos das alunas (F1 do módulo de grupos); hml; **o número do resumo precisa re-parear (QR) pós-migração** |
+| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Números/grupos das alunas (F1 do módulo de grupos); hml. **O Resumo diário saiu por inteiro em 03/09/2026** (rotas, services, models, job pg_cron — migration 077), junto com a Blacklist; a sessão global do resumo deixou de existir. `POST /whatsapp/webhook` e o tratamento de status/participantes **ficam** — são infra do módulo de grupos, não do resumo |
 | **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migrations 068 **e 069** em hml (cron horário ativo); **no ar em hml** (API+worker+admin, verificado ponta a ponta em 31/08); produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
 
 ## Planos

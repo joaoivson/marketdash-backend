@@ -75,6 +75,12 @@ class WhatsappGrupo(Base):
     categoria = Column(String(64), nullable=True)
     # False quando some do sync — NUNCA deletar (atribuição histórica).
     ativo = Column(Boolean, nullable=False, default=True)
+    # Toggle "Ativo" da USUÁRIA (migration 074, spec §6.2/6.3). Eixo SEPARADO
+    # de `ativo`: aquele é lifecycle do sync (todo sync revive com ativo=True),
+    # e gravar a escolha manual lá faria a madrugada desfazê-la. O sync NUNCA
+    # escreve aqui; quem escreve é o PATCH /grupos/{id}. Ativar é o ponto de
+    # atribuição: garante sub_id + custom_link na hora.
+    ativado = Column(Boolean, nullable=False, default=False, server_default="false")
     sub_id = Column(String(24), nullable=True, unique=True)
     custom_link_id = Column(Integer, ForeignKey("custom_links.id", ondelete="SET NULL"),
                             nullable=True)

@@ -1,11 +1,11 @@
-"""Roteiros, execuções, mensagens, templates e blacklist — F3 (espelho da 060).
+"""Roteiros, execuções, mensagens e templates — F3 (espelho da 060).
 
 O coração do módulo: roteiro = sequência de passos (âncora + relativos);
 a execução materializa TODAS as mensagens com horário absoluto, e o motor
 trabalha linha a linha com claim atômico. Envio rápido = roteiro de 1 passo.
 """
 from sqlalchemy import (
-    BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
+    BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Integer,
     String, Text, Time, UniqueConstraint,
 )
 from app.models.tipos import JSON_PORTATIL
@@ -149,26 +149,3 @@ class RoteiroMensagem(Base):
     texto_final = Column(Text, nullable=True)
     erro_motivo = Column(Text, nullable=True)
     enviado_em = Column(DateTime(timezone=True), nullable=True)
-
-
-class BlacklistNumero(Base):
-    __tablename__ = "blacklist_numeros"
-    __table_args__ = (
-        UniqueConstraint("user_id", "numero_hash", name="uq_blacklist"),
-        Index("ix_blacklist_user_hash", "user_id", "numero_hash"),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
-                     nullable=False, index=True)
-    numero_hash = Column(String(64), nullable=False)
-    # Só o suficiente para ela reconhecer a entrada ("+55 11 ****-4321"). Uma
-    # lista onde ninguém é reconhecível não serve para nada; o número inteiro
-    # transformaria a tabela numa lista de telefones se o banco vazasse.
-    numero_mascarado = Column(String(24), nullable=True)
-    # "Não quero que receba" e "quero fora dos meus grupos" são pedidos
-    # diferentes — por isso a escolha é por entrada, não global.
-    remover_dos_grupos = Column(Boolean, nullable=False, default=True,
-                                server_default="true")
-    motivo = Column(Text, nullable=True)
-    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

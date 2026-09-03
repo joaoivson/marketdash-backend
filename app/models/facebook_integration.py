@@ -34,6 +34,11 @@ class FacebookIntegration(Base):
     # Múltiplas contas selecionadas (JSON: ["act_123", "act_456"]). Fonte da verdade do sync.
     ad_accounts_json = Column(Text, nullable=True)
 
+    # Nomes das contas selecionadas (JSON: {"act_123": "Nome"}) — persistidos na
+    # seleção para o status não precisar bater na Graph. A seleção em si continua
+    # sendo ad_accounts_json; isto é só metadado de exibição.
+    ad_accounts_names_json = Column(Text, nullable=True)
+
     # Escopos concedidos no OAuth (csv) — ex: "ads_read,ads_management"
     scopes = Column(Text, nullable=True)
 
@@ -55,3 +60,14 @@ class FacebookIntegration(Base):
             except (ValueError, TypeError):
                 pass
         return [self.ad_account_id] if self.ad_account_id else []
+
+    def account_names_dict(self) -> dict[str, str]:
+        """Dict {"act_123": "Nome"} persistido na seleção. Vazio para dado legado."""
+        if self.ad_accounts_names_json:
+            try:
+                value = json.loads(self.ad_accounts_names_json)
+                if isinstance(value, dict):
+                    return {str(k): str(v) for k, v in value.items() if k and v}
+            except (ValueError, TypeError):
+                pass
+        return {}

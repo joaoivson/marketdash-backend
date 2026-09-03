@@ -226,7 +226,9 @@ class CampaignRepository:
         self.db.flush()
         return len(payload)
 
-    def rebuild_ad_spend_from_meta(self, user_id: int) -> int:
+    def rebuild_ad_spend_from_meta(
+        self, user_id: int, ad_account_ids: Optional[List[str]] = None
+    ) -> int:
         """Projeta o GASTO e os CLIQUES do Meta na tabela AdSpend (fonte do Dashboard).
 
         Agrega por (dia, sub_id da campanha vinculada) a partir de TODOS os
@@ -237,9 +239,12 @@ class CampaignRepository:
         - O manual de dias ANTERIORES à cobertura do Meta PERMANECE (não zera o que o
           pessoal já usava). Sem dupla contagem (1 origem por dia coberto).
         - Inclui gasto/cliques SEM vínculo (sub_id NULL) → contam no total do Dashboard.
+        - `ad_account_ids` (formato "act_...", §4.3): quando fornecido e não vazio,
+          só campanhas dessas contas entram no espelho — insight de conta desmarcada
+          fica no histórico mas não vira gasto. None mantém o comportamento antigo.
         Idempotente: re-rodar reconstrói só as linhas source='meta'.
         """
-        agg = (
+        agg_query = (
             self.db.query(
                 CampaignDailyInsight.date,
                 Campaign.sub_id,
@@ -248,9 +253,10 @@ class CampaignRepository:
             )
             .join(Campaign, Campaign.id == CampaignDailyInsight.campaign_id)
             .filter(CampaignDailyInsight.user_id == user_id)
-            .group_by(CampaignDailyInsight.date, Campaign.sub_id)
-            .all()
         )
+        if ad_account_ids:
+            agg_query = agg_query.filter(Campaign.ad_account_id.in_(ad_account_ids))
+        agg = agg_query.group_by(CampaignDailyInsight.date, Campaign.sub_id).all()
         # Só é "coberto" o dia em que o Meta traz gasto/cliques reais (>0). Dia com Meta
         # zerado NÃO entra aqui → o gasto manual daquele dia é preservado (corrige o R$0
         # artificial de quem tinha manual e o Meta veio sem dado no período).

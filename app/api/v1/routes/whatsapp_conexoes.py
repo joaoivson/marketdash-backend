@@ -17,8 +17,8 @@ from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
 from app.schemas.whatsapp_conexoes import (
-    BlacklistCriar, BlacklistOut, ConviteAtivoOut, ConviteOut, GrupoOut,
-    InstanciaAtualizar, InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
+    ConviteAtivoOut, ConviteOut, GrupoAtualizar, GrupoOut, InstanciaAtualizar,
+    InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
 )
 from app.services.waha_client import ErroWhatsapp, mascarar
 from app.services.whatsapp_grupo_sync_service import WhatsappGrupoSyncService
@@ -222,6 +222,16 @@ def salvar_config_envio(
         raise HTTPException(status_code=422, detail="Configuração de janela inválida.")
 
 
+def _grupo_out(g, instancia_ids: list[int]) -> GrupoOut:
+    return GrupoOut(
+        id=g.id, jid=g.jid, nome=g.nome, foto_url=g.foto_url,
+        participantes=g.participantes, capacidade=g.capacidade,
+        sou_admin=g.sou_admin, permite_envio=g.permite_envio,
+        link_convite=g.link_convite, ativo=g.ativo, ativado=bool(g.ativado),
+        sub_id=g.sub_id, instancia_ids=instancia_ids,
+    )
+
+
 @router.get("/grupos", response_model=list[GrupoOut])
 def listar_grupos(
     # `user_id` é proibido como nome de query param (fetchWithAuth injeta o
@@ -229,6 +239,8 @@ def listar_grupos(
     filter_instancia_id: int | None = None,
     q: str | None = None,
     incluir_inativos: bool = False,
+    # Toggle da usuária — o que os pickers de campanha pedem (spec §6).
+    apenas_ativados: bool = False,
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
@@ -237,63 +249,45 @@ def listar_grupos(
         instancia_id=filter_instancia_id,
         busca=q,
         incluir_inativos=incluir_inativos,
+        apenas_ativados=apenas_ativados,
     )
-    return [
-        GrupoOut(
-            id=g.id, jid=g.jid, nome=g.nome, foto_url=g.foto_url,
-            participantes=g.participantes, capacidade=g.capacidade,
-            sou_admin=g.sou_admin, permite_envio=g.permite_envio,
-            link_convite=g.link_convite, ativo=g.ativo, sub_id=g.sub_id,
-            instancia_ids=vinculos.get(g.id, []),
-        )
-        for g in grupos
-    ]
+    return [_grupo_out(g, vinculos.get(g.id, [])) for g in grupos]
 
 
-# --- item 17: blacklist de números -------------------------------------------
-
-
-@router.get("/blacklist", response_model=list[BlacklistOut])
-def listar_blacklist(
+@router.patch("/grupos/{grupo_id}", response_model=GrupoOut)
+def atualizar_grupo(
+    grupo_id: int,
+    payload: GrupoAtualizar,
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
-    from app.services.blacklist_service import BlacklistService
+    """Toggle "Ativo" (spec §6.3). Ativar é o ponto de atribuição: sub_id e
+    custom_link nascem AQUI, na mesma transação — o link de entrada já pode ir
+    para anúncio antes de existir campanha. Desativar nunca apaga nada."""
+    from app.services.whatsapp_grupo_service import (
+        LimiteDeGruposAtivados, WhatsappGrupoService,
+    )
 
-    return BlacklistService(db).listar(current_user.id)
+    # Limite via assinatura, mesmo padrão do _servico de números acima.
+    sub = SubscriptionRepository(db).get_by_user_id(current_user.id)
+    limite = plan_limit(normalize_plan(sub.plan if sub else None), "whatsapp_grupos")
+    servico = WhatsappGrupoService(db, plan_limit_grupos=limite)
 
-
-@router.post("/blacklist", response_model=BlacklistOut, status_code=201)
-def adicionar_na_blacklist(
-    payload: BlacklistCriar,
-    current_user: User = Depends(require_plan("max")),
-    db: Session = Depends(get_db),
-):
-    from app.services.blacklist_service import BlacklistService, NumeroInvalido
-
+    grupo = servico.por_id(current_user.id, grupo_id)
+    if not grupo:
+        raise HTTPException(status_code=404, detail="Grupo não encontrado.")
     try:
-        item = BlacklistService(db).adicionar(
-            current_user.id, payload.numero, payload.motivo,
-            payload.remover_dos_grupos,
+        grupo = servico.definir_ativado(grupo, payload.ativado)
+    except LimiteDeGruposAtivados as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "PLANO_INSUFICIENTE",
+                "message": f"Seu plano permite {e.limite} grupos ativos.",
+                "limite": e.limite,
+            },
         )
-    except NumeroInvalido as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    db.commit()
-    return item
-
-
-@router.delete("/blacklist/{item_id}", status_code=204)
-def remover_da_blacklist(
-    item_id: int,
-    current_user: User = Depends(require_plan("max")),
-    db: Session = Depends(get_db),
-):
-    from app.services.blacklist_service import BlacklistService
-
-    if not BlacklistService(db).remover(current_user.id, item_id):
-        raise HTTPException(status_code=404, detail="Número não encontrado na lista.")
-    db.commit()
-    return None
+    return _grupo_out(grupo, servico.instancia_ids(grupo))
 
 
 # --- item 18: link de conexão externa ----------------------------------------

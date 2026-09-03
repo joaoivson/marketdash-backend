@@ -1,6 +1,6 @@
 """
-Webhook multi-sessão: roteamento pelo nome (prefixo do ambiente), espelho de
-status da instância e o guard do SAIR contra mensagens de grupo.
+Webhook multi-sessão: roteamento pelo nome (prefixo do ambiente) e espelho de
+status da instância. (Os testes do SAIR saíram com o resumo diário — §9.1.)
 """
 from types import SimpleNamespace
 
@@ -98,48 +98,13 @@ def test_sessao_do_resumo_nao_mexe_em_instancia(ambiente, monkeypatch):
     assert repo.salvas == []
 
 
-def test_sair_em_mensagem_de_grupo_e_ignorado(ambiente, monkeypatch):
-    # SAIR num grupo desligaria o resumo de quem por acaso está no grupo.
-    chamadas = []
-    monkeypatch.setattr("app.api.v1.routes.whatsapp._servico",
-                        lambda db: chamadas.append("servico"))
-
-    _tratar_mensagem(None, "mkd-resumo",
-                     {"from": "120363123@g.us", "body": "SAIR", "fromMe": False})
-    assert chamadas == []
-
-
-def test_sair_de_dm_desliga_e_agradece(ambiente, monkeypatch):
-    desligados = []
-
-    class _Servico:
-        def desligar_por_numero(self, numero):
-            desligados.append(numero)
-            return 1
-
-    enviados = []
-
-    class _Cliente:
-        def enviar_texto(self, chat_id, texto):
-            enviados.append(chat_id)
-
-    monkeypatch.setattr("app.api.v1.routes.whatsapp._servico", lambda db: _Servico())
-    monkeypatch.setattr("app.api.v1.routes.whatsapp._cliente_resumo", lambda: _Cliente())
-
-    _tratar_mensagem(None, "mkd-resumo",
-                     {"from": "5511999998888@c.us", "body": "sair", "fromMe": False})
-    assert desligados == ["5511999998888"]
-    assert enviados == ["5511999998888@c.us"]
-
-
-def test_mensagem_em_sessao_de_aluna_nao_aciona_sair(ambiente, monkeypatch):
-    # Sessões de aluna nem assinam `message`; se chegar, ignora.
-    chamadas = []
-    monkeypatch.setattr("app.api.v1.routes.whatsapp._servico",
-                        lambda db: chamadas.append("servico"))
-    _tratar_mensagem(None, "mkdXXXXu1xabcd",
+def test_mensagem_de_sessao_do_resumo_legado_nao_toca_o_banco(ambiente):
+    """A sessão do resumo (legado) não tem o prefixo do ambiente: `message`
+    dela cai fora antes de qualquer consulta — o fluxo SAIR não existe mais."""
+    db = _DbFalso()
+    _tratar_mensagem(db, "mkd-resumo",
                      {"from": "5511999998888@c.us", "body": "SAIR", "fromMe": False})
-    assert chamadas == []
+    assert db.consultas == 0
 
 
 def test_nome_gerado_sempre_pertence_ao_proprio_ambiente(ambiente):

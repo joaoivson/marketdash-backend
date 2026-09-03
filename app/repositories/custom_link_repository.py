@@ -57,6 +57,20 @@ class CustomLinkRepository:
         )
         return {i for (i,) in linhas}
 
+    def contar_do_plano(self, user_id: int) -> int:
+        """COUNT dos links de Meus Links (exclui os internos de grupo).
+
+        MESMA regra de `CustomLinkService._links_do_plano`, sem o outerjoin em
+        `custom_link_events`: o contador do plano não usa `last_click_at`, e
+        aquela agregação varre a tabela de cliques (que só cresce e não tem
+        índice por user_id) para ter o resultado descartado por um `len()`.
+        """
+        q = self.db.query(func.count(CustomLink.id)).filter(CustomLink.user_id == user_id)
+        ids_de_grupo = self.ids_de_links_de_grupo(user_id)
+        if ids_de_grupo:
+            q = q.filter(~CustomLink.id.in_(ids_de_grupo))
+        return q.scalar() or 0
+
     def criar_link_de_grupo(self, user_id: int, nome: str, slug: str) -> CustomLink:
         """Link interno de grupo de WhatsApp: add + flush SEM commit (transação
         do sync). Fora do fluxo/limite de Meus Links — a exclusão é pela FK

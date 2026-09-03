@@ -1,57 +1,31 @@
 """
-Resumo diário no WhatsApp (opt-in, estado da sessão do MarketDash) e o
-webhook ÚNICO de eventos do WAHA — multi-sessão, roteado pelo nome.
+Webhook ÚNICO de eventos do WAHA — multi-sessão, roteado pelo nome.
 
-O webhook é a única rota aqui sem sessão de usuária — quem chama é o WAHA.
-Ele se autentica por token no header e devolve 200 em qualquer caso: erro
+É a única rota aqui, e não tem sessão de usuária — quem chama é o WAHA.
+Ela se autentica por token no header e devolve 200 em qualquer caso: erro
 aqui faz o WAHA re-tentar, e reprocessar o mesmo evento não ajuda ninguém.
+
+(O resumo diário por WhatsApp morava neste módulo e foi removido por completo
+na rodada de correções — spec §9.1. Ficam o webhook e seus handlers, que
+servem o Módulo de Grupos: status de sessão, participantes e monitoramento.)
 """
 import hmac
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.v1.dependencies import require_admin, require_plan
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.user import User
 from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
-from app.repositories.whatsapp_repository import WhatsappRepository
-from app.schemas.whatsapp import (
-    ConfirmarRequest, InstanciaResponse, OptinRequest, StatusResponse,
-)
-from app.services.waha_client import (
-    ErroWhatsapp, WahaClient, chat_id_de_numero, numero_de_jid,
-    campo,
-)
+from app.services.waha_client import campo, numero_de_jid
 from app.services.whatsapp_instancia_service import (
-    aplicar_evento_de_status, config_de_webhook, pertence_a_este_ambiente,
-)
-from app.services.whatsapp_optin_service import (
-    CodigoInvalido, TentativasEsgotadas, WhatsappIndisponivel,
-    WhatsappOptinService, pediu_para_sair,
+    aplicar_evento_de_status, pertence_a_este_ambiente,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["whatsapp"])
-
-# A sessão do resumo precisa do `message` (é o SAIR); as das alunas, não.
-EVENTOS_DA_SESSAO_RESUMO = ["message", "session.status"]
-
-
-def _cliente_resumo() -> WahaClient:
-    # Sessão GLOBAL do resumo diário (o número do MarketDash), não de afiliada:
-    # não tem linha em whatsapp_instancias, logo não entra no pool da 071 e
-    # continua no servidor das envs. Para movê-la, mude WAHA_URL.
-    return WahaClient(
-        settings.WAHA_URL, settings.WAHA_API_KEY, settings.WAHA_SESSAO_RESUMO
-    )
-
-
-def _servico(db: Session) -> WhatsappOptinService:
-    return WhatsappOptinService(WhatsappRepository(db), _cliente_resumo())
 
 
 def url_do_webhook(request: Request) -> str:
@@ -70,135 +44,6 @@ def url_do_webhook(request: Request) -> str:
     return url
 
 
-def _webhook_divergente(info: dict, desejado: dict) -> bool:
-    atuais = ((info.get("config") or {}).get("webhooks")) or []
-    if not atuais:
-        return True
-    atual = atuais[0] or {}
-    return (
-        atual.get("url") != desejado.get("url")
-        or sorted(atual.get("events") or []) != sorted(desejado.get("events") or [])
-    )
-
-
-INDISPONIVEL = HTTPException(
-    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-    detail="O envio por WhatsApp está indisponível no momento.",
-)
-
-
-@router.get("/status", response_model=StatusResponse)
-def status_do_optin(
-    current_user: User = Depends(require_plan("pro")),
-    db: Session = Depends(get_db),
-):
-    return StatusResponse(**_servico(db).status(current_user.id))
-
-
-@router.post("/optin", response_model=StatusResponse)
-def registrar(
-    payload: OptinRequest,
-    current_user: User = Depends(require_plan("pro")),
-    db: Session = Depends(get_db),
-):
-    servico = _servico(db)
-    try:
-        servico.registrar(current_user.id, payload.numero)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except WhatsappIndisponivel:
-        raise INDISPONIVEL
-    except ErroWhatsapp as e:
-        if e.motivo == "numero_invalido":
-            raise HTTPException(
-                status_code=400,
-                detail="Não encontramos esse número no WhatsApp. Confira e tente de novo.",
-            )
-        logger.warning("Opt-in falhou para user %s (%s)", current_user.id, e.motivo)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Não conseguimos enviar o código agora. Tente de novo em alguns minutos.",
-        )
-    return StatusResponse(**servico.status(current_user.id))
-
-
-@router.post("/confirmar", response_model=StatusResponse)
-def confirmar(
-    payload: ConfirmarRequest,
-    current_user: User = Depends(require_plan("pro")),
-    db: Session = Depends(get_db),
-):
-    servico = _servico(db)
-    try:
-        servico.confirmar(current_user.id, payload.codigo)
-    except TentativasEsgotadas:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Muitas tentativas. Cadastre o número de novo para receber outro código.",
-        )
-    except CodigoInvalido:
-        raise HTTPException(status_code=400, detail="Código inválido ou expirado.")
-    return StatusResponse(**servico.status(current_user.id))
-
-
-@router.delete("/optin", response_model=StatusResponse)
-def desligar(
-    current_user: User = Depends(require_plan("pro")),
-    db: Session = Depends(get_db),
-):
-    servico = _servico(db)
-    servico.desligar(current_user.id)
-    return StatusResponse(**servico.status(current_user.id))
-
-
-@router.get("/instancia", response_model=InstanciaResponse)
-def instancia(request: Request, _: User = Depends(require_admin)):
-    """
-    Estado da sessão do RESUMO (o número do MarketDash) + QR para parear.
-    Só admin. Cria a sessão no WAHA se ainda não existe e reconcilia o webhook
-    a cada abertura da tela — webhook errado falha em SILÊNCIO (o SAIR não
-    chega) e a próxima notícia é uma denúncia.
-    """
-    cliente = _cliente_resumo()
-    if not cliente.configurado():
-        return InstanciaResponse(configurado=False, estado="sem_config")
-    if not settings.WAHA_WEBHOOK_TOKEN:
-        logger.error("WAHA_WEBHOOK_TOKEN ausente: o SAIR não vai funcionar")
-
-    webhooks = None
-    if settings.WAHA_WEBHOOK_TOKEN:
-        webhooks = config_de_webhook(url_do_webhook(request), EVENTOS_DA_SESSAO_RESUMO)
-
-    try:
-        info = cliente.sessao_info()
-        if not info:
-            logger.info("Sessão %s não existe no WAHA — criando",
-                        settings.WAHA_SESSAO_RESUMO)
-            cliente.criar_sessao(webhooks=webhooks)
-            info = cliente.sessao_info()
-        elif webhooks and _webhook_divergente(info, webhooks[0]):
-            # Só reescreve quando a config REALMENTE mudou: o PUT reinicia a
-            # sessão, e reiniciar a cada abertura da tela derruba um lote de
-            # resumo em andamento (envios passam a falhar como "desconectado").
-            logger.info("Webhook do resumo reapontado")
-            cliente.atualizar_sessao(webhooks)
-        estado = str(info.get("status") or "inexistente")
-    except ErroWhatsapp as e:
-        return InstanciaResponse(configurado=True, estado=f"erro: {e.motivo}")
-
-    if estado == "WORKING":
-        # A tela do admin espera "open" desde a era Evolution — manter o
-        # contrato poupa o frontend de conhecer os estados do WAHA.
-        return InstanciaResponse(configurado=True, estado="open")
-
-    qr = None
-    try:
-        qr = cliente.qrcode()
-    except ErroWhatsapp:
-        qr = None
-    return InstanciaResponse(configurado=True, estado=estado.lower(), qrcode=qr)
-
-
 @router.post("/webhook", status_code=status.HTTP_200_OK)
 async def webhook(
     request: Request,
@@ -206,12 +51,11 @@ async def webhook(
     x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
 ):
     """
-    Eventos do WAHA — TODAS as sessões (resumo + números das afiliadas).
+    Eventos do WAHA — TODAS as sessões (números das afiliadas).
 
     Roteamento pelo nome da sessão: só tratamos sessões com o prefixo DESTE
-    ambiente (mkd{ref4}) ou a sessão do resumo. Evento de sessão alheia
-    (outro ambiente no mesmo servidor WAHA) é ignorado em silêncio — tratar
-    seria fratricídio hml×prod.
+    ambiente (mkd{ref4}). Evento de sessão alheia (outro ambiente no mesmo
+    servidor WAHA) é ignorado em silêncio — tratar seria fratricídio hml×prod.
     """
     esperado = settings.WAHA_WEBHOOK_TOKEN
     if not esperado or not x_webhook_token or not hmac.compare_digest(x_webhook_token, esperado):
@@ -240,7 +84,9 @@ async def webhook(
 def _tratar_status(db: Session, nome_sessao: str, evento: dict, payload: dict) -> None:
     status_waha = str(payload.get("status") or "")
     if nome_sessao == settings.WAHA_SESSAO_RESUMO:
-        logger.info("Sessão do resumo: %s", status_waha)
+        # Sessão do resumo LEGADO: pode seguir viva no WAHA até a ops removê-la
+        # — sem este guard, cada evento dela viraria warning de "desconhecida".
+        logger.info("Sessão do resumo (legado): %s", status_waha)
         return
     if not pertence_a_este_ambiente(nome_sessao):
         return  # sessão de outro ambiente — não é nossa
@@ -295,40 +141,13 @@ def _tratar_participantes(db: Session, nome_sessao: str, payload: dict) -> None:
 
 def _tratar_mensagem(db: Session, nome_sessao: str, payload: dict) -> None:
     """
-    `message` chega em dois casos, e só nesses dois:
-
-      * sessão do resumo → palavra SAIR (opt-out);
-      * sessão de aluna COM monitoramento ativo (F8) → captura de oferta.
-
-    Sessão de aluna sem monitoramento sequer assina o evento, então o conteúdo
-    dos grupos dela não chega aqui.
+    `message` só chega de sessão de aluna COM monitoramento ativo (F8) —
+    sessão sem monitoramento sequer assina o evento, então o conteúdo dos
+    grupos dela não chega aqui. (O SAIR do resumo diário saiu com a feature.)
     """
     if payload.get("fromMe"):
         return
-    if nome_sessao != settings.WAHA_SESSAO_RESUMO:
-        _tratar_mensagem_de_monitoramento(db, nome_sessao, payload)
-        return
-    remetente = str(payload.get("from") or "")
-    if remetente.endswith("@g.us"):
-        # Mensagem de grupo no número do resumo: SAIR ali desligaria o resumo
-        # de um número que por acaso está no grupo. Ignorar é a única resposta.
-        return
-    numero = numero_de_jid(remetente)
-    texto = str(payload.get("body") or "")
-
-    if numero and pediu_para_sair(texto):
-        servico = _servico(db)
-        n = servico.desligar_por_numero(numero)
-        if n:
-            logger.info("SAIR pelo WhatsApp desligou %s opt-in(s)", n)
-            try:
-                _cliente_resumo().enviar_texto(
-                    chat_id_de_numero(numero),
-                    "Pronto, você não vai mais receber o resumo diário. "
-                    "Se mudar de ideia, é só religar nas Configurações do MarketDash.",
-                )
-            except ErroWhatsapp:
-                pass   # já desligamos; a confirmação é cortesia
+    _tratar_mensagem_de_monitoramento(db, nome_sessao, payload)
 
 
 def _tratar_mensagem_de_monitoramento(db: Session, nome_sessao: str,

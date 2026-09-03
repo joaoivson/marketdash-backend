@@ -37,6 +37,11 @@ class InstanciaQrOut(BaseModel):
     qrcode: Optional[str]  # data-uri base64, quando há QR a mostrar
 
 
+class GrupoAtualizar(BaseModel):
+    """Só o toggle da usuária — nome/participantes/admin são do sync."""
+    ativado: bool
+
+
 class GrupoOut(BaseModel):
     id: int
     jid: str
@@ -48,6 +53,8 @@ class GrupoOut(BaseModel):
     permite_envio: bool
     link_convite: Optional[str]
     ativo: bool
+    # Toggle da usuária (spec §6.2) — eixo separado do `ativo` do sync.
+    ativado: bool
     sub_id: Optional[str]
     instancia_ids: List[int]
 
@@ -63,28 +70,6 @@ class SincronizarOut(BaseModel):
     ignorados: int = 0
     # Convites resolvidos nesta rodada (o resto vai no próximo sync).
     convites: int = 0
-
-
-# --- item 17: blacklist de números -------------------------------------------
-
-
-class BlacklistCriar(BaseModel):
-    numero: str = Field(min_length=8, max_length=24)
-    motivo: Optional[str] = Field(default=None, max_length=500)
-    # "Não quero que receba" e "quero fora dos meus grupos" são pedidos
-    # diferentes; por isso a escolha é por entrada.
-    remover_dos_grupos: bool = True
-
-
-class BlacklistOut(BaseModel):
-    id: int
-    # Mascarado ("+55 11 ****-4321"): o suficiente para ela reconhecer, e não o
-    # suficiente para virar lista de telefones se vazar. O número em claro não
-    # existe no banco.
-    numero_mascarado: Optional[str]
-    motivo: Optional[str]
-    remover_dos_grupos: bool
-    criado_em: datetime
 
 
 # --- item 18: link de conexão externa ----------------------------------------

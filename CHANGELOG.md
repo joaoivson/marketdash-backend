@@ -11,6 +11,159 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-03 (Configurações — reestruturação da tela, toggle de grupos e upgrade de periodicidade)
+
+Documento delta do João ("Correções da tela de Configurações"). Mexe em
+navegação, densidade, integrações, WhatsApp, assinatura e remove duas features.
+Cross-stack. **Migrations 074, 075, 076 e 077 aplicadas em HOMOLOGAÇÃO em
+03/09/2026 e PENDENTES em produção** — as quatro vão junto com o deploy desta
+rodada; protocolo no cabeçalho de cada arquivo e estado por ambiente em
+`docs/PROMOCAO_PARA_PRODUCAO.md`. Atenção à **077 em produção**: ela desagenda
+o pg_cron `whatsapp-resumo-9am-brt` (ativo lá) e dropa `whatsapp_optins` /
+`whatsapp_envios` / `blacklist_numeros`, que em produção têm dado real de
+aluna — exportar antes, se o histórico importar.
+
+### Navegação e densidade (§0, §1, §2)
+- Sub-navegação passa a ter 4 seções: **Conta** (Assinatura) · **Integrações**
+  (Marketplaces, Facebook Ads, Instagram, WhatsApp) · **Cálculos** (Impostos).
+  Somem o grupo "Dispositivos" e o item "Canais" — Facebook e Instagram viram
+  itens próprios (estavam na mesma tela por motivos opostos: um traz dado pra
+  dentro, o outro age pra fora), e WhatsApp vira integração como as demais,
+  com **Números** e **Envio** como abas irmãs. Deep-links antigos
+  (`?tab=shopee|canais|numeros|envio|bloqueios|resumo`) continuam abrindo o
+  lugar certo, e o gate `isProductionHost()` do WhatsApp segue valendo.
+- Régua de densidade única: `components/shared/SecaoCard.tsx` (título
+  `text-base`, descrição `text-xs`, `p-4 md:p-5`). Mudar a densidade agora é
+  um arquivo, não sete telas — era o jeito de não desalinhar as abas entre si.
+- Texto de ajuda longo deixa de ser fixo na tela e vira link discreto que abre
+  modal. Vale como regra da plataforma, não só destas telas.
+
+### Marketplaces (§3)
+- A etiqueta **"principal"** sai da lista. O conceito não existe mais (são
+  múltiplas contas resolvidas pelo marketplace da URL), mas o *label* continua
+  sendo a chave de upsert no backend e o que distingue contas extras — então o
+  badge só some quando o nome é o default.
+- **Autofill corrompendo credencial (bug real):** o Chrome lia App ID como
+  e-mail e preenchia com o login da aluna, que salvava sem ver e recebia erro
+  `10020` sem causa aparente. Agora `autocomplete="off"`/`"new-password"` e ids
+  que não disparam a heurística (`shopee-open-api-id` / `-key`). A validação de
+  App ID numérico passou a acusar no blur, não só no submit.
+- Link "Não sei onde pegar / não tenho ainda" abaixo da senha, abrindo o passo
+  a passo (incluindo como pedir a ativação da API e o aviso de que ela aparece
+  sozinha na tela "Abrir API" — não chega por e-mail).
+
+### Facebook Ads (§4)
+- Microcopy: "Traz o gasto dos seus anúncios pra dentro do MarketDash."
+- **A tela não chama mais a Graph API ao abrir.** `GET /ad-accounts` é ao vivo
+  e paginado (contas + BMs); rodava a cada abertura de Configurações e, em
+  conta com muitos ad accounts, empurrava o resto pra baixo da dobra e travava
+  o carregamento. Agora o estado padrão mostra só as contas **selecionadas**
+  (nomes persistidos em `ad_accounts_names_json`, migration 075) e a lista
+  completa carrega ao abrir o modal de seleção, com busca e aplicação em lote
+  (1 PUT + 1 sync, em vez de um por clique).
+- **Conta não marcada não grava gasto:** `rebuild_ad_spend_from_meta` passou a
+  filtrar a agregação por `Campaign.ad_account_id`. Antes, insight histórico de
+  conta desmarcada continuava sendo reprojetado no AdSpend a cada sync.
+- Como a listagem saiu do mount, o sync virou o **único detector automático de
+  token morto** — então ele passa a marcar a integração como desconectada ao
+  receber `FACEBOOK_TOKEN_INVALIDO`, em vez de seguir para a próxima conta. Sem
+  isso a tela diria "Conectado" enquanto o gasto parava de entrar, em silêncio.
+
+### Instagram (§5)
+- Bloco de 3 passos enxuto, com o **alerta do passo 2 preservado** ("Permitir
+  acesso às mensagens"): sem essa permissão a Meta não envia o webhook de
+  comentário e a automação fica muda, sem erro — é a principal causa de chamado
+  insolúvel. O caminho de menu completo foi para o modal "Onde encontrar cada
+  passo"; o parágrafo sobre senha saiu.
+
+### WhatsApp — Números e Grupos (§6)
+- Números viram **grid de cards compactos** (status, nome, número mascarado,
+  contagem de grupos, pausa, ações). A lista de grupos sai de dentro do card:
+  clicar abre `/dashboard/configuracoes/numeros/:id`, com abas (Grupos, hoje)
+  — estrutura pronta para histórico de envio e saúde do número.
+- Tabela de grupos com **3 colunas**: Ativo · Nome · Participantes. As colunas
+  "Envio" e "Também em" saíram (sempre vazias, sem significado pra usuária).
+- **Toggle "Ativo" por grupo (migration 074, coluna `ativado`).** Conectar o
+  WhatsApp pessoal sincroniza *tudo* — no teste, 492 grupos para ~6 de
+  trabalho. Só grupo ativado aparece na seleção de destino, é monitorado e
+  conta no limite do plano; o resto fica no banco, silencioso e sem custo.
+  **Grupo nunca é deletado** — desativar é a única forma de tirar da operação,
+  e o histórico de comissão permanece em Campanhas › Resultados.
+  - `ativado` (escolha da usuária) é eixo **separado** de `ativo` (lifecycle do
+    sync, que reativa incondicionalmente toda madrugada). Guardar o toggle em
+    `ativo` faria o sync desfazer a escolha dela na noite seguinte.
+  - **Ponto de atribuição:** `sub_id` (`wg`+base36) e `custom_link` passam a
+    nascer **na ativação**, não no sync nem no primeiro envio — ativar já
+    permite usar o link de entrada em anúncio antes de existir campanha. Se
+    nascessem depois, todo tráfego anterior perderia atribuição de forma
+    irrecuperável. A geração é idempotente (sub_id existente nunca é
+    regenerado) e o motor de envio auto-cura quem chegar sem ela.
+  - Backfill da 074 liga `ativado` para grupo já vinculado a campanha **e para
+    grupo que é origem de monitoramento** — senão o monitoramento morreria em
+    silêncio no dia do deploy.
+- Botão "Conectar número" desabilitado passa a dizer por quê, com caminho de
+  upgrade quando há tier acima.
+- Número criado e nunca pareado expira em 24h, removido via
+  `WhatsappInstanciaService.remover` (deleta a sessão no WAHA e libera o proxy;
+  UPDATE direto deixaria sessão zumbi consumindo RAM).
+
+### WhatsApp — Envio (§7)
+- **"Restringir horário de envio" agora vem DESMARCADO** (backend e frontend):
+  restrição virou opt-in. ⚠️ Quem nunca abriu a aba tinha 08–22 implícito e
+  passa a operar sem trava — não há backfill.
+- Configuração por dia colapsada, com resumo "Todos os dias · 08:00 – 22:00",
+  link "Personalizar por dia" e ação **"Aplicar a todos os dias"** com rótulo
+  em texto (o ícone de copiar sozinho não era descoberto). Os 7 dias cabem em
+  1366×768 e 1280×720 sem scroll.
+- Controle "Pausa" por linha removido (redundante com o toggle do dia).
+- **Regra de borda:** execução que começa dentro da janela é concluída, mesmo
+  ultrapassando o fim. A unidade é a *execução*, não a fatia — um lote grande
+  gasta várias fatias, e checar por fatia pararia às 22:05 um envio começado às
+  21:50, com metade dos grupos sem a oferta. Os tetos de volume (240/dia do
+  plano, 5000 global, 80 por instância) continuam por mensagem.
+
+### Assinatura (§10)
+- **Bug crítico corrigido:** a marcação de "Plano atual" ignorava a
+  periodicidade, então quem estava no Max Mensal via o card Max desabilitado
+  também nas abas Trimestral e Anual e **não conseguia fazer upgrade de
+  período**. Já aconteceu com aluna real — era perda de receita ativa. Agora
+  casa plano + periodicidade, e o mesmo plano em outro período fica habilitado
+  como "Mudar para trimestral/anual". Sufixo de preço corrigido para
+  `/mês`, `/trimestre`, `/ano` (imprimia os ids crus).
+- **Duas assinaturas vigentes concedem o maior tier** (migration 076, colunas
+  `pending_*`). `subscriptions.user_id` é UNIQUE, então "duas assinaturas" não
+  existia no estado: o último webhook sobrescrevia e quem comprasse Pro tendo
+  Max vigente perdia na hora o que já pagou. A compra de tier menor agora fica
+  pendurada e é promovida quando a principal expira. A promoção limpa
+  `provider_offer_name` — a revalidação de 30 dias o usa para reescrever o
+  plano e reverteria o tier promovido um mês depois.
+- Contador de uso por limite na tela de Assinatura (links, páginas, números,
+  grupos ativos), com "Ilimitado" para `-1` e travessão para limite `0`. As
+  contagens usam **a mesma regra dos gates de criação** (links excluem os
+  internos de grupo) — divergir faria a aluna ver 29/30 e tomar erro de limite.
+- Período passa por `_norm_freq` na saída da API: apelido cru da Kiwify
+  ("annually") faria nenhum card casar e a assinante veria "Assinar" no plano
+  que já paga.
+
+### Removidos (§9)
+- **Resumo diário** (WhatsApp às 9h): tela, item de menu, rotas, services,
+  models e o job. O valor real é o alerta de campanha abaixo do breakeven, e
+  isso pertence ao Dashboard, onde ela age. Sai junto a aba admin do QR dessa
+  sessão. `POST /whatsapp/webhook` e o tratamento de status/participantes
+  **ficam** — servem o módulo de grupos.
+- **Bloqueios (blacklist)**: sem caso de uso enquanto grupos não estiver em
+  produção. Volta quando os grupos subirem (bloquear concorrente que entra no
+  grupo para capturar ofertas).
+- Migration 077 desagenda o `whatsapp-resumo-9am-brt` no pg_cron e derruba as
+  tabelas — só remover o código deixaria o job batendo em 404 para sempre.
+
+### Verificação
+1038 testes unitários passando; `tsc --noEmit` limpo; build ok; lint sem erros
+novos. Validação visual via Playwright em 1366×768, 1280×720 e 390×844 (sem
+overflow horizontal em nenhuma tela). Conferido em homologação com conta MAX
+Mensal: as três abas de Planos, o contador de uso, o grid de números, a página
+de detalhe do número e a criação de `sub_id`/`custom_link` na ativação.
+
 ## [Não versionado] - 2026-09-02 ("Telas mais acessadas" aprende as telas novas)
 
 Pedido do João na sequência da Rodada 9. O mapa rota→nome do ranking

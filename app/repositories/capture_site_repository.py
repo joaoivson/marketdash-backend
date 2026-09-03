@@ -1,4 +1,5 @@
 from typing import List, Optional
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.capture_site import CaptureSite
 from app.schemas.capture_site import CaptureSiteCreate, CaptureSiteUpdate
@@ -15,6 +16,16 @@ class CaptureSiteRepository:
 
     def get_by_user(self, user_id: int) -> List[CaptureSite]:
         return self.db.query(CaptureSite).filter(CaptureSite.user_id == user_id).all()
+
+    def contar_do_usuario(self, user_id: int) -> int:
+        """COUNT para o contador de uso do plano — mesmo filtro do gate de
+        criação, sem materializar as páginas."""
+        return (
+            self.db.query(func.count(CaptureSite.id))
+            .filter(CaptureSite.user_id == user_id)
+            .scalar()
+            or 0
+        )
 
     def create(self, user_id: int, obj_in: CaptureSiteCreate) -> CaptureSite:
         db_obj = CaptureSite(

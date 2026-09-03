@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.whatsapp_grupos import (
-    INSTANCIA_REMOVIDA, WhatsappInstancia,
+    INSTANCIA_CRIADA, INSTANCIA_REMOVIDA, WhatsappInstancia,
 )
 
 
@@ -19,6 +19,19 @@ class WhatsappInstanciaRepository:
         if not incluir_removidas:
             q = q.filter(WhatsappInstancia.status != INSTANCIA_REMOVIDA)
         return q.order_by(WhatsappInstancia.id).all()
+
+    def contar_do_usuario(self, user_id: int) -> int:
+        """COUNT das instâncias vivas (exclui removidas) — mesmo filtro do gate
+        de criação, para o contador de uso do plano."""
+        return (
+            self.db.query(func.count(WhatsappInstancia.id))
+            .filter(
+                WhatsappInstancia.user_id == user_id,
+                WhatsappInstancia.status != INSTANCIA_REMOVIDA,
+            )
+            .scalar()
+            or 0
+        )
 
     def por_id(self, user_id: int, instancia_id: int) -> Optional[WhatsappInstancia]:
         return (
@@ -44,6 +57,20 @@ class WhatsappInstanciaRepository:
                 WhatsappInstancia.status != INSTANCIA_REMOVIDA,
             )
             .first()
+        )
+
+    def criadas_antes_de(self, limite: datetime) -> List[WhatsappInstancia]:
+        """Instâncias que NUNCA parearam (status `criada`) mais velhas que
+        `limite` — o alvo da limpeza diária (spec §6.5). Quem remove é o
+        service (WAHA + proxy + soft-delete), nunca um UPDATE direto."""
+        return (
+            self.db.query(WhatsappInstancia)
+            .filter(
+                WhatsappInstancia.status == INSTANCIA_CRIADA,
+                WhatsappInstancia.criado_em < limite,
+            )
+            .order_by(WhatsappInstancia.id)
+            .all()
         )
 
     def total_global_ativas(self) -> int:

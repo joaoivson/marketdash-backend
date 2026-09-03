@@ -2,11 +2,13 @@
 Janela de horário de envio por usuária (D4 — spec §14.2).
 
 Config em `user_settings.whatsapp_envio_config` (JSONB), shape validado aqui;
-ausente/None = padrão 08:00–22:00 todos os dias, sem pausa. As três regras de
-borda do worker:
+ausente/None = restrição DESLIGADA (spec §7.1: o padrão é não travar nada —
+quem quiser janela liga o toggle e ganha 08:00–22:00 para editar). As regras
+de borda do worker (spec §7.4):
 
-  * execução que JÁ começou um passo termina o passo;
-  * mensagem pendente fora da janela → a execução volta a `agendada` com
+  * a janela é decidida UMA vez, no INÍCIO da fatia: fatia que começa dentro
+    CONCLUI, mesmo ultrapassando o fim;
+  * fatia que começa fora da janela → a execução volta a `agendada` com
     `proxima_execucao_em` = próxima abertura;
   * execução agendada para fora da janela dispara na abertura.
 
@@ -42,7 +44,9 @@ class JanelaDia(BaseModel):
 
 class ConfigJanela(BaseModel):
     # "0".."6" = segunda..domingo (isoweekday()-1)
-    ativo: bool = True
+    # Default DESLIGADO (spec §7.1): config ausente ou sem o campo = sem
+    # trava de horário. `janela_aberta` devolve True enquanto `ativo=False`.
+    ativo: bool = False
     dias: dict[str, JanelaDia] = Field(default_factory=dict)
 
     def dia(self, indice: int) -> JanelaDia:
@@ -50,7 +54,8 @@ class ConfigJanela(BaseModel):
 
 
 def carregar_config(bruto: Optional[dict]) -> ConfigJanela:
-    """JSONB cru → config validada. Lixo no banco degrada para o padrão."""
+    """JSONB cru → config validada. Lixo no banco degrada para o padrão
+    (que agora é SEM restrição — degradar nunca pode travar envio)."""
     if not bruto:
         return ConfigJanela()
     try:

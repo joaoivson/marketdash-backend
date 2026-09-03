@@ -30,6 +30,13 @@ if PG_OK:
     import app.models  # noqa: F401
     ENGINE = create_engine(PG_URL)
     Base.metadata.create_all(ENGINE)
+    with ENGINE.begin() as _conn:
+        # 074 (toggle "Ativo" da usuária): create_all NÃO adiciona coluna em
+        # tabela existente — o mesmo gotcha de produção, no banco de teste.
+        _conn.execute(text(
+            "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS "
+            "ativado BOOLEAN NOT NULL DEFAULT FALSE"
+        ))
     Sessao = sessionmaker(bind=ENGINE)
 
 from app.models.campanha_grupos import Campanha, CampanhaGrupo  # noqa: E402

@@ -1,9 +1,11 @@
 """
-Sync de grupos — as duas decisões que não podem regredir:
+Sync de grupos — as decisões que não podem regredir:
 
-1. sub_id + custom_link nascem NO SYNC (atribuição perdida entre o sync e o
-   primeiro envio seria irrecuperável);
-2. grupo que some vira ativo=False, NUNCA é deletado.
+1. o sync só DESCOBRE: sub_id + custom_link nascem na ATIVAÇÃO do grupo
+   (spec §6.2 — whatsapp_grupo_service.definir_ativado), nunca aqui;
+2. grupo que some vira ativo=False, NUNCA é deletado — e o sync jamais
+   escreve em `ativado` (toggle da usuária);
+3. sub_id de grupo ativado é PERPÉTUO: sumir/reaparecer não regenera.
 """
 import pytest
 from sqlalchemy import create_engine, text
@@ -79,6 +81,14 @@ def _grupo(jid="120363000000000001@g.us", nome="Achadinhos", admin=True, announc
             "announce": announce}
 
 
+def _ativar(db, grupo):
+    """Liga o toggle da usuária — é a ativação que cria sub_id/custom_link."""
+    from app.services.whatsapp_grupo_service import WhatsappGrupoService
+
+    return WhatsappGrupoService(db, plan_limit_grupos=-1).definir_ativado(
+        grupo, True)
+
+
 def test_base36_estavel():
     assert base36(0) == "0"
     assert base36(35) == "z"
@@ -86,7 +96,9 @@ def test_base36_estavel():
     assert sub_id_do_grupo(123) == "wg3f"
 
 
-def test_grupo_novo_nasce_com_sub_id_e_custom_link(db):
+def test_grupo_novo_nasce_sem_atribuicao_e_desativado(db):
+    """O sync só descobre (spec §6.2): sub_id/custom_link ficam para a
+    ativação, e `ativado` nasce False — quem liga é a usuária."""
     inst = _instancia(db)
     svc = WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo()]]))
     r = svc.sincronizar(inst)
@@ -94,15 +106,14 @@ def test_grupo_novo_nasce_com_sub_id_e_custom_link(db):
     assert r == {"vistos": 1, "novos": 1, "atualizados": 0, "desativados": 0,
                  "ignorados": 0, "convites": 1}
     grupo = db.query(WhatsappGrupo).one()
-    assert grupo.sub_id == sub_id_do_grupo(grupo.id)
+    assert grupo.sub_id is None
+    assert grupo.custom_link_id is None
+    assert grupo.ativado is False
+    assert db.query(CustomLink).count() == 0
     assert grupo.participantes == 2
     assert grupo.sou_admin is True
     assert grupo.permite_envio is True
     assert grupo.link_convite and grupo.link_convite.startswith("https://chat.whatsapp.com/")
-
-    link = db.query(CustomLink).one()
-    assert grupo.custom_link_id == link.id
-    assert link.tag == "whatsapp"   # fora do limite do plano, fora de Meus Links
 
 
 def test_membro_comum_de_grupo_so_admin_nao_permite_envio(db):
@@ -118,6 +129,7 @@ def test_membro_comum_de_grupo_so_admin_nao_permite_envio(db):
 def test_grupo_que_some_desativa_sem_deletar(db):
     inst = _instancia(db)
     WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo()]])).sincronizar(inst)
+    _ativar(db, db.query(WhatsappGrupo).one())    # a usuária ligou o grupo
     # Segundo sync: o grupo sumiu do retorno.
     r = WhatsappGrupoSyncService(db, cliente=_FakeWaha([[]])).sincronizar(inst)
 
@@ -125,18 +137,20 @@ def test_grupo_que_some_desativa_sem_deletar(db):
     grupo = db.query(WhatsappGrupo).one()   # a linha continua existindo
     assert grupo.ativo is False
     assert grupo.sub_id is not None         # atribuição histórica preservada
+    assert grupo.ativado is True            # toggle é da usuária — sync não mexe
 
 
 def test_grupo_que_reaparece_revive_com_o_mesmo_sub_id(db):
     inst = _instancia(db)
     WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo()]])).sincronizar(inst)
-    sub_id_original = db.query(WhatsappGrupo).one().sub_id
+    sub_id_original = _ativar(db, db.query(WhatsappGrupo).one()).sub_id
+    assert sub_id_original                     # a ativação criou a atribuição
     WhatsappGrupoSyncService(db, cliente=_FakeWaha([[]])).sincronizar(inst)
     WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo()]])).sincronizar(inst)
 
     grupo = db.query(WhatsappGrupo).one()
     assert grupo.ativo is True
-    assert grupo.sub_id == sub_id_original
+    assert grupo.sub_id == sub_id_original     # NUNCA regenerar
     assert db.query(CustomLink).count() == 1   # não cria segundo link
 
 
@@ -186,6 +200,7 @@ def test_link_de_grupo_fica_fora_de_meus_links_pela_fk_nao_pela_tag(db):
 
     inst = _instancia(db)
     WhatsappGrupoSyncService(db, cliente=_FakeWaha([[_grupo()]])).sincronizar(inst)
+    _ativar(db, db.query(WhatsappGrupo).one())    # o link interno nasce aqui
     # A usuária cria um link PESSOAL com a tag "whatsapp" — precisa continuar
     # visível e contando no limite (tag é texto livre, não marcador interno).
     pessoal = CustomLink(user_id=USUARIA, name="meu link", original_url="https://x",
@@ -238,7 +253,7 @@ def test_gows_os_grupos_sao_gravados_de_verdade(db):
     assert grupo.nome == "Achadinhos SP"      # veio de `Name`, não de `subject`
     assert grupo.participantes == 2
     assert grupo.sou_admin is True            # veio de `IsAdmin`, não de `role`
-    assert grupo.sub_id == sub_id_do_grupo(grupo.id)
+    assert grupo.sub_id is None               # atribuição só na ativação
 
 
 def test_pagina_toda_ignorada_FALHA_em_vez_de_dar_sucesso_com_zero(db):
@@ -338,9 +353,11 @@ def test_ponta_a_ponta_499_grupos_do_GOWS_pelo_cliente_real(db, monkeypatch):
     assert r["ignorados"] == 0
     assert db.query(WhatsappGrupo).count() == TOTAL
 
-    # todo grupo nasce com atribuição — a decisão que não pode regredir
-    assert db.query(WhatsappGrupo).filter(WhatsappGrupo.sub_id.is_(None)).count() == 0
-    assert db.query(CustomLink).count() == TOTAL
+    # o sync NÃO atribui: nenhum sub_id, nenhum link interno — isso é da
+    # ativação (spec §6.2), e criar 499 links no sync era justamente o custo
+    # que a mudança removeu
+    assert db.query(WhatsappGrupo).filter(WhatsappGrupo.sub_id.isnot(None)).count() == 0
+    assert db.query(CustomLink).count() == 0
 
     # só os 10 grupos onde somos admin buscam convite
     admins = db.query(WhatsappGrupo).filter(WhatsappGrupo.sou_admin.is_(True)).all()

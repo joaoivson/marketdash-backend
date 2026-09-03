@@ -1,11 +1,13 @@
 """
-Sync de grupos de uma sessão conectada — e o nascimento da atribuição.
+Sync de grupos de uma sessão conectada.
 
 Duas decisões da spec moram aqui e não podem regredir:
 
-1. `sub_id` e `custom_link` nascem NO SYNC, não no primeiro envio. Todo clique
-   e conversão entre o sync e o primeiro disparo seria atribuição perdida para
-   sempre — o custo de criar já aqui é praticamente zero.
+1. O sync só DESCOBRE e atualiza grupos — a atribuição (`sub_id` +
+   `custom_link`) nasce na ATIVAÇÃO do grupo (whatsapp_grupo_service,
+   spec §6.3), que é quando o link passa a poder circular. E o sync NUNCA
+   escreve em `ativado`: aquele é o toggle da usuária; gravar aqui faria a
+   madrugada desfazer a escolha dela.
 2. Grupo que some do retorno vira `ativo=False`, NUNCA é deletado: apagar a
    linha destruiria o histórico de comissão por grupo.
 
@@ -15,14 +17,11 @@ LGPD: a lista de participantes que o WAHA devolve é consumida em memória
 import logging
 import random
 import time
-import uuid
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.custom_link import CustomLink
 from app.models.whatsapp_grupos import WhatsappGrupo, WhatsappInstancia
-from app.repositories.custom_link_repository import CustomLinkRepository
 from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
 from app.repositories.sync_run_repository import SyncRunRepository
 from app.services.waha_client import (
@@ -143,13 +142,14 @@ class WhatsappGrupoSyncService:
         self._falha_convite = ""
 
     def listar(self, user_id: int, instancia_id=None, busca=None,
-               incluir_inativos: bool = False):
+               incluir_inativos: bool = False, apenas_ativados: bool = False):
         """Grupos + vínculos por grupo, prontos para a resposta da rota."""
         grupos = self.repo.por_usuario(
             user_id,
             apenas_ativos=not incluir_inativos,
             instancia_id=instancia_id,
             busca=busca,
+            apenas_ativados=apenas_ativados,
         )
         vinculos = self.repo.instancias_por_grupo(user_id)
         return grupos, vinculos
@@ -312,17 +312,16 @@ class WhatsappGrupoSyncService:
 
     def _criar_grupo(self, user_id: int, jid: str, dados: Dict[str, Any],
                      agregados: Dict[str, Any]) -> WhatsappGrupo:
-        grupo = self.repo.adicionar(WhatsappGrupo(
+        # Nasce SEM sub_id/custom_link: a atribuição é criada na ativação
+        # (whatsapp_grupo_service.definir_ativado), não na descoberta.
+        return self.repo.adicionar(WhatsappGrupo(
             user_id=user_id,
             jid=jid,
             nome=(_valor(dados, "subject", "name") or "")[:255] or None,
             foto_url=_valor(dados, "picture", "pictureUrl"),
             ativo=True,
             **agregados,
-        ))  # flush garante grupo.id para o sub_id determinístico
-        grupo.sub_id = sub_id_do_grupo(grupo.id)
-        grupo.custom_link_id = self._criar_custom_link(user_id, grupo).id
-        return grupo
+        ))
 
     def _atualizar_grupo(self, grupo: WhatsappGrupo, dados: Dict[str, Any],
                          agregados: Dict[str, Any]) -> None:
@@ -334,29 +333,9 @@ class WhatsappGrupoSyncService:
         grupo.sou_admin = agregados["sou_admin"]
         grupo.permite_envio = agregados["permite_envio"]
         grupo.ativo = True
-        # Backfill de linha antiga que tenha nascido sem atribuição.
-        if not grupo.sub_id:
-            grupo.sub_id = sub_id_do_grupo(grupo.id)
-        if not grupo.custom_link_id:
-            grupo.custom_link_id = self._criar_custom_link(grupo.user_id, grupo).id
+        # Sem backfill de sub_id/custom_link aqui: quem garante atribuição é
+        # a ativação — e `ativado` é da usuária, o sync não encosta.
         self.repo.marcar_tocado(grupo)
-
-    def _criar_custom_link(self, user_id: int, grupo: WhatsappGrupo) -> CustomLink:
-        """
-        Link rastreável do grupo — FORA do limite de links do plano e filtrado
-        de Meus Links pela FK `whatsapp_grupos.custom_link_id` (nunca pela tag:
-        tag é texto livre da usuária e colidiria). `original_url` é placeholder
-        até o primeiro disparo congelar o short link da oferta (F3/F4).
-        """
-        repo_links = CustomLinkRepository(self.db)
-        slug = uuid.uuid4().hex[:8]
-        # Slug é único GLOBAL: colisão aqui estouraria a constraint no meio da
-        # transação do sync. Duas tentativas cobrem o (raríssimo) azar.
-        if repo_links.get_by_slug(slug):
-            slug = f"{slug}-{uuid.uuid4().hex[:4]}"
-        return repo_links.criar_link_de_grupo(
-            user_id, nome=(grupo.nome or f"Grupo {grupo.sub_id}"), slug=slug,
-        )
 
     def _convite(self, cliente: WahaClient, jid: str) -> Optional[str]:
         """Convite é sempre best-effort: falha aqui nunca derruba o sync."""

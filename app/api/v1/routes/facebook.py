@@ -77,7 +77,7 @@ def select_ad_accounts(
     Não há botão de sincronizar: o sync roda automaticamente ao escolher as contas
     e, depois, de hora em hora via pg_cron.
     """
-    result = _service(db).select_ad_accounts(current_user.id, payload.account_ids)
+    result = _service(db).select_ad_accounts(current_user.id, payload.account_ids, payload.accounts)
     if result.ad_account_ids:
         try:
             from app.tasks.facebook_tasks import sync_facebook_user_task

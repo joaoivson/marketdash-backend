@@ -94,7 +94,6 @@ class Settings(BaseSettings):
     # Travas anti-banimento do resumo diário: intervalo entre mensagens e teto.
     WHATSAPP_INTERVALO_MIN_S: float = 3.0
     WHATSAPP_INTERVALO_MAX_S: float = 8.0
-    WHATSAPP_TETO_DIARIO: int = 300
     WHATSAPP_FALHAS_PARA_PARAR: int = 5
     # Cap global de sessões de afiliadas — proteção de RAM do servidor WAHA.
     WHATSAPP_MAX_INSTANCIAS_GLOBAL: int = 60

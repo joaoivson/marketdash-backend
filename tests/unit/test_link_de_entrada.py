@@ -27,6 +27,13 @@ if PG_OK:
     import app.models  # noqa: F401
     ENGINE = create_engine(PG_URL)
     Base.metadata.create_all(ENGINE)
+    with ENGINE.begin() as _conn:
+        # 074 (toggle "Ativo" da usuária): create_all NÃO adiciona coluna em
+        # tabela existente — o mesmo gotcha de produção, no banco de teste.
+        _conn.execute(text(
+            "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS "
+            "ativado BOOLEAN NOT NULL DEFAULT FALSE"
+        ))
     Sessao = sessionmaker(bind=ENGINE)
 
 from app.models.campanha_grupos import Campanha, CampanhaGrupo  # noqa: E402
@@ -62,9 +69,11 @@ def _cenario(db, grupos=2, capacidade=1024, participantes=0, aleatoria=False,
     db.add(campanha); db.flush()
     criados = []
     for i in range(grupos):
+        # `ativado=True`: monitoramento/eventos são só de grupo que a usuária
+        # ligou (spec §6.2) — sem o toggle, registrar() ignora tudo.
         g = WhatsappGrupo(user_id=user.id, jid=f"12036{suf}{i}@g.us", nome=f"G{i}",
-                          ativo=True, permite_envio=True, participantes=participantes,
-                          capacidade=capacidade,
+                          ativo=True, ativado=True, permite_envio=True,
+                          participantes=participantes, capacidade=capacidade,
                           link_convite=f"https://chat.whatsapp.com/{suf}{i}")
         db.add(g); db.flush()
         aberto = True if abertos is None else (i in abertos)

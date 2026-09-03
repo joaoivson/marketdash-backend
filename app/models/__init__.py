@@ -30,7 +30,6 @@ from app.models.admin_client_note import AdminClientNote
 from app.models.page_view import PageView
 from app.models.sync_error_log import SyncErrorLog
 from app.models.sync_run import SyncRun
-from app.models.whatsapp import WhatsappOptin, WhatsappEnvio
 from app.models.whatsapp_proxies import WhatsappProxy
 from app.models.waha_servidores import WahaServidor
 from app.models.whatsapp_grupos import WhatsappInstancia, WhatsappGrupo, WhatsappGrupoInstancia
@@ -42,7 +41,7 @@ from app.models.campanha_link import (
 )
 from app.models.roteiro import (
     Roteiro, RoteiroPasso, RoteiroExecucao, RoteiroMensagem,
-    TemplateMensagem, TemplateVariacao, BlacklistNumero,
+    TemplateMensagem, TemplateVariacao,
 )
 from app.models.monitoramento import Monitoramento, MonitoramentoCaptura
 from app.models.conexao_convite import ConexaoConvite
@@ -55,12 +54,11 @@ __all__ = [
     "Campaign", "CampaignDailyInsight", "CampaignPlatformDailyInsight", "KiwifyPlanProduct",
     "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
     "SyncRun",
-    "WhatsappOptin", "WhatsappEnvio",
     "WhatsappInstancia", "WhatsappGrupo", "WhatsappGrupoInstancia", "WhatsappProxy",
     "Campanha", "CampanhaGrupo", "Integracao",
     "CampanhaLink", "CampanhaLinkEvento", "GrupoEvento", "GrupoSnapshot",
     "CampanhaAnuncio",
     "Roteiro", "RoteiroPasso", "RoteiroExecucao", "RoteiroMensagem",
-    "TemplateMensagem", "TemplateVariacao", "BlacklistNumero", "Monitoramento", "MonitoramentoCaptura", "ConexaoConvite",
+    "TemplateMensagem", "TemplateVariacao", "Monitoramento", "MonitoramentoCaptura", "ConexaoConvite",
 ]
 

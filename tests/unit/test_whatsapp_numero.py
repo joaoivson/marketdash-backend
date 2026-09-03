@@ -1,8 +1,9 @@
 """
-Normalização do número, leitura do SAIR e o cliente WAHA.
+Normalização do número e o cliente WAHA.
 
-Número errado aqui significa mandar mensagem diária para um desconhecido — a
-via mais curta para o número ser denunciado.
+Número errado aqui significa mandar mensagem para um desconhecido — a via
+mais curta para o número ser denunciado. (Os testes do SAIR saíram junto com
+o resumo diário — spec §9.1.)
 """
 import httpx
 import pytest
@@ -11,7 +12,6 @@ from app.services.waha_client import (
     ErroWhatsapp, WahaClient, chat_id_de_numero, mascarar, normalizar_numero,
     validar_jid_de_grupo,
 )
-from app.services.whatsapp_optin_service import pediu_para_sair
 
 
 @pytest.mark.parametrize("entrada,esperado", [
@@ -60,22 +60,6 @@ def test_jid_de_grupo_valido_passa(jid):
 def test_jid_de_grupo_invalido_e_recusado(jid):
     with pytest.raises(ValueError):
         validar_jid_de_grupo(jid)
-
-
-@pytest.mark.parametrize("texto", [
-    "SAIR", "sair", "  Sair  ", "sair.", "quero sair",
-    "PARAR", "cancelar", "stop", "descadastrar",
-])
-def test_pedidos_de_saida_sao_reconhecidos(texto):
-    assert pediu_para_sair(texto) is True
-
-
-@pytest.mark.parametrize("texto", [
-    None, "", "oi", "obrigada!", "como saio do vermelho?",
-    "vou sairei amanhã",   # "sairei" não é "sair"
-])
-def test_conversa_normal_nao_desliga_ninguem(texto):
-    assert pediu_para_sair(texto) is False
 
 
 # --- cliente WAHA ------------------------------------------------------------

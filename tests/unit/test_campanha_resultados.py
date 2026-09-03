@@ -29,6 +29,13 @@ if PG_OK:
     ENGINE = create_engine(PG_URL)
     Base.metadata.create_all(ENGINE)
     with ENGINE.begin() as _conn:
+        # 074 (toggle "Ativo" da usuária): create_all NÃO adiciona coluna em
+        # tabela existente — o mesmo gotcha de produção, no banco de teste.
+        _conn.execute(text(
+            "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS "
+            "ativado BOOLEAN NOT NULL DEFAULT FALSE"
+        ))
+    with ENGINE.begin() as _conn:
         _conn.execute(text("ALTER TABLE campaign_daily_insights ADD COLUMN IF NOT EXISTS leads INTEGER"))
     Sessao = sessionmaker(bind=ENGINE)
 
@@ -68,7 +75,7 @@ def _cenario(db, imposto_comissao=0.0, imposto_anuncio=0.0):
     grupos = []
     for i in range(2):
         g = WhatsappGrupo(user_id=user.id, jid=f"12036{suf}{i}@g.us", nome=f"G{i}",
-                          ativo=True, permite_envio=True, sou_admin=True,
+                          ativo=True, ativado=True, permite_envio=True, sou_admin=True,
                           participantes=100 * (i + 1), capacidade=1024,
                           # Entropia inteira: `sub_id` é UNIQUE e este banco de
                           # teste acumula entre execuções — 4 hex colidem.
@@ -253,7 +260,8 @@ def test_resumo_consolidado_soma_campanhas_e_preserva_leads_nulo(db):
     outra = Campanha(user_id=user.id, nome="Segunda")
     db.add(outra); db.flush()
     g = WhatsappGrupo(user_id=user.id, jid=f"12036{uuid.uuid4().hex[:8]}@g.us",
-                      nome="G-outra", ativo=True, permite_envio=True, sou_admin=True,
+                      nome="G-outra", ativo=True, ativado=True, permite_envio=True,
+                      sou_admin=True,
                       participantes=50, capacidade=1024,
                       sub_id=f"wg{uuid.uuid4().hex[:6]}",
                       link_convite="https://chat.whatsapp.com/z")

@@ -15,6 +15,7 @@ from app.repositories.campaign_repository import CampaignRepository
 from app.repositories.facebook_integration_repository import FacebookIntegrationRepository
 from app.schemas.facebook_integration import (
     FacebookAdAccount,
+    FacebookAdAccountRef,
     FacebookIntegrationResponse,
 )
 from app.services import facebook_marketing_client as fb
@@ -202,6 +203,22 @@ class FacebookIntegrationService:
         """Monta a resposta incluindo a lista de contas (ad_account_ids)."""
         resp = FacebookIntegrationResponse.model_validate(integration)
         resp.ad_account_ids = integration.account_ids_list()
+        # Nomes vêm do dict persistido na seleção. Seleção legada (gravada antes
+        # da coluna de nomes) não tem o dict: cai no `ad_account_name` da coluna
+        # antiga quando o id bate, senão name=None e a tela mostra o próprio id
+        # até a afiliada re-salvar a seleção no modal — nunca vale chamar a Graph
+        # aqui só para resolver nome (era exatamente o custo que a §4.2 tirou do
+        # caminho de abertura da tela).
+        names = integration.account_names_dict()
+        legado_id = integration.ad_account_id
+        legado_nome = integration.ad_account_name
+        resp.ad_accounts = [
+            FacebookAdAccountRef(
+                id=acc_id,
+                name=names.get(acc_id) or (legado_nome if acc_id == legado_id else None),
+            )
+            for acc_id in resp.ad_account_ids
+        ]
         # connection_state preenchido pelo caller que tem o service
         return resp
 
@@ -348,10 +365,28 @@ class FacebookIntegrationService:
         self.db.refresh(integration)
         return self._to_response(integration)
 
-    def select_ad_accounts(self, user_id: int, account_ids: list[str]) -> FacebookIntegrationResponse:
-        """Salva uma ou mais contas de anúncio selecionadas (checkboxes)."""
+    def select_ad_accounts(
+        self,
+        user_id: int,
+        account_ids: list[str],
+        accounts: Optional[list[FacebookAdAccountRef]] = None,
+    ) -> FacebookIntegrationResponse:
+        """Salva uma ou mais contas de anúncio selecionadas (checkboxes).
+
+        `accounts` (opcional, id+nome) persiste os nomes das contas para o status
+        exibir sem consultar a Graph. account_ids segue sendo a fonte da seleção.
+        """
         normalized = [a if a.startswith("act_") else f"act_{a}" for a in account_ids if a]
-        integration = self.repo.set_ad_accounts(user_id, normalized)
+        account_names: Optional[dict] = None
+        if accounts is not None:
+            # Mesma normalização de id da seleção; entrada sem nome não vira chave
+            # (ausência no dict já significa "desconhecido" no status).
+            account_names = {
+                (a.id if a.id.startswith("act_") else f"act_{a.id}"): a.name
+                for a in accounts
+                if a.id and a.name
+            }
+        integration = self.repo.set_ad_accounts(user_id, normalized, account_names)
         if not integration:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integração Facebook não encontrada.")
         self.db.commit()
@@ -553,7 +588,22 @@ class FacebookIntegrationService:
                 try:
                     campaigns = await fb.list_campaigns(token, ad_account_id)
                 except HTTPException as exc:
-                    # Não aborta o sync inteiro se uma conta falhar — segue para a próxima.
+                    # Token morto é falha da INTEGRAÇÃO, não de uma conta: marca
+                    # desconectado e para o ciclo. Enquanto a listagem de contas
+                    # rodava a cada abertura da tela, ela era quem detectava isso;
+                    # agora que a Graph só é chamada ao abrir o modal (spec §4.2),
+                    # o sync é o único detector automático que sobrou — sem isto a
+                    # tela segue dizendo "Conectado" e o gasto simplesmente para de
+                    # entrar, em silêncio, até alguém abrir o seletor de contas.
+                    if self._e_token_invalido(exc):
+                        self._marcar_desconectado(user_id)
+                        logger.warning(
+                            "Facebook token inválido no sync user_id=%s conta=%s — "
+                            "integração marcada desconectada.",
+                            user_id, ad_account_id,
+                        )
+                        break
+                    # Falha só desta conta: segue para a próxima.
                     logger.warning(
                         "Facebook list_campaigns falhou user_id=%s conta=%s: %s",
                         user_id, ad_account_id, exc.detail,
@@ -722,7 +772,9 @@ class FacebookIntegrationService:
 
             # Espelha o gasto do Meta na tabela AdSpend (fonte do gasto do Dashboard).
             # AdSpend = projeção pura dos insights; o lançamento manual foi descontinuado.
-            mirrored = camp_repo.rebuild_ad_spend_from_meta(user_id)
+            # Só as contas SELECIONADAS entram no espelho (§4.3): insight de conta
+            # desmarcada fica no histórico, mas não vira gasto na tela.
+            mirrored = camp_repo.rebuild_ad_spend_from_meta(user_id, account_ids)
             self.repo.update_last_sync(user_id)
             db.commit()
             logger.info("AdSpend espelhado do Meta user_id=%s: %d linhas", user_id, mirrored)

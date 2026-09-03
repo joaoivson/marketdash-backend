@@ -44,7 +44,10 @@ def snapshot_do_usuario(db: Session, user_id: int) -> Dict[str, int]:
 
     from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
 
-    for grupo in WhatsappGrupoRepository(db).por_usuario(user_id, apenas_ativos=True):
+    # `apenas_ativados`: snapshot é monitoramento, e monitoramento é só do
+    # que a usuária LIGOU (spec §6.2) — grupo existir no WhatsApp não basta.
+    for grupo in WhatsappGrupoRepository(db).por_usuario(
+            user_id, apenas_ativos=True, apenas_ativados=True):
         repo_link.upsert_snapshot(grupo.id, hoje, grupo.participantes or 0,
                                   1 if grupo.sou_admin else 0)
         resultado["grupos"] += 1

@@ -446,9 +446,36 @@ homologação.
 | 8 | `067_blacklist_e_conexao_externa.sql` | `conexao_convites` + `blacklist_numeros.numero_mascarado` | ausente | OK (RLS) |
 | 9 | `068_whatsapp_proxies.sql` | `whatsapp_proxies` + `whatsapp_instancias.proxy_*` | ausente | OK |
 | 10 | `070_whatsapp_instancia_envio_pausado.sql` | `whatsapp_instancias.envio_pausado` + `.pausado_em` | ausente | OK (31/08) |
+| 11 | `074_whatsapp_grupo_ativado.sql` | `whatsapp_grupos.ativado` + backfill (campanha **e** monitoramento) | **PENDENTE** | OK (03/09) |
+| 12 | `075_facebook_ad_accounts_names.sql` | `facebook_integrations.ad_accounts_names_json` | **PENDENTE** | OK (03/09) |
+| 13 | `076_subscription_pending_tier.sql` | `subscriptions.pending_*` (4 colunas) | **PENDENTE** | OK (03/09) |
 | — | `061_cron_roteiros.sql` | `roteiros-tick-5min` (a cada 5 min) | ausente | **agendado** |
 | — | `064_cron_grupos_snapshot.sql` | `grupos-snapshot-3am-brt` (diário) | ausente | **agendado** |
 | — | `069_cron_proxy_health.sql` | `proxy-health-horario` (horário) | ausente | **agendado** |
+| — | `077_remove_resumo_blacklist.sql` | **desagenda** `whatsapp-resumo-9am-brt` + DROP de 3 tabelas | **PENDENTE** | OK (03/09) |
+
+> ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
+> **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,
+> 3 tabelas derrubadas, cron desagendado, API religada limpa). **Em produção
+> continuam PENDENTES** — as quatro precisam ir junto com o deploy dessa rodada.
+>
+> Três são `ALTER TABLE` pura (mesma armadilha da `070`: `create_all` não
+> adiciona coluna em tabela existente — o boot-ALTER em `db/base.py` é rede
+> extra, não substituto).
+>
+> **A `077` é a única que precisa rodar mesmo em produção, onde o módulo de
+> grupos não existe:** ela desagenda o pg_cron `whatsapp-resumo-9am-brt`, que
+> **está ativo lá** (`0 12 * * *` = 9h BRT). O código do resumo foi removido
+> nesta rodada — sem a `077`, o job passa a bater em 404 todo dia, para sempre.
+> Ela também dropa `whatsapp_optins`, `whatsapp_envios` e `blacklist_numeros`:
+> em produção **essas tabelas têm dado real de aluna** (opt-ins do resumo), que
+> é descartado de propósito junto com a feature — se alguém quiser o histórico,
+> exportar **antes**. Em hml eram 1 opt-in e 6 envios de teste.
+>
+> A `076` é a única que toca `subscriptions` (tabela viva em produção, com
+> assinatura de todo mundo) — são 4 `ADD COLUMN` idempotentes, sem reescrita de
+> linha. A `074` precisa rodar **antes** do deploy: seu backfill é o que impede
+> o toggle de desligar campanha e monitoramento em operação.
 
 > ⚠️ **A `070` é a única `ALTER TABLE` pura do lote, e é a armadilha inversa da
 > seção 0.** `create_all` cria tabela nova, mas **não adiciona coluna em tabela

@@ -11,17 +11,15 @@ def _apply_safe_migrations(engine, logger):
     migrations = [
         "ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS facebook_pixel_id VARCHAR",
         "ALTER TABLE facebook_integrations ADD COLUMN IF NOT EXISTS ad_accounts_json TEXT",
+        # 075 (Facebook §4.2): nomes das contas selecionadas — a tabela já existe
+        # em todo ambiente e `create_all` NÃO adiciona coluna, mesmo padrão do
+        # ad_accounts_json acima.
+        "ALTER TABLE facebook_integrations ADD COLUMN IF NOT EXISTS ad_accounts_names_json TEXT",
         # 060 (grupos F3): sem esta coluna, TODA query de UserSettings quebra
         # se o código chegar antes da migration — rede extra do protocolo.
         "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS whatsapp_envio_config JSONB",
         # 065 (grupos F7): Leads do Meta por dia.
         "ALTER TABLE campaign_daily_insights ADD COLUMN IF NOT EXISTS leads INTEGER",
-        # 067 (grupos, item 17): a tabela nasceu na 060 e ganhou colunas depois.
-        # `create_all` NÃO altera tabela existente — sem isto, todo ambiente que
-        # já tinha `blacklist_numeros` quebra ao consultá-la.
-        "ALTER TABLE blacklist_numeros ADD COLUMN IF NOT EXISTS numero_mascarado VARCHAR(24)",
-        "ALTER TABLE blacklist_numeros ADD COLUMN IF NOT EXISTS "
-        "remover_dos_grupos BOOLEAN NOT NULL DEFAULT TRUE",
         # 068 (proxy por sessão): `whatsapp_instancias` já existe em todo
         # ambiente, e `create_all` NÃO adiciona coluna a tabela existente —
         # sem isto, qualquer query de instância quebra com UndefinedColumn
@@ -30,6 +28,21 @@ def _apply_safe_migrations(engine, logger):
         "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS proxy_fixado_em TIMESTAMPTZ",
         "ALTER TABLE whatsapp_instancias ADD COLUMN IF NOT EXISTS "
         "proxy_trocas INTEGER NOT NULL DEFAULT 0",
+        # 074 (grupos, toggle Ativo): `ativado` é a escolha da USUÁRIA — eixo
+        # separado de `ativo`, que é lifecycle do sync (todo sync revive com
+        # ativo=True). A tabela já existe em todo ambiente e `create_all` NÃO
+        # adiciona coluna — sem isto, GET /grupos quebra antes da migration.
+        "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS "
+        "ativado BOOLEAN NOT NULL DEFAULT FALSE",
+        # 076 (assinatura 10.2): compra de tier menor com maior vigente fica
+        # pendente em vez de rebaixar na hora. `subscriptions` existe em todo
+        # ambiente e `create_all` NÃO adiciona coluna — sem isto, qualquer
+        # leitura de Subscription quebra se o deploy chegar antes da migration.
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_plan VARCHAR",
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_periodo VARCHAR(32)",
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_vence_em TIMESTAMPTZ",
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "
+        "pending_provider_transaction_id VARCHAR",
     ]
     from sqlalchemy import text
     try:

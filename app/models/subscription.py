@@ -37,6 +37,14 @@ class Subscription(Base):
     provider_payment_method = Column(String(64), nullable=True)
     provider_order_id = Column(String(255), nullable=True)
 
+    # (10.2) Compra de tier MENOR com tier maior vigente NÃO rebaixa na hora:
+    # fica pendente aqui e é promovida quando a principal perder o acesso
+    # (SubscriptionService). Migration 076 + boot-ALTER em db/base.py.
+    pending_plan = Column(String, nullable=True)
+    pending_periodo = Column(String(32), nullable=True)
+    pending_vence_em = Column(DateTime(timezone=True), nullable=True)
+    pending_provider_transaction_id = Column(String, nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

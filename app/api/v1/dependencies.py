@@ -184,8 +184,9 @@ def require_active_subscription(
                 detail="Assinatura não está ativa. Por favor, renove sua assinatura.",
             )
     else:
-        # Usar cache (verificar acesso efetivo no banco)
-        subscription = subscription_service.repo.get_by_user_id(current_user.id)
+        # Usar cache (verificar acesso efetivo no banco — já promove a
+        # assinatura pendente se a principal perdeu o acesso, 10.2)
+        subscription = subscription_service.get_effective_subscription(current_user.id)
         if not subscription_has_access(subscription):
             logger.warning(f"Usuário {current_user.id} não tem assinatura ativa (cache)")
             raise HTTPException(
@@ -205,9 +206,9 @@ def _user_plan(db: Session, user_id: int) -> str:
 
 def require_plan(min_plan: str):
     """Dependency factory: exige plano mínimo (ex.: 'pro'). 403 PLANO_INSUFICIENTE."""
-    from app.core.plans import normalize_plan, FEATURES
+    from app.core.plans import normalize_plan, FEATURES, PLAN_RANK
 
-    rank = {"essencial": 1, "pro": 2, "max": 3}
+    rank = PLAN_RANK
 
     def _dep(
         current_user: User = Depends(require_active_subscription),
@@ -241,16 +242,24 @@ def get_user_plan_context(
     from app.core.plans import (
         FEATURES,
         CHECKOUT_LINKS,
+        _norm_freq,
         normalize_plan,
         plan_limit,
         MAX_ONLY_MENUS,
         PRO_ONLY_MENUS,
     )
 
-    sub = SubscriptionRepository(db).get_by_user_id(current_user.id)
+    # Via service: a leitura já promove a assinatura pendente (10.2)
+    sub = SubscriptionService(SubscriptionRepository(db)).get_effective_subscription(
+        current_user.id
+    )
     has_access = subscription_has_access(sub)
     plan = normalize_plan(sub.plan if sub else None)
-    periodo = (sub.plano_periodo if sub and sub.plano_periodo else None) or "mensal"
+    # Sempre pelo _norm_freq: desde a 10.1 a tela de Planos compara o período
+    # por igualdade para decidir qual card é "Plano atual", então um apelido
+    # cru da Kiwify ("annually", "monthly") que escapasse para cá faria NENHUM
+    # card casar — e a assinante veria "Assinar" no plano que já paga.
+    periodo = _norm_freq(sub.plano_periodo if sub else None)
     status_assinatura = (
         (sub.assinatura_status if sub and sub.assinatura_status else None)
         or ("ativa" if has_access else "cancelada")
@@ -259,6 +268,30 @@ def get_user_plan_context(
     vence = None
     if sub:
         vence = sub.assinatura_vence_em or sub.expires_at
+
+    # (10.3) Uso atual dos recursos limitados — MESMAS regras de contagem dos
+    # gates de criação, senão a tela mostra um número e o gate barra em outro.
+    from app.repositories.capture_site_repository import CaptureSiteRepository
+    from app.repositories.custom_link_repository import CustomLinkRepository
+    from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
+    from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
+    from app.services.custom_link_service import CustomLinkService
+
+    # COUNT, nunca `len()` de lista ORM: este payload é lido no boot de toda
+    # sessão, e materializar as listas só para contá-las paga ORDER BY e (no
+    # caso dos links) uma agregação sobre a tabela de cliques.
+    uso = {
+        # Exclui links internos de grupos WhatsApp — mesma regra da tela e do
+        # limite (CustomLinkService._links_do_plano).
+        "links": CustomLinkService(CustomLinkRepository(db)).contar_links_do_plano(current_user.id),
+        "paginas_captura": CaptureSiteRepository(db).contar_do_usuario(current_user.id),
+        # Instâncias não removidas (mesmo filtro do gate de criação).
+        "whatsapp_numeros": WhatsappInstanciaRepository(db).contar_do_usuario(current_user.id),
+        # count(ativado=True) — o toggle da usuária (074), mesmo eixo do gate
+        # de ativação; `ativo` (lifecycle do sync) não entra na conta.
+        "whatsapp_grupos_ativos": WhatsappGrupoRepository(db).total_ativados(current_user.id),
+    }
+
     return {
         "plano": plan,
         "plano_label": cfg["label"],
@@ -271,6 +304,7 @@ def get_user_plan_context(
         "pro_only_menus": sorted(PRO_ONLY_MENUS),
         "max_only_menus": sorted(MAX_ONLY_MENUS),
         "limites": dict(cfg["limites"]),
+        "uso": uso,
         "limites_paginas_captura": plan_limit(plan, "paginas_captura"),
         "limites_links": plan_limit(plan, "links"),
         "limites_whatsapp_numeros": plan_limit(plan, "whatsapp_numeros"),

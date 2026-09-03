@@ -15,10 +15,14 @@ class WhatsappGrupoRepository:
 
     def por_usuario(self, user_id: int, apenas_ativos: bool = True,
                     instancia_id: Optional[int] = None,
-                    busca: Optional[str] = None) -> List[WhatsappGrupo]:
+                    busca: Optional[str] = None,
+                    apenas_ativados: bool = False) -> List[WhatsappGrupo]:
         q = self.db.query(WhatsappGrupo).filter(WhatsappGrupo.user_id == user_id)
         if apenas_ativos:
             q = q.filter(WhatsappGrupo.ativo.is_(True))
+        if apenas_ativados:
+            # Toggle da usuária (074) — eixo separado do `ativo` do sync.
+            q = q.filter(WhatsappGrupo.ativado.is_(True))
         if instancia_id is not None:
             q = q.join(
                 WhatsappGrupoInstancia,
@@ -27,6 +31,23 @@ class WhatsappGrupoRepository:
         if busca:
             q = q.filter(WhatsappGrupo.nome.ilike(f"%{busca}%"))
         return q.order_by(WhatsappGrupo.nome).all()
+
+    def por_id(self, user_id: int, grupo_id: int) -> Optional[WhatsappGrupo]:
+        """Ownership embutida: id de outra dona devolve None (vira 404)."""
+        return (
+            self.db.query(WhatsappGrupo)
+            .filter(WhatsappGrupo.user_id == user_id, WhatsappGrupo.id == grupo_id)
+            .first()
+        )
+
+    def total_ativados(self, user_id: int) -> int:
+        """Denominador do limite `whatsapp_grupos` do plano."""
+        return (
+            self.db.query(WhatsappGrupo)
+            .filter(WhatsappGrupo.user_id == user_id,
+                    WhatsappGrupo.ativado.is_(True))
+            .count()
+        )
 
     def por_jid(self, user_id: int, jid: str) -> Optional[WhatsappGrupo]:
         return (
