@@ -1,7 +1,7 @@
 # Contexto — MarketDash Backend
 
 > **Estado atual do repositório.** Sobrescreva as seções ao mudarem — o
-> histórico vive em `DIARIO.md`. Última atualização: **2026-09-02**.
+> histórico vive em `DIARIO.md`. Última atualização: **2026-09-04**.
 >
 > Esta primeira versão foi montada por inspeção do código, do `CHANGELOG.md`
 > da raiz e do `git log` de `develop`. Onde ela divergir do código, **o código
@@ -81,7 +81,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 
 | Integração | Onde | Estado |
 |---|---|---|
-| **Shopee Afiliados** | `shopee_graphql_client.py`, `shopee_integration_service.py` | Sync full/incremental, upsert aditivo, painel `/admin/sincronizacoes` |
+| **Shopee Afiliados** | `shopee_graphql_client.py`, `shopee_integration_service.py` | Sync full/incremental, upsert aditivo, painel `/admin/sincronizacoes`. **Os 24 jobs `shopee-sync-*` do pg_cron ficaram `active=false` de 05/08 a 04/09/2026** — religados em produção; em hml continuam desligados, com só o Luiz (user 9) agendado pela `078`. Sinal de que o cron vive é `sync_runs.trigger`, **não** o `last_sync_at` da tela (que pode ser um clique manual) |
 | **Facebook / Meta Ads** | `facebook_marketing_client.py`, `facebook_integration_service.py` | Campanhas + espelho de gasto/cliques → `AdSpend` |
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |

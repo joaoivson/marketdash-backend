@@ -17,13 +17,14 @@ from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.repositories.whatsapp_instancia_repository import WhatsappInstanciaRepository
 from app.schemas.whatsapp_conexoes import (
-    ConviteAtivoOut, ConviteOut, GrupoAtualizar, GrupoOut, InstanciaAtualizar,
-    InstanciaCriar, InstanciaOut, InstanciaQrOut, SincronizarOut,
+    CodigoPareamentoIn, CodigoPareamentoOut, ConviteAtivoOut, ConviteOut,
+    GrupoAtualizar, GrupoOut, InstanciaAtualizar, InstanciaCriar, InstanciaOut,
+    InstanciaQrOut, SincronizarOut,
 )
 from app.services.waha_client import ErroWhatsapp, mascarar
 from app.services.whatsapp_grupo_sync_service import WhatsappGrupoSyncService
 from app.services.whatsapp_instancia_service import (
-    LimiteDeNumeros, LimiteGlobal, WhatsappInstanciaService,
+    LimiteDeNumeros, LimiteGlobal, NumeroInvalido, WhatsappInstanciaService,
 )
 from app.api.v1.routes.whatsapp import url_do_webhook
 
@@ -143,6 +144,26 @@ def qr_da_instancia(
     db: Session = Depends(get_db),
 ):
     return InstanciaQrOut(**_servico(db, request).qr(instancia))
+
+
+@router.post("/instancias/{instancia_id}/codigo-pareamento",
+             response_model=CodigoPareamentoOut)
+def codigo_de_pareamento(
+    payload: CodigoPareamentoIn,
+    request: Request,
+    instancia=Depends(instancia_do_usuaria),
+    db: Session = Depends(get_db),
+):
+    """Código de 8 dígitos para conectar SEM QR.
+
+    A afiliada abre o MarketDash no celular e o WhatsApp a conectar é o do
+    mesmo aparelho — não há como escanear o QR da própria tela.
+    """
+    try:
+        resultado = _servico(db, request).codigo_de_pareamento(instancia, payload.numero)
+    except NumeroInvalido as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return CodigoPareamentoOut(**resultado)
 
 
 @router.patch("/instancias/{instancia_id}", response_model=InstanciaOut)

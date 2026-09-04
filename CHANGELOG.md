@@ -11,6 +11,168 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-04 (Configurações — Operação › Parâmetros, gate por flag e os 5 bugs de produção)
+
+Segunda rodada do documento delta do João, sobre a de 03/09. Cross-stack.
+**Nenhuma migration nova**: 074-077 continuam sendo as pendentes para produção.
+
+### Navegação (§ Navegação lateral)
+- Quinta seção: **Operação › Parâmetros**. "Envio" sai de dentro do WhatsApp e
+  vira tela própria — janela de envio não é configuração de canal, vale para a
+  operação inteira, e como aba de WhatsApp ficava invisível para quem entra
+  pelo módulo de Campanhas. Estrutura final:
+  `CONTA` (Assinatura) · `INTEGRAÇÕES` (Marketplaces, Facebook Ads, Instagram,
+  WhatsApp) · `OPERAÇÃO` (Parâmetros) · `CÁLCULOS` (Impostos).
+- **WhatsApp fica só com Números, sem abas internas**, e a página do número
+  perde a `TabsList` de uma aba só. Uma aba solitária não é navegação, é
+  moldura — volta quando existir a segunda.
+- `?tab=envio` passa a cair em **Parâmetros** (o deep-link antigo não podia
+  virar um WhatsApp sem abas). Grupo de navegação que fica sem seção nenhuma
+  some inteiro — nada de cabeçalho "OPERAÇÃO" sozinho.
+
+### Densidade (§ Global)
+- `SecaoCard` reapertado como régua única: título `text-sm`, `p-3.5` (padding
+  igual no mobile e no desktop — o `md:p-4` fazia as duas densidades
+  divergirem), header `mb-2.5`, caixa do ícone 32px. Ganhou slot `action`, e o
+  card de Marketplaces — que tinha cabeçalho próprio, ícone de 48px e título
+  `text-base` — passou a usá-lo: era a única seção fora da régua.
+- Critério de aceite medido por screenshot: em **Operação › Parâmetros os 7
+  dias abertos cabem sem scroll em 1366×768 e 1280×720**, com o botão Salvar
+  na tela. Antes: 777px de conteúdo em 720 de viewport.
+
+### Subida para produção — gate por FLAG, não por hostname (§ Subida)
+- `isProductionHost()` sai do gate do módulo de disparo em grupo. Era
+  **build-time**: liberar o módulo para uma conta de teste em produção exigia
+  rebuild + redeploy, e a spec pedia beta sem redeploy.
+- No lugar, `feature-flags.json` ganha `modulos_beta`, o backend resolve por
+  **conta** (`liberado` / `planos` / `emails`) e devolve a lista em
+  `GET /subscription/plan` → `modulos`. A env `MODULOS_BETA` (csv) manda sobre
+  o arquivo: liberar ou recolher em produção é variável no Coolify + restart.
+- Frontend: `usePlanStore.moduloLiberado()`, `menuVisivel()` filtrando por
+  `item.modulo` e um `RequireModulo` novo nas rotas. As rotas do módulo agora
+  **existem sempre** e o wrapper decide depois que o contexto chega — o
+  `{cond && <Route/>}` fazia link direto cair em 404 por uma fração de segundo
+  antes de a rota passar a existir.
+- **Fecha por padrão**: módulo ausente do arquivo, contexto ainda carregando ou
+  backend antigo sem o campo → invisível. O default oposto abriria o disparo em
+  grupo para a base inteira por um erro de digitação no JSON.
+- Com a flag fechada sobra exatamente o que a spec pediu: Assinatura ·
+  Marketplaces · Facebook Ads · Instagram · Impostos, e `/dashboard/grupos`
+  redireciona para `/dashboard` em vez de 404.
+
+### Marketplaces
+- **Autofill (o `10020` voltou).** A rodada anterior tratou `autocomplete` e
+  ids, e não bastou: o Chrome ignora `autocomplete="off"` quando decide que o
+  formulário é de login e preenche o **primeiro par usuário/senha** que
+  encontra — que era App ID + Secret. Agora os campos se chamam
+  `ref_publica`/`ref_secreta` (nenhuma heurística de login casa), carregam
+  `data-lpignore`/`data-1p-ignore`/`data-form-type="other"`, e um par
+  `username`/`password` invisível e fora da ordem de tabulação abre o
+  formulário para absorver o preenchimento. Vale nos **dois** formulários — o
+  de adicionar conta e o da engrenagem de sincronização.
+- **Sync parada virou estado visível.** O limiar caiu de 24h para 6h (a sync é
+  horária) e o "sync atrasada" cinza de 12px virou badge âmbar com o tamanho do
+  atraso escrito: *"Sincronização parada há 14 dias"*. O tamanho é a
+  informação — 14 dias e 7 horas são problemas diferentes. Aparece também na
+  faixa da sync legada (estado vazio e conta órfã).
+
+### Facebook Ads
+- **Regressão do nome da conta.** A lista voltou a exibir
+  `act_266908603365617` cru porque o metadado só nascia no momento da SELEÇÃO:
+  quem conectou antes da coluna existir (ou reconectou depois, o que reescreve
+  a integração) não tinha como recuperar o nome sem reabrir o modal e
+  re-salvar. Agora:
+  - `ad_accounts_names_json` passa a guardar **nome + moeda**
+    (`{"act_1": {"name": ..., "currency": ...}}`), com leitura tolerante ao
+    formato antigo só-nome — reescrever exigiria migration de dado, e leitura
+    estrita apagaria o nome de quem já estava conectada;
+  - `POST /facebook/ad-accounts/resolver-nomes` resolve pela Graph e **faz
+    merge**: conta que saiu da Graph (deixou de ser compartilhada com o app)
+    continua selecionada e mantém o nome que já tínhamos;
+  - a tela chama isso **uma vez, depois do primeiro paint e só quando falta
+    nome**. O `/status` segue sem tocar na Graph — era o custo que a rodada
+    anterior tirou do carregamento.
+  - A lista e o modal voltam a mostrar `Nome` + `id · MOEDA`.
+
+### WhatsApp › Números
+- **Pareamento por código** (`POST /instancias/{id}/codigo-pareamento` →
+  `auth/request-code` do WAHA). A aluna abre o MarketDash no celular e o
+  WhatsApp que ela vai conectar é o do mesmo aparelho: não há como escanear o
+  QR da própria tela. Sem isso, parte do público não conecta e vira churn
+  silencioso. O modal novo (`ConectarNumeroModal`) oferece os dois caminhos e
+  mantém o poll do QR nos dois modos — é ele que detecta a conexão.
+  Número inválido falha **antes** de falar com o WAHA, com mensagem própria.
+- **"Desconectado" e "Aguardando conexão" deixam de mentir a mesma frase.**
+  Os dois exibiam "Número ainda não pareado"; quem já tinha pareado e caiu lia
+  que nunca havia pareado. `desconectada` sem número agora diz *"Conexão
+  perdida — reconecte para voltar a enviar"*.
+
+### Detalhe do número › Grupos
+- **Paginação** (25 por página, seletor 25/50/100, "1–25 de 493") no lugar do
+  scroll infinito, que não dava como voltar a um grupo que passou.
+- **Filtro de estado** `Ativos (N) · Todos (N)`, abrindo em **Ativos** —
+  paginar sozinho não resolvia: com 25 por página e 493 grupos, os 2 ativos
+  ficavam espalhados por 20 páginas.
+- Linha mais baixa (`py-1`) e nome em **peso normal**: em bold, 25 nomes
+  seguidos viram um bloco só e nenhum se destaca.
+- **Nomes idênticos ganham desambiguador.** Dois `#130 SALESDASH + VENDE-C`
+  (347 e 2 participantes) são grupos distintos — padrão de grupo sucessor.
+  A linha passa a mostrar o fim do JID (`…203779` / `…902488`), e **só onde o
+  nome se repete**: em 493 linhas, sempre seria ruído. A data que guardamos é a
+  do primeiro sync, igual para os dois, então não diferencia nada.
+- **Estado vazio da busca**, com a saída: quem busca dentro de "Ativos" quase
+  sempre queria buscar em "Todos", e o botão leva pra lá.
+
+### Operação › Parâmetros
+- Recebe o conteúdo de WhatsApp › Envio num bloco só (Janela de envio); nada de
+  bloco vazio prometendo o que ainda não existe.
+- Duas regras viram texto na tela, porque são a diferença entre "não enviou" e
+  "quebrou": execução que começa dentro da janela é concluída mesmo passando do
+  fim, e **a janela global é teto** — campanha marcada para 08:00 com a janela
+  abrindo 09:00 espera a abertura, não envia às 08:20.
+- A descrição do switch muda com o estado: desligado não existe teto, e dizer
+  "os envios pausam" nesse caso seria mentira.
+
+### Assinatura
+- **Contador "1 · Ilimitado" morre.** Ilimitado exibe só *"Ilimitado"* — sem
+  teto, o consumo não mede coisa nenhuma. Com teto continua `usado/limite`
+  (`Números 2/3`).
+- **Linha "Grupos ativos" sai.** O Max vai ter teto, só não definido ainda;
+  publicar "Ilimitado" agora seria promessa a retirar depois. Volta junto com o
+  número.
+
+### Sync Shopee parada — causa encontrada e produção religada
+- **Os 24 `shopee-sync-*` do pg_cron estavam `active = false`.** Não quebraram:
+  o último `cron.job_run_details` é `shopee-sync-12h-brt` em **05/08 15:00 UTC,
+  `succeeded`**, e `sync_runs` não tem nenhum `cron_incremental`/`cron_full`
+  depois disso. Todo o resto do pg_cron (facebook, grupos-snapshot, instagram,
+  proxy, roteiros) seguia `active = true` — só a família Shopee caiu. O Vault
+  estava certo (`backend_base_url` = PROD, a 036 vale).
+- **A data do relatório estava errada: parou em 05/08, não 20/08 — 29 dias.**
+  19 contas têm `last_sync_at` cravado em `2026-08-05 15:00`; as duas datas
+  recentes eram sync **manual**. O "14 dias" na tela era a idade do último
+  clique em "Sincronizar agora" da conta de teste. Para saber se o cron vive, o
+  sinal é `sync_runs.trigger`, não a data da tela.
+- **Produção religada em 04/09** (24/24 `active = true`, lista batendo com a
+  migration 030 — sem drift). **Homologação fica desligada** de propósito, com
+  só a conta do Luiz Fernando agendada: `078_shopee_sync_por_usuario.sql` cria
+  `trigger_shopee_sync_user(user_id, sync_type)`, porque a `trigger_shopee_sync`
+  original sincroniza todo mundo e não dava para escopar.
+- **`UPDATE cron.job SET active = true` não funciona no Supabase**
+  (`42501: permission denied for table job` — a tabela tem RLS e o DML direto
+  não é liberado ao papel do SQL Editor). O caminho é `cron.alter_job()`, que é
+  SECURITY DEFINER, ou recriar pelo nome com `cron.schedule` (que faz upsert).
+  E `SELECT` em `cron.job` pode vir **vazio em vez de erro** — a RLS filtra por
+  `username = current_user`. Vale para toda migration de pg_cron daqui pra
+  frente.
+
+### Testes
+- 21 testes novos (`test_modulos_beta.py`, `test_facebook_nome_e_moeda.py`,
+  `test_codigo_pareamento.py`), suíte em **1059 passando**.
+- Validação por screenshot em 1366×768, 1280×720 e 390×844 contra homologação
+  com dado real (493 grupos, 3 contas de anúncio, sync Shopee parada há 14
+  dias) — inclusive o comportamento com a flag fechada.
+
 ## [Não versionado] - 2026-09-03 (Configurações — reestruturação da tela, toggle de grupos e upgrade de periodicidade)
 
 Documento delta do João ("Correções da tela de Configurações"). Mexe em

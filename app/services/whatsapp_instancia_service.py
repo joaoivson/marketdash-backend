@@ -20,7 +20,9 @@ from app.models.whatsapp_grupos import (
     INSTANCIA_REMOVIDA, WhatsappInstancia,
 )
 from app.services import proxy_pool_service, waha_servidor_service
-from app.services.waha_client import ErroWhatsapp, WahaClient, numero_de_jid
+from app.services.waha_client import (
+    ErroWhatsapp, WahaClient, normalizar_numero, numero_de_jid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,10 @@ class EnvioEmAndamento(Exception):
 
 class LimiteDeNumeros(Exception):
     """A afiliada bateu no limite do plano."""
+
+
+class NumeroInvalido(Exception):
+    """Número digitado no pareamento por código não é um celular válido."""
 
 
 class LimiteGlobal(Exception):
@@ -350,6 +356,51 @@ class WhatsappInstanciaService:
             except ErroWhatsapp:
                 qr = None
         return {"estado": "aguardando", "qrcode": qr}
+
+    def codigo_de_pareamento(self, instancia: WhatsappInstancia,
+                             numero: str) -> Dict[str, Any]:
+        """Código de pareamento (alternativa ao QR) para um número.
+
+        Mesmo contrato de `qr`: devolve `estado` + o dado do pareamento, e
+        reconcilia a sessão antes de pedir o código. Sessão parada/inexistente
+        é religada aqui — pedir o código com a sessão fora do ar devolveria
+        "erro" numa tela em que a afiliada não tem o que fazer a respeito.
+        """
+        # Valida ANTES de falar com o WAHA: número inválido tem mensagem
+        # própria e não vira "erro: sessao".
+        try:
+            limpo = normalizar_numero(numero)
+        except ValueError as e:
+            raise NumeroInvalido(str(e)) from e
+
+        cliente = cliente_da_sessao(instancia.nome_instancia)
+        try:
+            info = cliente.sessao_info()
+            if not info:
+                webhooks = config_de_webhook(self.webhook_url) if self.webhook_url else None
+                cliente.criar_sessao(
+                    webhooks=webhooks,
+                    proxy=proxy_pool_service.credenciais_da_instancia(
+                        self.db, instancia),
+                )
+                info = cliente.sessao_info()
+            estado = str(info.get("status") or "inexistente")
+
+            if estado == "WORKING":
+                self._marcar_conectada(instancia, info)
+                return {"estado": "conectada", "codigo": None}
+
+            if estado in ("STOPPED", "FAILED"):
+                cliente.iniciar_sessao()
+                # O código só sai depois que a sessão chega em SCAN_QR_CODE; a
+                # tela pede de novo no próximo toque.
+                return {"estado": "aguardando", "codigo": None}
+
+            codigo = cliente.codigo_de_pareamento(limpo)
+        except ErroWhatsapp as e:
+            return {"estado": f"erro: {e.motivo}", "codigo": None}
+
+        return {"estado": "aguardando", "codigo": codigo}
 
     def _marcar_conectada(self, instancia: WhatsappInstancia, info: Dict[str, Any]) -> None:
         numero = numero_de_jid((info.get("me") or {}).get("id")) or None

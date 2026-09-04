@@ -89,6 +89,20 @@ def select_ad_accounts(
     return result
 
 
+@router.post("/ad-accounts/resolver-nomes", response_model=FacebookIntegrationResponse)
+async def resolver_nomes_das_contas(
+    current_user: User = Depends(require_active_subscription),
+    db: Session = Depends(get_db),
+):
+    """Preenche nome e moeda das contas já selecionadas, consultando a Graph.
+
+    Auto-cura da lista que voltou a exibir "act_266908603365617" cru. A tela
+    chama isto uma vez, depois do primeiro paint e só quando falta nome — o
+    `/status` continua sem tocar na Graph.
+    """
+    return await _service(db).resolver_nomes_das_selecionadas(current_user.id)
+
+
 @router.get("/status", response_model=FacebookIntegrationResponse | None)
 def get_status(
     current_user: User = Depends(get_current_user),

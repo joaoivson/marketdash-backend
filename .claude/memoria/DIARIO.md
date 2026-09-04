@@ -11,6 +11,62 @@
 
 ---
 
+## 2026-09-04 — Módulo em beta vira flag de runtime, nome do Facebook se auto-cura e pareamento sem QR
+
+O que mudou: `feature_flags.modulos_beta_liberados()` + `modulos` no contexto
+de plano; `ad_accounts_names_json` passa a guardar nome **e moeda**, com
+`POST /facebook/ad-accounts/resolver-nomes` novo; `codigo_de_pareamento` no
+`WahaClient`, no service e em `POST /instancias/{id}/codigo-pareamento`.
+**Nenhuma migration** — a coluna da 075 já existia e a mudança é de formato do
+JSON dentro dela.
+
+**Por que a flag mora aqui e não no frontend.** O gate por hostname é
+build-time: liberar o módulo de disparo em grupo para uma conta de teste em
+produção exigia rebuild + redeploy. Aqui é `feature-flags.json` + a env
+`MODULOS_BETA` (csv, que **manda sobre o arquivo**) — Coolify + restart. A
+distinção "definida e vazia" (fecha tudo) × "não definida" (cai no arquivo) é
+proposital: sem ela não haveria como recolher um beta só pelo ambiente. E o
+default é **fechado**: módulo ausente do JSON não aparece, porque o default
+oposto abriria o módulo para a base inteira por um typo.
+
+**Formato do metadado da conta de anúncio mudou sem migration de dado.** A
+coluna passa a aceitar `{"act_1": {"name":..., "currency":...}}` **e** o
+formato antigo `{"act_1": "Nome"}`. Reescrever tudo exigiria migration; leitura
+estrita apagaria o nome de quem já estava conectada. A tolerância custa um
+`isinstance` e evita as duas coisas.
+
+**Resolver nome ficou FORA do `/status` de propósito.** A rodada anterior tirou
+a Graph API do carregamento da tela (era o custo que travava conta com muitos
+ad accounts) — devolver a Graph para lá agora desfaria isso. Endpoint separado,
+chamado uma vez pela tela, depois do primeiro paint e só quando falta nome. E
+ele faz **merge**: conta que sumiu da Graph (deixou de ser compartilhada com o
+app) continua selecionada e perderia o nome já gravado se o dict fosse
+substituído inteiro.
+
+**Pareamento por código: `auth/request-code` do WAHA, com a sessão viva.** O
+código só sai com a sessão em `SCAN_QR_CODE`; sessão parada é religada e o
+código fica para o toque seguinte — devolver "erro" ali seria mentir sobre algo
+que a afiliada não tem como resolver. Número inválido falha **antes** de
+qualquer chamada ao WAHA (`NumeroInvalido` → 422), senão "(11) 3222-4444" viria
+como `erro: sessao`.
+
+**A sync Shopee não estava quebrada — foi desligada.** Os 24
+`shopee-sync-*` estavam `active = false`; o último `job_run_details` é
+`succeeded` em 05/08 15:00 UTC e `sync_runs` não tem `cron_incremental` nenhum
+depois. Todo o resto do pg_cron do projeto continuava ativo, então não é a
+extensão. E o relatório dizia "parada desde 20/08" porque as duas contas com
+data recente tinham rodado sync **manual** — a parada real é 05/08, 29 dias.
+Produção religada em 04/09 (24/24); hml fica desligada, com só o Luiz (user 9)
+agendado pela `078`.
+
+Gotcha do Supabase que vale para toda migration de pg_cron: **`UPDATE cron.job`
+dá `42501: permission denied`** (RLS + DML não liberado ao papel do SQL Editor).
+Use `cron.alter_job()` ou recrie pelo nome com `cron.schedule`, que faz upsert.
+E `SELECT` em `cron.job` pode vir **vazio em vez de erro**, porque a RLS filtra
+por `username = current_user` — vazio não significa "não existe job".
+
+---
+
 ## 2026-09-03 — Rodada Configurações: dois eixos de "ativo" e o tier que não podia cair
 
 O que mudou: coluna `whatsapp_grupos.ativado` (074) com PATCH próprio, e o

@@ -209,13 +209,15 @@ class FacebookIntegrationService:
         # até a afiliada re-salvar a seleção no modal — nunca vale chamar a Graph
         # aqui só para resolver nome (era exatamente o custo que a §4.2 tirou do
         # caminho de abertura da tela).
-        names = integration.account_names_dict()
+        meta = integration.account_meta_dict()
         legado_id = integration.ad_account_id
         legado_nome = integration.ad_account_name
         resp.ad_accounts = [
             FacebookAdAccountRef(
                 id=acc_id,
-                name=names.get(acc_id) or (legado_nome if acc_id == legado_id else None),
+                name=(meta.get(acc_id) or {}).get("name")
+                or (legado_nome if acc_id == legado_id else None),
+                currency=(meta.get(acc_id) or {}).get("currency"),
             )
             for acc_id in resp.ad_account_ids
         ]
@@ -379,12 +381,15 @@ class FacebookIntegrationService:
         normalized = [a if a.startswith("act_") else f"act_{a}" for a in account_ids if a]
         account_names: Optional[dict] = None
         if accounts is not None:
-            # Mesma normalização de id da seleção; entrada sem nome não vira chave
-            # (ausência no dict já significa "desconhecido" no status).
+            # Mesma normalização de id da seleção; entrada sem nome E sem moeda
+            # não vira chave (ausência no dict já significa "desconhecido").
             account_names = {
-                (a.id if a.id.startswith("act_") else f"act_{a.id}"): a.name
+                (a.id if a.id.startswith("act_") else f"act_{a.id}"): {
+                    "name": a.name,
+                    "currency": a.currency,
+                }
                 for a in accounts
-                if a.id and a.name
+                if a.id and (a.name or a.currency)
             }
         integration = self.repo.set_ad_accounts(user_id, normalized, account_names)
         if not integration:
@@ -394,6 +399,49 @@ class FacebookIntegrationService:
         resp = self._to_response(integration)
         resp.connection_state = self.resolve_connection_state(user_id)
         return resp
+
+    async def resolver_nomes_das_selecionadas(self, user_id: int) -> FacebookIntegrationResponse:
+        """Preenche nome e moeda das contas JÁ selecionadas, consultando a Graph.
+
+        Existe porque o metadado só nascia no momento da seleção: quem conectou
+        antes da coluna (ou reconectou depois, o que reescreve a integração)
+        ficava com a lista exibindo "act_266908603365617" cru, sem nome nem
+        moeda, e a única saída era reabrir o modal e re-salvar a seleção.
+
+        Fica FORA do `/status` de propósito — a tela chama isto uma vez, depois
+        do primeiro paint e só quando falta nome. Botar a Graph no caminho de
+        abertura foi exatamente o custo que a §4.2 tirou dali.
+        """
+        integration = self.repo.get_by_user_id(user_id)
+        if not integration:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="Integração Facebook não encontrada.")
+        selecionadas = integration.account_ids_list()
+        if not selecionadas:
+            return self.get_status(user_id)
+
+        # Merge, não substituição: conta que saiu da Graph (deixou de ser
+        # compartilhada com o app) continua marcada e perderia o nome que já
+        # tínhamos se a resposta nova mandasse no dict inteiro.
+        meta = dict(integration.account_meta_dict())
+        contas = await self.list_ad_accounts(user_id)
+        for conta in contas:
+            acc_id = conta.id or (f"act_{conta.account_id}" if conta.account_id else None)
+            if not acc_id or acc_id not in selecionadas:
+                continue
+            atual = meta.get(acc_id) or {}
+            meta[acc_id] = {
+                "name": conta.name or atual.get("name"),
+                "currency": conta.currency or atual.get("currency"),
+            }
+
+        limpo = {
+            acc_id: dados for acc_id, dados in meta.items()
+            if acc_id in selecionadas and (dados.get("name") or dados.get("currency"))
+        }
+        self.repo.set_ad_accounts(user_id, selecionadas, limpo)
+        self.db.commit()
+        return self.get_status(user_id)
 
     def is_token_valid(self, user_id: int) -> bool:
         return self.resolve_connection_state(user_id) == "conectado"

@@ -453,6 +453,7 @@ homologação.
 | — | `064_cron_grupos_snapshot.sql` | `grupos-snapshot-3am-brt` (diário) | ausente | **agendado** |
 | — | `069_cron_proxy_health.sql` | `proxy-health-horario` (horário) | ausente | **agendado** |
 | — | `077_remove_resumo_blacklist.sql` | **desagenda** `whatsapp-resumo-9am-brt` + DROP de 3 tabelas | **PENDENTE** | OK (03/09) |
+| — | `078_shopee_sync_por_usuario.sql` | função `trigger_shopee_sync_user` (só a função — agendamento é manual e diverge) | **PENDENTE** | **PENDENTE** |
 
 > ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
 > **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,
@@ -463,6 +464,19 @@ homologação.
 > adiciona coluna em tabela existente — o boot-ALTER em `db/base.py` é rede
 > extra, não substituto).
 >
+> ⚠️ **A `078` (04/09) não é da promoção do módulo — é do sync Shopee**, e é a
+> única migration deste inventário cujo agendamento **diverge por ambiente**:
+> produção quer os 24 `shopee-sync-*` ligados (já religados em 04/09 via
+> `cron.alter_job`), homologação quer todos desligados com só a conta do Luiz
+> Fernando (user 9) agendada. Por isso o arquivo cria **apenas a função** e
+> deixa os dois blocos de `cron.schedule` comentados no rodapé: rodar o arquivo
+> inteiro no ambiente errado religaria em hml a cadência horária de 20/07.
+>
+> Lembrete de execução: **`UPDATE cron.job SET active = ...` não funciona no
+> Supabase** (`42501: permission denied for table job`). Use `cron.alter_job()`
+> ou recrie pelo nome com `cron.schedule`. E `SELECT` em `cron.job` pode vir
+> **vazio em vez de erro** — a RLS filtra por `username = current_user`.
+
 > **A `077` é a única que precisa rodar mesmo em produção, onde o módulo de
 > grupos não existe:** ela desagenda o pg_cron `whatsapp-resumo-9am-brt`, que
 > **está ativo lá** (`0 12 * * *` = 9h BRT). O código do resumo foi removido

@@ -292,9 +292,18 @@ def get_user_plan_context(
         "whatsapp_grupos_ativos": WhatsappGrupoRepository(db).total_ativados(current_user.id),
     }
 
+    # Módulos em beta liberados para ESTA conta (§ Subida para produção). O
+    # frontend some com WhatsApp, Parâmetros e Campanhas por esta lista, não
+    # mais por hostname: o gate por host era build-time e liberar em beta
+    # exigia rebuild — aqui é `MODULOS_BETA` no Coolify + restart.
+    from app.core.feature_flags import modulos_beta_liberados
+
+    modulos = sorted(modulos_beta_liberados(plano=plan, email=current_user.email))
+
     return {
         "plano": plan,
         "plano_label": cfg["label"],
+        "modulos": modulos,
         "periodo": periodo,
         "assinatura_status": status_assinatura,
         "assinatura_vence_em": vence.isoformat() if vence else None,

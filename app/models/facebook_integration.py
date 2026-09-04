@@ -61,13 +61,43 @@ class FacebookIntegration(Base):
                 pass
         return [self.ad_account_id] if self.ad_account_id else []
 
+    def account_meta_dict(self) -> dict[str, dict]:
+        """Metadado de exibição por conta: {"act_123": {"name": ..., "currency": ...}}.
+
+        Aceita os DOIS formatos gravados nesta coluna: o de agora (dict) e o
+        original ({"act_123": "Nome"}), porque a seleção de quem já estava
+        conectada foi gravada no formato antigo e reescrever tudo exigiria
+        migration de dado — a leitura tolerante custa menos e não perde nome.
+        """
+        if not self.ad_accounts_names_json:
+            return {}
+        try:
+            value = json.loads(self.ad_accounts_names_json)
+        except (ValueError, TypeError):
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        meta: dict[str, dict] = {}
+        for chave, bruto in value.items():
+            if not chave:
+                continue
+            if isinstance(bruto, dict):
+                nome = bruto.get("name")
+                moeda = bruto.get("currency")
+            else:
+                nome, moeda = bruto, None
+            if not nome and not moeda:
+                continue
+            meta[str(chave)] = {
+                "name": str(nome) if nome else None,
+                "currency": str(moeda) if moeda else None,
+            }
+        return meta
+
     def account_names_dict(self) -> dict[str, str]:
-        """Dict {"act_123": "Nome"} persistido na seleção. Vazio para dado legado."""
-        if self.ad_accounts_names_json:
-            try:
-                value = json.loads(self.ad_accounts_names_json)
-                if isinstance(value, dict):
-                    return {str(k): str(v) for k, v in value.items() if k and v}
-            except (ValueError, TypeError):
-                pass
-        return {}
+        """Só os nomes — mantido para quem já lia este formato."""
+        return {
+            chave: dados["name"]
+            for chave, dados in self.account_meta_dict().items()
+            if dados.get("name")
+        }

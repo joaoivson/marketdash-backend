@@ -30,10 +30,13 @@ class FacebookAdAccountSelect(BaseModel):
 
 
 class FacebookAdAccountRef(BaseModel):
-    """Referência leve a uma conta selecionada: id 'act_123' + nome de exibição."""
+    """Referência leve a uma conta selecionada: id 'act_123' + nome e moeda."""
     id: str
     # None = nome desconhecido (ex.: seleção gravada antes da coluna de nomes existir)
     name: Optional[str] = None
+    # A moeda vinha só da Graph, então sumia da lista assim que a tela parou de
+    # chamá-la no carregamento. Persistida junto do nome desde então.
+    currency: Optional[str] = None
 
 
 class FacebookAdAccountsSelect(BaseModel):

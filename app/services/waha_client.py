@@ -351,6 +351,27 @@ class WahaClient:
             base64 = f"data:{mime};base64,{base64}"
         return str(base64)
 
+    def codigo_de_pareamento(self, numero: str) -> Optional[str]:
+        """Código de 8 dígitos para parear SEM QR (`WhatsApp → Conectar com
+        número de telefone`).
+
+        Existe porque a afiliada abre o MarketDash NO CELULAR e o WhatsApp que
+        ela vai conectar é o do mesmo aparelho — não há como escanear um QR da
+        própria tela. Sem isso, parte do público simplesmente não conecta.
+
+        Só sai com a sessão pedindo pareamento (SCAN_QR_CODE): sessão parada ou
+        já conectada devolve None, que é estado normal e não erro.
+        """
+        limpo = normalizar_numero(numero)
+        status, dados = self._pedir(
+            "POST", f"/api/{self.sessao}/auth/request-code",
+            {"phoneNumber": limpo},
+        )
+        if status >= 400 or not isinstance(dados, dict):
+            return None
+        codigo = dados.get("code") or dados.get("pairingCode") or dados.get("Code")
+        return str(codigo) if codigo else None
+
     def deletar_sessao(self) -> None:
         """Logout + remoção da sessão no WAHA (a afiliada removeu o número)."""
         self._pedir("POST", f"/api/sessions/{self.sessao}/logout")

@@ -37,6 +37,16 @@ class InstanciaQrOut(BaseModel):
     qrcode: Optional[str]  # data-uri base64, quando há QR a mostrar
 
 
+class CodigoPareamentoIn(BaseModel):
+    """Número que vai receber o código de pareamento (DDI opcional — assume BR)."""
+    numero: str
+
+
+class CodigoPareamentoOut(BaseModel):
+    estado: str             # conectada | aguardando | erro: <motivo>
+    codigo: Optional[str]   # 8 caracteres para digitar no WhatsApp do celular
+
+
 class GrupoAtualizar(BaseModel):
     """Só o toggle da usuária — nome/participantes/admin são do sync."""
     ativado: bool

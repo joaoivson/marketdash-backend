@@ -106,3 +106,77 @@ def is_kiwify() -> bool:
 
 def is_cakto() -> bool:
     return get_payment_provider() == "cakto"
+
+
+# --- Módulos em beta (§ Subida para produção) --------------------------------
+#
+# O layout novo de Configurações sobe inteiro; o que ainda não está liberado
+# some por FLAG, não por código comentado nem por `isProductionHost()` no
+# frontend. Duas diferenças que motivaram a troca:
+#
+# 1. O gate por hostname é build-time no frontend — liberar em beta exigia
+#    rebuild + redeploy. Aqui é runtime: env var no Coolify + restart.
+# 2. Dá para liberar por plano ou por conta, mantendo o módulo visível nas
+#    contas de teste enquanto some para o resto da produção.
+
+MODULO_GRUPOS_WHATSAPP = "grupos_whatsapp"
+
+
+def _modulos_do_ambiente() -> Optional[set]:
+    """`MODULOS_BETA` (csv) força a lista inteira, ignorando o arquivo.
+
+    Vem PRIMEIRO pelo mesmo motivo das flags acima: liberar/recolher um módulo
+    em produção sem rebuild de imagem. `MODULOS_BETA=""` (definida e vazia)
+    fecha tudo — diferente de não definida, que cai no arquivo.
+    """
+    bruto = os.environ.get("MODULOS_BETA")
+    if bruto is None:
+        return None
+    return {parte.strip().lower() for parte in bruto.split(",") if parte.strip()}
+
+
+def modulos_beta_liberados(plano: Optional[str] = None,
+                           email: Optional[str] = None) -> set:
+    """Módulos em beta visíveis para esta conta.
+
+    Formato no `feature-flags.json`:
+
+        "modulos_beta": {
+          "grupos_whatsapp": {
+            "liberado": false,          # true = todo mundo vê
+            "planos": ["max"],          # ou só quem está nesses planos
+            "emails": ["a@b.com"]       # ou estas contas nominais
+          }
+        }
+
+    Ausente = fechado. É o default de propósito: módulo novo nasce invisível.
+    """
+    forcados = _modulos_do_ambiente()
+    if forcados is not None:
+        return forcados
+
+    config = _load_config().get("modulos_beta") or {}
+    if not isinstance(config, dict):
+        return set()
+
+    plano_n = (plano or "").strip().lower()
+    email_n = (email or "").strip().lower()
+    liberados = set()
+    for nome, regra in config.items():
+        # Atalho: `"grupos_whatsapp": true` vale como {"liberado": true}.
+        if regra is True:
+            liberados.add(nome)
+            continue
+        if not isinstance(regra, dict):
+            continue
+        if regra.get("liberado"):
+            liberados.add(nome)
+            continue
+        planos = {str(p).lower() for p in (regra.get("planos") or [])}
+        if plano_n and plano_n in planos:
+            liberados.add(nome)
+            continue
+        emails = {str(e).lower() for e in (regra.get("emails") or [])}
+        if email_n and email_n in emails:
+            liberados.add(nome)
+    return liberados

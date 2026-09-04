@@ -1,4 +1,11 @@
 {
   "payment_provider": "kiwify",
-  "whatsapp_proxy": true
+  "whatsapp_proxy": true,
+  "modulos_beta": {
+    "grupos_whatsapp": {
+      "liberado": true,
+      "planos": [],
+      "emails": ["relacionamento@marketdash.com.br"]
+    }
+  }
 }
