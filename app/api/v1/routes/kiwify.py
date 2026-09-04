@@ -507,7 +507,11 @@ async def kiwify_webhook(
 
         # Buscar ou criar usuário
         try:
-            user, user_created, user_has_password = find_or_create_user(email, customer_data, db)
+            # Só a ativação pode renomear a conta pelo CPF: estorno/cancelamento
+            # chegam com o e-mail do pedido antigo (ver find_or_create_user).
+            user, user_created, user_has_password = find_or_create_user(
+                email, customer_data, db, allow_email_update=(action == "activate")
+            )
             if user_created:
                 logger.info(f"Usuário {email} criado via webhook Kiwify com ID {user.id}")
             _link_event_to_user(db, recorded_event_id, user.id)

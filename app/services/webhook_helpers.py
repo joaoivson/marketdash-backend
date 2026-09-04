@@ -23,9 +23,18 @@ def find_or_create_user(
     email: str,
     customer_data: Dict[str, Any],
     db: Session,
+    allow_email_update: bool = True,
 ) -> Tuple[User, bool, bool]:
     """
     Busca ou cria usuário a partir dos dados do webhook.
+
+    `allow_email_update` controla o rename por documento (CPF/CNPJ). Só eventos
+    que LIBERAM acesso (activate) podem trocar o e-mail da conta: estorno e
+    cancelamento chegam com o e-mail do pedido ANTIGO e, quando a cliente
+    recompra corrigindo um e-mail digitado errado, o webhook do pedido velho
+    chegava depois e desfazia o rename — a conta paga voltava para o e-mail
+    errado e o login com o e-mail certo criava uma conta nova, sem assinatura
+    (caso Anne, 03/09/2026).
 
     Returns:
         (user, user_created, user_has_password)
@@ -37,7 +46,15 @@ def find_or_create_user(
         doc_id = customer_data.get("cpf_cnpj")
         if doc_id:
             user = user_repo.get_by_cpf(doc_id)
-            if user:
+            if user and not allow_email_update:
+                logger.info(
+                    "Usuário ID %s encontrado por documento, mas o evento não "
+                    "libera acesso: mantendo e-mail %s (payload trazia %s)",
+                    user.id,
+                    user.email,
+                    email,
+                )
+            elif user:
                 logger.info(f"Usuário ID {user.id} encontrado por documento. Atualizando email para {email}")
                 user.email = email
                 db.commit()
