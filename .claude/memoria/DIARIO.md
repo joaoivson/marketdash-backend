@@ -11,6 +11,117 @@
 
 ---
 
+## 2026-09-04 — Campanhas de grupos: o número do lead, os Números da campanha e o teto
+
+O que mudou: migration **079** (`campanha_numeros` + `campanhas.limite_participantes`
++ `grupo_eventos.identificador`/`identificador_tipo`), aba Números, Visão geral
+como painel de leitura, limite de participantes, e a aba Anúncios com gasto,
+veiculação real e paginação. Aplicada em **hml**; produção não tem o módulo.
+
+**Por que o identificador tinha prazo.** `grupo_eventos` guardava só o HMAC — e
+hash não volta a ser número. A exportação de leads existia e entregava data,
+grupo e origem: nada com que falar com quem entrou. Cada dia de campanha rodando
+antes da correção era lead perdido para sempre. Como o módulo nunca foi para
+produção, deu tempo — mas a decisão de privacidade **inverteu**, e os três
+docstrings que prometiam "o número nunca toca o banco" foram reescritos. A
+política de privacidade ainda promete o contrário: é bloqueio de promoção.
+
+**O LID.** O WhatsApp manda `84729130@lid` no lugar do telefone quando a pessoa
+tem privacidade ativa. Guardar o tipo numa coluna (em vez de adivinhar pelo
+sufixo a cada leitura) é o que permite o CSV sair com `telefone` **vazio** nesses
+casos. Preencher com o LID daria uma lista de contatos que não existe — e a
+afiliada tentaria discar. Célula em branco é a verdade.
+
+**Por que a aba Números não é conforto.** "Adicionar grupos" listava grupos de
+todos os números conectados. Grupo do número A numa campanha que dispara pelo B
+faz o envio **falhar** — B não participa daquele grupo. A validação do escopo
+ficou também no `PUT /grupos` (422): só na tela, o endpoint seguiria aceitando
+exatamente o vínculo que quebra o envio.
+
+**A regra de lotação vive num lugar só.** `LEAST(capacidade, COALESCE(limite,
+capacidade))` é lida por três queries (escolher grupo, abrir o próximo, fechar os
+lotados) e pelo contador "Cheios" da Visão geral. Deixar cópias é como uma delas
+fica para trás e o grupo passa a receber gente depois de "cheio", em silêncio —
+por isso `TETO_SQL`/`teto_efetivo()` no repository, e um teste que compara o
+contador da tela com a decisão da rotação.
+
+**Achado ao aplicar a migration:** hml tem um event trigger `ensure_rls` que liga
+RLS em toda tabela nova. Foi ele que protegeu `campanha_numeros`, que o
+`create_all` já tinha criado antes da migration chegar. **Não confirmado em
+produção** — o runbook de promoção continua valendo por inteiro.
+
+**Achado na validação visual:** o modal de exportar leads cortava em ontem, como
+os atalhos do produto. Para lead isso é errado: não é métrica comparável, é
+contato, e quem entrou hoje de manhã é quem ela quer chamar agora. Passou a
+incluir o dia corrente.
+
+Pendente: política de privacidade antes de `develop→main`; `WHATSAPP_HASH_SALT`
+definida antes do primeiro evento em produção.
+
+---
+
+## 2026-09-04 — `list_by_user` consulta colunas, porque o dashboard pedia 67 mil linhas
+
+O que mudou: `DatasetRowRepository.list_by_user` passou a consultar as 19
+colunas que a API expõe em vez da entidade `DatasetRow`. **Nenhuma migration**,
+nenhuma mudança de contrato — `serialize_row` só lê atributos, e a Row nomeada
+responde igual.
+
+**Por que agora.** O dashboard chamava `/datasets/all/rows` sem período: 67.631
+linhas na conta do Luiz para exibir 3.882. Com o filtro de data a consulta cai
+de **2.018 ms para 14 ms** (`idx_dataset_rows_v2_user_date`, que já existia).
+Corrigido o principal no frontend, sobrou o custo por linha do backend — e
+materializar 67 mil entidades ORM (identity map, tracking de estado) para
+serializar e descartar é o gasto mais fácil de eliminar.
+
+**O que NÃO fiz, e por quê.** Tirar o `response_model=List[DatasetRowResponse]`
+economizaria uma revalidação Pydantic por linha, mas o schema tem
+`field_serializer` que formata a data como **DD-MM-YYYY** — o formato que o
+frontend parseia. Sem o response_model a data sairia ISO e a tela quebraria em
+silêncio. Economia pequena, risco desproporcional.
+
+Pendente: o caminho definitivo é **agregar no backend**. Os KPIs que a aluna vê
+são calculados no cliente (`get_kpis` não é o que a tela usa), então hoje não há
+como responder "comissão do período" sem mandar as linhas.
+
+## 2026-09-04 — Estorno do pedido antigo renomeava a conta de volta e barrava quem tinha acabado de pagar
+
+O que mudou: `find_or_create_user()` ganhou `allow_email_update`; Kiwify e Cakto
+passam `action == "activate"`. Regressão em
+`tests/unit/test_webhook_rename_email_por_cpf.py`. **Nenhuma migration.**
+
+**O bug não estava na assinatura — estava na identidade.** A aluna Anne comprou
+com o e-mail digitado errado (`anne.jesus@hormail.com`), recomprou com o certo
+(`annejesus592@gmail.com`) e o pedido velho foi estornado. Os webhooks chegaram
+nesta ordem: `order_approved` (errado) → `order_approved` (certo, renomeia por
+CPF) → `order_refunded` do pedido 1 → `subscription_canceled` do pedido 1. Os
+dois últimos trazem o e-mail do **pedido antigo**, e o rename por CPF era
+incondicional: a conta paga voltou para o e-mail errado. No login com o e-mail
+certo a lazy migration não achou ninguém e criou uma **segunda conta, sem
+assinatura** — e o gate mostrou "Assinatura Necessária" para quem tinha pago 3h
+antes.
+
+**Por que ninguém viu.** Não há erro em lugar nenhum: a assinatura existe, está
+ativa, paga e válida até 03/10 — só que pendurada em outro `user_id`. Log de
+assinatura, painel admin e `subscription_events` mostram tudo certo. O único
+rastro é `users.updated_at` bater com o horário do **estorno**, não com o da
+compra. Diagnóstico de "paguei e o app pede assinatura" tem que começar
+procurando **duas linhas em `users`** para a mesma pessoa (por CPF, e por
+`subscription_events.customer_cpf`), não pela `subscriptions` do usuário logado.
+
+**Por que a flag é `activate` e não "não renomeie em cancelamento".** O critério
+não é o nome do evento, é a direção: só evento que **libera** acesso carrega a
+identidade atual do cliente. Estorno, cancelamento e cobrança atrasada falam
+sempre de um pedido que já existia — e podem chegar em qualquer ordem, inclusive
+depois da recompra, que foi exatamente o que aconteceu aqui.
+
+Varredura no banco de produção: **só a Anne** foi afetada (nenhuma outra conta
+sem assinatura tem `subscription_event` com o próprio e-mail sob outro
+`user_id`). Dados corrigidos à mão em produção pelo João em 04/09 — troca de
+e-mail entre as contas 75 e 76 e telemetria repontada, sem apagar linha.
+Pendente: a correção de código ainda **não está em produção** (sobe com a leva
+da `develop`); até lá o caso se repete em qualquer recompra que corrija e-mail.
+
 ## 2026-09-04 — Módulo em beta vira flag de runtime, nome do Facebook se auto-cura e pareamento sem QR
 
 O que mudou: `feature_flags.modulos_beta_liberados()` + `modulos` no contexto

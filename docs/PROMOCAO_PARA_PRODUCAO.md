@@ -50,6 +50,13 @@ existe em produção**, e a divergência com hml é real.
 
 ---
 
+> **Nota de 04/09/2026 — o `ensure_rls` de homologação não é rede em produção.**
+> Ao aplicar a `079` descobriu-se que **hml** tem um event trigger `ensure_rls`
+> que liga RLS em toda tabela nova: foi ele que protegeu `campanha_numeros`,
+> criada pelo `create_all` antes de a migration chegar. **Não foi confirmado que
+> produção tem o mesmo trigger** — até que alguém meça (a query da seção 0
+> resolve), a regra deste documento continua valendo por inteiro.
+
 ## 1. Estado medido em 26/08/2026 (produção) e 31/08/2026 (homologação)
 
 > **Homologação remedida em 31/08/2026 e está completa**: as 22 tabelas do
@@ -185,6 +192,8 @@ git log --oneline main..develop            # nos DOIS repos
 | 6 | `065_campanha_anuncios_leads.sql` | o UNIQUE falha se o mesmo `campaign_id` estiver em duas campanhas de grupos — cheque duplicatas antes |
 | 7 | `066_monitoramentos.sql` | |
 | 8 | `067_blacklist_e_conexao_externa.sql` | **faltava no runbook antigo** |
+| 9 | `074_whatsapp_grupo_ativado.sql` | toggle "Ativo" da usuária; tem backfill |
+| 10 | `079_campanha_numeros_limite_identificador.sql` | `campanha_numeros` (+ backfill), `limite_participantes`, `identificador`/`identificador_tipo` |
 
 `061` e `064` são de **pg_cron** e ficam de fora desta etapa — ver 3.4.
 
@@ -290,6 +299,20 @@ primeiro evento real.
 > irreversível" — agora é verdade.
 
 ### 3.8 Textos legais
+
+> 🔴 **BLOQUEIO — mudou em 04/09/2026.** A política atual promete que o número de
+> quem entra no grupo **nunca é armazenado** (só um código irreversível). Desde a
+> migration `079` isso **deixou de ser verdade**: `grupo_eventos.identificador`
+> guarda o telefone, porque exportação de lead com hash não serve para nada.
+>
+> A política **precisa ser atualizada antes do merge `develop→main`** — não
+> depois. O que ela precisa passar a dizer:
+> - guardamos o identificador de quem **entra em grupo da campanha** (telefone
+>   ou, quando a pessoa oculta o número, um id opaco do WhatsApp);
+> - para quê: a afiliada exportar os contatos dos próprios grupos;
+> - por quanto tempo, e como pedir remoção.
+>
+> O hash continua existindo ao lado, para casar entrada com saída.
 
 - **Política de privacidade**: a seção 7 já cobre o módulo, inclusive o
   monitoramento. Ela afirma que, por padrão, não recebemos conteúdo de mensagem
@@ -575,6 +598,7 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 | `1bd8d6a` | runs presos em `running` para sempre |
 | `4c72e6f` | backfill tolera ausência da coluna `leads` em produção |
 | `c36b6d5` / `d924d6c` | chaves novas do Supabase (aditivo) |
+| *(04/09, ainda sem commit próprio — `webhook_helpers`, `kiwify`, `cakto`)* | estorno do pedido antigo renomeava a conta de volta pelo CPF: quem recomprava corrigindo um e-mail errado ficava com a assinatura em uma conta e o login em outra, e via "Assinatura Necessária" depois de pagar. Sem migration; o dado da aluna afetada já foi corrigido em produção, o **código não** |
 
 ### 8.6 O que a rodada de 31/08 acrescentou
 

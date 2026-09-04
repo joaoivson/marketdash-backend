@@ -84,7 +84,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Shopee Afiliados** | `shopee_graphql_client.py`, `shopee_integration_service.py` | Sync full/incremental, upsert aditivo, painel `/admin/sincronizacoes`. **Os 24 jobs `shopee-sync-*` do pg_cron ficaram `active=false` de 05/08 a 04/09/2026** — religados em produção; em hml continuam desligados, com só o Luiz (user 9) agendado pela `078`. Sinal de que o cron vive é `sync_runs.trigger`, **não** o `last_sync_at` da tela (que pode ser um clique manual) |
 | **Facebook / Meta Ads** | `facebook_marketing_client.py`, `facebook_integration_service.py` | Campanhas + espelho de gasto/cliques → `AdSpend` |
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
-| **Kiwify** | `kiwify_service.py`, `charges.py` | Fonte de assinatura em produção |
+| **Kiwify** | `kiwify_service.py`, `charges.py`, `webhook_helpers.py` | Fonte de assinatura em produção. **A conta só é renomeada pelo CPF em evento que LIBERA acesso** (`allow_email_update=(action == "activate")`): estorno e cancelamento chegam com o e-mail do **pedido antigo** e podem chegar depois de uma recompra — renomear ali devolvia a conta paga para o e-mail errado e o login criava conta nova, sem assinatura (caso Anne, 03-04/09/2026) |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
 | **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Números/grupos das alunas (F1 do módulo de grupos); hml. **O Resumo diário saiu por inteiro em 03/09/2026** (rotas, services, models, job pg_cron — migration 077), junto com a Blacklist; a sessão global do resumo deixou de existir. `POST /whatsapp/webhook` e o tratamento de status/participantes **ficam** — são infra do módulo de grupos, não do resumo |
 | **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migrations 068 **e 069** em hml (cron horário ativo); **no ar em hml** (API+worker+admin, verificado ponta a ponta em 31/08); produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
@@ -136,6 +136,14 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   pequeno (um por dia por usuária).
   ⚠️ Em hml/produção **implantados** a flag não muda nada ainda: o backend
   desta feature não foi commitado nem deployado.
+
+- **Fix do rename de e-mail por CPF (04/09) não está em produção.** O dado da
+  aluna afetada já foi corrigido à mão no banco de prod; o **código** só existe
+  na `develop` (sobe com a leva das outras demandas). Até subir, qualquer
+  recompra que corrija um e-mail digitado errado repete o caso: estorno do
+  pedido velho renomeia a conta de volta e a assinante paga vê "Assinatura
+  Necessária". Sintoma sem erro nenhum no log — o rastro é `users.updated_at`
+  no horário do **estorno** e duas linhas em `users` para o mesmo CPF.
 
 - **Painel admin: Rodada 9 FECHADA em 02/09, validada contra PRODUÇÃO**
   (diagnóstico assinante a assinante + backfill de `is_plan_change` rodado em

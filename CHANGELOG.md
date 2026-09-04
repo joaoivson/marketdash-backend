@@ -11,6 +11,224 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-04 (Campanhas de grupos: rodada de correções do documento delta)
+
+Documento delta do Luiz sobre Visão geral, Números, Grupos e Anúncios, depois de
+um teste real da tela. Cross-stack, **com migration 079**.
+
+### O bloqueador: exportar lead com hash não serve para nada
+
+`grupo_eventos` guardava só `HMAC-SHA256(segredo, jid)` — irreversível por
+desenho. A exportação de leads existia, mas entregava data, grupo e origem, sem
+nenhuma forma de falar com quem entrou. E evento gravado como hash **não volta a
+ser número**: a correção precisava chegar antes de qualquer campanha rodar em
+produção.
+
+Agora o evento guarda `identificador` (o JID como veio) e `identificador_tipo`.
+O hash **continua** — é ele que casa entrada com saída ("entraram e ficaram") e é
+dele que o índice `ix_ge_ident` depende.
+
+**O WhatsApp nem sempre manda telefone.** Quem tem privacidade ativa chega como
+LID (`84729130@lid`), um id opaco que não disca. Por isso o tipo é uma coluna, e
+não uma adivinhação pelo sufixo a cada leitura: no CSV, LID sai com a coluna
+`telefone` **vazia**. Preenchê-la com o LID daria uma "lista de contatos" que não
+existe — pior do que a célula em branco, que é a verdade. Evento anterior à 079
+também sai vazio, pelo mesmo motivo de sempre: só tem o hash.
+
+⚠️ **Bloqueio de promoção:** a política de privacidade ainda promete o contrário.
+Precisa ser atualizada antes de `develop→main`.
+
+### A aba Números, que não existia
+
+O sintoma era pior do que "falta configuração": "Adicionar grupos" listava grupos
+de **todos** os números conectados. Um grupo do número A numa campanha que
+dispara pelo B faz o **envio falhar** — B não participa daquele grupo.
+
+- Nova aba **Números** (nome travado — nunca "Dispositivos"/"Instâncias") com
+  seleção múltipla; `campanha_numeros` guarda o vínculo.
+- A aba Grupos e o modal "Adicionar grupos" passam a oferecer só grupos desses
+  números. Sem número escolhido, a aba explica e aponta para Números — não fica
+  uma lista vazia sem motivo, que se lê como bug.
+- A regra vive **no backend** também (422 no `PUT /grupos`): só na tela, o
+  endpoint continuaria aceitando o vínculo que quebra o envio.
+- Desmarcar número com grupos na campanha é **bloqueado** (409), nomeando os
+  grupos e dizendo onde resolver. Sem reassociação automática — complexidade sem
+  retorno, e silenciosa.
+- Backfill na migration: campanha que já existe adota os números dos grupos que
+  já tem.
+
+### Visão geral deixa de ser formulário
+
+Era a primeira tela da campanha e não dizia nada sobre ela: nome, descrição e
+toggles. Virou painel de leitura com link de entrada copiável, KPIs operacionais
+(cliques, entradas, taxa, saídas, evasão, participantes), gráfico de entradas ×
+saídas com 7/14/30 dias e o estado dos grupos.
+
+Sem métrica financeira: comissão, lucro e ROAS são de Resultados. E `null` ≠ `0` —
+taxa sem clique mostra "—", não "0%", que afirmaria "ninguém converteu".
+
+A edição foi para um botão **Configurações** no topo. **Descrição saiu da UI**
+(a coluna fica no banco); era campo em branco na primeira interação.
+
+### Limite de participantes por campanha
+
+`whatsapp_grupos.capacidade` existia (1024) e **nunca era escrita**. Faltava o
+que a afiliada queria: encher só até 900, porque grupo perto de 1024 fica lento e
+ela quer margem para quem entra fora do link.
+
+`campanhas.limite_participantes` (NULL = sem limite próprio). O teto efetivo é
+`LEAST(capacidade, COALESCE(limite, capacidade))` — a capacidade continua sendo o
+teto absoluto. A expressão vive **em um lugar só**: a regra de lotação é lida em
+três queries (escolher, abrir o próximo, fechar os lotados), e o dia em que uma
+cópia ficar para trás o grupo recebe gente depois de "cheio", em silêncio.
+
+A coluna Participantes virou **ocupação** (`944/900`), com destaque ao atingir o
+limite. O contador "Cheios" da Visão geral usa a **mesma** expressão — um número
+com regra própria diria "há vaga" num grupo que o roteador já não escolhe.
+
+### Anúncios: dava para ver o nome, não dava para escolher
+
+Três campanhas com nome **idêntico** (`[TRAFEGO] [SHOPE GRUPOS] [31/03/26] [CBO]`)
+eram indistinguíveis na hora de vincular. Agora a linha traz **gasto no período**,
+com seletor 7/14/30/mês, ordenada por gasto (era alfabética — jogava
+"alvejantepo1805" acima de campanha com R$800).
+
+- Filtro **Ativas · Pausadas · Todas**, abrindo em Ativas.
+- "Ativa" é **veiculação real** (`_is_active` + `ad_review_issue` +
+  `_still_delivering`), não `effective_status` — que fica ACTIVE para sempre em
+  campanha com orçamento vitalício esgotado. Mesma regra do card de campanhas
+  ativas.
+- Lista só as contas selecionadas em Configurações › Facebook Ads. **Mas anúncio
+  já vinculado nunca some da lista**, nem por filtro nem por conta desmarcada:
+  senão a afiliada perde a única forma de desvincular e o gasto segue entrando no
+  lucro sem ela poder ver por quê.
+- Paginação 25/50/100.
+
+O multi-select **já funcionava** — o print sugeria radio, mas é `Checkbox` com
+`Set<number>` desde sempre, e o `PUT` recebe lista. O que existe de verdade é o
+UNIQUE por `campaign_id` (um anúncio do Meta pertence a uma campanha de grupos),
+que é proposital e fica.
+
+### Grupos: exclusão sem confirmação e envio no lugar errado
+
+- O `×` removia direto. Virou menu de três pontinhos + confirmação, dizendo que o
+  grupo continua ativo e nas outras campanhas.
+- **"Enviar oferta" saiu** e foi para Roteiros, ao lado de "Novo roteiro": envio
+  rápido é roteiro de um passo, e manter o botão em Grupos sugeria um caminho de
+  envio paralelo ao motor de roteiros. Aparece inclusive sem nenhum roteiro — é
+  justamente quem ainda não montou um que mais usa a ação.
+- **Exportar leads** com seleção de grupos. O período aqui **inclui hoje**, ao
+  contrário dos atalhos do produto: lead não é métrica comparável, é contato, e
+  quem entrou hoje de manhã é quem ela quer chamar agora. Descoberto na validação
+  — a primeira versão cortava em ontem e escondia os leads mais quentes.
+
+### Migration 079
+
+`campanha_numeros` (+ backfill), `campanhas.limite_participantes`,
+`grupo_eventos.identificador` e `identificador_tipo`. Aplicada em **homologação**;
+produção não tem o módulo. Também no boot-ALTER de `db/base.py`.
+
+Achado ao aplicar: hml tem um event trigger `ensure_rls` que liga RLS em toda
+tabela nova — foi ele que protegeu `campanha_numeros`, criada pelo `create_all`
+antes da migration. **Não confirmado em produção**: o runbook continua valendo.
+
+### Testes
+`tests/unit/test_campanha_numeros_e_limite.py` (13 casos): lotação pelo limite,
+capacidade como teto absoluto, contador da tela igual à rotação, bloqueio de
+número com grupos, escopo dos grupos, telefone × LID. Mais 3 no export.
+1081 passando.
+
+### Fora do escopo, encontrado no caminho
+`docker-compose.yml` tinha três linhas duplicadas (chave `redis` repetida) que
+impediam qualquer comando `docker compose` — corrigido.
+
+## [Não versionado] - 2026-09-04 (Performance do dashboard: pedir o período, não a base inteira)
+
+Relato do Luiz: "demora muito carregar esse dashboard… coisa de minuto".
+Cross-stack, **sem migration**.
+
+### O que estava acontecendo
+O dashboard chamava `/datasets/all/rows` **sem período** e filtrava no
+navegador. Medido em produção, na conta dele:
+
+| | linhas | JSON | tempo no banco |
+|---|---|---|---|
+| o que era baixado | 67.631 | ~30 MB | **2.018 ms** |
+| o que a tela usa (7 dias) | 3.882 | ~1,8 MB | **14 ms** |
+
+O índice `(user_id, date)` já existia — ninguém o usava. Somam-se a isso 67 mil
+objetos serializados no backend, o gzip de 30 MB, o `JSON.parse` no navegador e
+um `JSON.stringify` de 30 MB que **sempre falhava**: acima da cota do
+localStorage (5–10 MB por origem) o `setItem` lança, o `catch` engolia — o
+cache nunca persistia justamente na conta grande, e toda carga era carga fria.
+
+### Correção
+- **Frontend:** `datasetStore` manda `start_date`/`end_date` (o `clicksStore` já
+  mandava). Cache de vendas e cliques passa a ser **por usuário + período**
+  (`dataset-cache:2026-08-28_2026-09-03:user_9`) e só grava até 8.000 linhas.
+  "Limpar filtros" rebusca — sem período significa histórico inteiro, e agora
+  quem corta por data é a API. Parâmetro de data pelos componentes **locais** da
+  data, não por `toISOString()` (o UTC mandava um dia diferente do escolhido).
+- **Backend:** `DatasetRowRepository.list_by_user` consulta **colunas** em vez
+  de entidades ORM — não materializa um objeto por linha. Sem mudança de
+  contrato: mesmos campos, mesmo formato de data.
+- Testes: `tests/unit/test_dataset_rows_por_periodo.py` (recorte por data,
+  isolamento por usuário, serialização campo a campo).
+
+### Medido depois, em homologação (52.372 linhas, conta `relacionamento@`)
+Janela de 19 dias: **2,75 MB em 2,3 s**. Sem período: **8,7 s** só na request,
+~15 s até a tela. Os números conferem com o SQL: 01/08–19/08 dá **R$ 13.457,00
+de comissão e 4.916 pedidos** na tela e no banco (descontando UNPAID e
+cancelados, que é a regra do KPI).
+
+### O que continua lento — de propósito, por ora
+**Relatórios** (default "Todo período", 9,9 s em hml) e **Impostos** (monta a
+lista de meses a partir do histórico) seguem pedindo tudo. A saída definitiva é
+agregar no backend — hoje os KPIs são calculados no cliente —, não baixar linha.
+
+## [Não versionado] - 2026-09-04 (Fix: estorno do pedido antigo desfazia a troca de e-mail e barrava assinante pagante)
+
+Incidente relatado pela aluna Anne (`annejesus592@gmail.com`): comprou, definiu
+senha, usou o dashboard à tarde e à noite passou a bater em **"Assinatura
+Necessária"**, sem saída. Backend apenas.
+
+### Causa raiz
+`find_or_create_user()` renomeava a conta sempre que achava o usuário **pelo
+CPF** — inclusive em evento de estorno/cancelamento, que chega com o e-mail do
+**pedido antigo**. A sequência real dos webhooks da Kiwify foi:
+
+1. `order_approved` com o e-mail digitado errado (`anne.jesus@hormail.com`) — cria a conta;
+2. `order_approved` da recompra, com o e-mail certo — acha por CPF e renomeia (certo);
+3. `order_refunded` do pedido 1, com o e-mail **errado** — acha por CPF e **renomeia de volta**;
+4. `subscription_canceled` do pedido 1 — idem.
+
+A conta paga terminou com o e-mail errado. No login com o e-mail certo, a lazy
+migration não achou ninguém e criou uma **segunda conta, sem assinatura** — o
+gate do frontend (`status.is_active`) então bloqueou quem tinha acabado de pagar.
+O sintoma é silencioso: a assinatura existe e está ativa, só que pendurada em
+outro `user_id`.
+
+### Correção
+- `find_or_create_user()` ganhou `allow_email_update` (default `True`): só
+  evento que **libera** acesso pode trocar o e-mail da conta pelo CPF. Quando a
+  flag está desligada e o match veio por documento, o e-mail atual é mantido e a
+  divergência vai para o log.
+- Webhooks Kiwify e Cakto passam `allow_email_update=(action == "activate")`.
+- Regressão em `tests/unit/test_webhook_rename_email_por_cpf.py` cobrindo a
+  ordem real dos eventos (recompra e depois estorno do pedido velho).
+
+### Dados em produção
+Correção de código não desfaz o estado já gravado. As duas contas da Anne foram
+mescladas à mão em **04/09**: os e-mails trocaram de lugar (a conta 75, que tem a
+assinatura, o CPF e o nome, ficou com o gmail; a 76 ficou com o e-mail do typo e
+sem assinatura) e a telemetria foi repontada para a 75. **Nada foi apagado.**
+Varredura no banco confirmou que ela era a **única** conta afetada.
+
+Diagnóstico deste sintoma — "paguei e o app pede assinatura" — começa procurando
+**duas linhas em `users`** para a mesma pessoa (por CPF e por
+`subscription_events.customer_cpf`); a `subscriptions` do usuário logado mostra
+apenas "não tem assinatura", que é verdade e não ajuda.
+
 ## [Não versionado] - 2026-09-04 (Configurações — Operação › Parâmetros, gate por flag e os 5 bugs de produção)
 
 Segunda rodada do documento delta do João, sobre a de 03/09. Cross-stack.
