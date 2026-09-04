@@ -43,6 +43,15 @@ def _apply_safe_migrations(engine, logger):
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_vence_em TIMESTAMPTZ",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "
         "pending_provider_transaction_id VARCHAR",
+        # 079 (campanhas de grupos): as duas tabelas já existem em hml, e
+        # `create_all` NÃO adiciona coluna — sem isto, qualquer leitura de
+        # Campanha ou GrupoEvento quebra se o deploy chegar antes da migration.
+        # (`campanha_numeros` é tabela NOVA: essa o create_all cria — e é por
+        # isso que a 079 precisa chegar antes, para nascer com RLS.)
+        "ALTER TABLE campanhas ADD COLUMN IF NOT EXISTS limite_participantes INTEGER",
+        "ALTER TABLE grupo_eventos ADD COLUMN IF NOT EXISTS identificador VARCHAR(64)",
+        "ALTER TABLE grupo_eventos ADD COLUMN IF NOT EXISTS "
+        "identificador_tipo VARCHAR(12)",
     ]
     from sqlalchemy import text
     try:

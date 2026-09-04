@@ -3,9 +3,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models.campanha_grupos import Campanha, CampanhaGrupo
+from app.models.campanha_grupos import Campanha, CampanhaGrupo, CampanhaNumero
 from app.models.custom_link import CustomLink
-from app.models.whatsapp_grupos import WhatsappGrupo
+from app.models.whatsapp_grupos import (
+    WhatsappGrupo, WhatsappGrupoInstancia, WhatsappInstancia,
+)
 from app.services.campanha_grupos_service import (
     CampanhaGruposService, GrupoInvalido, LimiteDeCampanhas,
 )
@@ -18,7 +20,9 @@ OUTRA = 2
 def db():
     engine = create_engine("sqlite://")
     for t in (CustomLink.__table__, WhatsappGrupo.__table__,
-              Campanha.__table__, CampanhaGrupo.__table__):
+              WhatsappInstancia.__table__, WhatsappGrupoInstancia.__table__,
+              Campanha.__table__, CampanhaGrupo.__table__,
+              CampanhaNumero.__table__):
         t.create(engine)
     sessao = sessionmaker(bind=engine)()
     yield sessao

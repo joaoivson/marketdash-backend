@@ -122,6 +122,32 @@ que é proposital e fica.
   quem entrou hoje de manhã é quem ela quer chamar agora. Descoberto na validação
   — a primeira versão cortava em ontem e escondia os leads mais quentes.
 
+### O que a revisão pré-commit pegou
+
+Nove defeitos confirmados (de 28 levantados; 11 refutados na verificação), todos
+corrigidos antes de subir. Os que mais importam:
+
+- **`POST /campanhas-grupos` daria 500 em toda criação de campanha.** Tirar
+  `descricao` do schema deixou a rota lendo `payload.descricao`, e o Pydantic v2
+  não guarda campo que não declarou: `AttributeError`, que nenhum `except` da
+  rota pega. A suíte passava porque os testes chamavam o **service**, nunca a
+  rota — agora há um teste que exercita o endpoint.
+- **`PUT /numeros` dava 500** quando a campanha tinha um número que a afiliada
+  removeu da conta: o soft delete tira a instância de `por_usuario` mas não de
+  `campanha_numeros`, e o código indexava o dicionário.
+- **409 falso ao desmarcar número.** O bloqueio olhava presença, não órfão: com
+  dois chips no mesmo grupo, tirar um deles era impossível sem esvaziar a
+  campanha — exatamente o caso de quem vai aquecer um chip.
+- **"Disponíveis" mentia.** Contava aberto + vaga, mas o roteador também exige
+  `ativo` e `link_convite`: o painel dizia "1 disponível" enquanto quem clicava
+  no link via "vagas esgotadas".
+- **Participantes divergia entre abas da mesma campanha.** A Visão geral
+  preferia o snapshot da madrugada; Grupos e Resultados leem o contador vivo.
+- **`PUT /anuncios` devolvia o gasto de outra janela**, com o chip da tela ainda
+  marcando "7 dias".
+- **A seleção do export voltava para "todos"** a cada re-render do pai, e usava
+  os grupos do rascunho não salvo (422 do backend).
+
 ### Migration 079
 
 `campanha_numeros` (+ backfill), `campanhas.limite_participantes`,

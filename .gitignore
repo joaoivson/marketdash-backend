@@ -39,4 +39,14 @@ uploads/
 
 # Duplicata do Finder/iCloud ("campaign 2.py"). Espaço no nome quebra o
 # `find | xargs py_compile` do CI e o arquivo nem é importável em Python.
+#
+# A regra cobria só .py, e por isso 10 cópias de migration/doc/script ficavam
+# aparecendo como untracked em todo `git status` — ruído que esconde arquivo
+# novo de verdade. Migration duplicada é pior que ruído: quem for aplicar a
+# pasta em ordem roda a mesma coisa duas vezes.
 * [0-9].py
+* [0-9].sql
+* [0-9].md
+* [0-9].sh
+* [0-9].ts
+* [0-9].tsx

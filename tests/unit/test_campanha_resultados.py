@@ -39,7 +39,10 @@ if PG_OK:
         _conn.execute(text("ALTER TABLE campaign_daily_insights ADD COLUMN IF NOT EXISTS leads INTEGER"))
     Sessao = sessionmaker(bind=ENGINE)
 
+from fastapi import HTTPException  # noqa: E402
+
 from app.models.campanha_anuncio import CampanhaAnuncio  # noqa: E402
+from app.models.campanha_link import GrupoEvento  # noqa: E402
 from app.models.campanha_grupos import Campanha, CampanhaGrupo  # noqa: E402
 from app.models.campaign import Campaign, CampaignDailyInsight  # noqa: E402
 from app.models.dataset import Dataset  # noqa: E402
@@ -452,7 +455,14 @@ def test_export_nao_quebra_com_emoji_no_nome_da_campanha(db):
     r.headers["content-disposition"].encode("latin-1")   # é o que o Starlette faz
 
 
-def test_export_nao_traz_telefone_nem_hash(db):
+def test_export_traz_telefone_mas_nunca_o_hash(db):
+    """
+    Mudou em 03/09 (spec §3.7): o CSV passa a trazer o número.
+
+    Exportar hash é inútil — era o motivo de a exportação de leads não servir
+    para nada. O hash continua no banco (casa entrada com saída), mas NUNCA
+    sai no arquivo: quem lê a planilha não tem o que fazer com ele.
+    """
     from app.api.v1.routes.campanhas_grupos import exportar_leads
 
     user, campanha, grupos, ds = _cenario(db)
@@ -460,11 +470,63 @@ def test_export_nao_traz_telefone_nem_hash(db):
                                      ["5511977776666@c.us"])
     db.commit()
 
+    linhas = _csv_da_exportacao(exportar_leads(
+        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
+        campanha=campanha, current_user=user, db=db))
+    corpo = "\n".join(linhas)
+    assert linhas[0] == "data_entrada,grupo,telefone,origem,ainda_no_grupo"
+    # Só os dígitos: o sufixo do JID não é dado para a afiliada.
+    assert "5511977776666" in corpo
+    assert "@c.us" not in corpo
+
+    evento = db.query(GrupoEvento).filter(
+        GrupoEvento.grupo_id == grupos[0].id).order_by(GrupoEvento.id.desc()).first()
+    assert evento.identificador_hash not in corpo
+
+
+def test_export_deixa_telefone_vazio_quando_o_whatsapp_manda_lid(db):
+    """
+    LID é id opaco, não telefone (a pessoa está com privacidade ativa).
+
+    Escrevê-lo na coluna "telefone" faria a afiliada tentar discar um número
+    que não existe — pior do que a célula vazia, que é a verdade.
+    """
+    from app.api.v1.routes.campanhas_grupos import exportar_leads
+
+    user, campanha, grupos, ds = _cenario(db)
+    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join",
+                                     ["84729130@lid"])
+    db.commit()
+
+    linhas = _csv_da_exportacao(exportar_leads(
+        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
+        campanha=campanha, current_user=user, db=db))
+    assert "84729130" not in "\n".join(linhas)
+    # data, grupo, telefone(vazio), origem, ainda_no_grupo
+    assert linhas[1].split(",")[2] == ""
+
+
+def test_export_filtra_pelos_grupos_selecionados(db):
+    """Spec §3.6: a afiliada escolhe quais grupos exportar."""
+    from app.api.v1.routes.campanhas_grupos import exportar_leads
+
+    user, campanha, grupos, ds = _cenario(db)
+    svc = GrupoEventoService(db)
+    svc.registrar(user.id, grupos[0].jid, "join", ["5511900000001@c.us"])
+    svc.registrar(user.id, grupos[1].jid, "join", ["5511900000002@c.us"])
+    db.commit()
+
     corpo = "\n".join(_csv_da_exportacao(exportar_leads(
         inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
-        campanha=campanha, current_user=user, db=db)))
-    assert "5511977776666" not in corpo and "@c.us" not in corpo
-    assert corpo.splitlines()[0] == "data_entrada,grupo,origem,ainda_no_grupo"
+        grupos=str(grupos[0].id), campanha=campanha, current_user=user, db=db)))
+    assert "5511900000001" in corpo
+    assert "5511900000002" not in corpo
+
+    # Id de grupo que não é da campanha vira 422, não CSV vazio em silêncio.
+    with pytest.raises(HTTPException) as erro:
+        exportar_leads(inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
+                       grupos="999999", campanha=campanha, current_user=user, db=db)
+    assert erro.value.status_code == 422
 
 
 def test_quem_saiu_e_voltou_tem_uma_linha_nao_e_outra_sim(db):

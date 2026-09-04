@@ -60,8 +60,18 @@ class GrupoEvento(Base):
     link_evento_id = Column(BigInteger,
                             ForeignKey("campanha_link_eventos.id", ondelete="SET NULL"),
                             nullable=True)
-    # sha256(jid + WHATSAPP_HASH_SALT). O número de quem entra NUNCA persiste.
+    # HMAC-SHA256(segredo, jid). Continua sendo a chave que casa entrada com
+    # saída ("entraram e ficaram") — é dele que o índice ix_ge_ident depende.
     identificador_hash = Column(String(64), nullable=False)
+    # O identificador COMO VEIO do WhatsApp: "5511999999999@c.us" (telefone) ou
+    # "84729130@lid" (LID, quando a pessoa tem privacidade ativa). Decisão de
+    # produto de 03/09: exportar lead com hash é inútil, e hash não se reverte.
+    # NULL nos eventos gravados antes da 079 — esses só têm o hash, para sempre.
+    identificador = Column(String(64), nullable=True)
+    # 'telefone' | 'lid'. Sem isto a exportação teria que adivinhar pelo sufixo
+    # a cada leitura, e LID exportado como telefone é pior do que campo vazio:
+    # vira lista de contatos que não existe.
+    identificador_tipo = Column(String(12), nullable=True)
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

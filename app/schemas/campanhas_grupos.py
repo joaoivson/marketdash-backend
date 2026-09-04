@@ -6,8 +6,10 @@ from pydantic import BaseModel, Field
 
 
 class CampanhaCriar(BaseModel):
+    # Sem `descricao` (spec §1.1): era campo em branco na primeira interação e
+    # o nome já identifica a campanha. A COLUNA continua no banco — o que sai é
+    # a exposição, para não exigir migração destrutiva.
     nome: str = Field(min_length=1, max_length=120)
-    descricao: Optional[str] = Field(default=None, max_length=2000)
 
 
 class CampanhaAtualizar(BaseModel):
@@ -20,6 +22,9 @@ class CampanhaAtualizar(BaseModel):
     prefixo: Optional[str] = Field(default=None, max_length=500)
     sufixo: Optional[str] = Field(default=None, max_length=500)
     modo_imagem: Optional[str] = None           # link_preview|imagem_normal
+    # Teto por campanha (spec §3.4). 1024 é o limite do WhatsApp e continua
+    # sendo o teto absoluto; este só aperta. None/0 = apagar o limite.
+    limite_participantes: Optional[int] = Field(default=None, ge=0, le=1024)
 
 
 class CampanhaOut(BaseModel):
@@ -33,6 +38,7 @@ class CampanhaOut(BaseModel):
     prefixo: Optional[str]
     sufixo: Optional[str]
     modo_imagem: str
+    limite_participantes: Optional[int]
     total_grupos: int
     criado_em: datetime
 
@@ -49,13 +55,78 @@ class GrupoDaCampanhaOut(BaseModel):
     aberto: bool
     nome: Optional[str]
     participantes: int
+    # Capacidade real do WhatsApp — a tela mostra ocupação (951/900) usando o
+    # MENOR entre ela e o limite da campanha (spec §3.5).
+    capacidade: int
     permite_envio: bool
     ativo: bool
     sub_id: Optional[str]
+    # Por quais números este grupo é alcançável. A aba Grupos precisa disso
+    # para não oferecer grupo de número que a campanha não usa (spec §2.3).
+    instancia_ids: List[int] = []
 
 
 class CampanhaDetalheOut(CampanhaOut):
     grupos: List[GrupoDaCampanhaOut]
+    # Números que a campanha usa — a aba Grupos escopa a oferta por eles, e
+    # sem nenhum selecionado ela mostra o estado que aponta para Números.
+    instancia_ids: List[int] = []
+
+
+# --- Números da campanha (spec §2) ------------------------------------------
+
+
+class NumeroDaCampanhaOut(BaseModel):
+    id: int
+    nome_exibicao: Optional[str]
+    # Já mascarado pelo backend: a tela não precisa do número inteiro para a
+    # afiliada reconhecer qual chip é.
+    numero: Optional[str]
+    status: str
+    selecionado: bool
+    # Quantos grupos DESTA campanha chegam por este número — é o que explica
+    # por que remover está bloqueado.
+    grupos_na_campanha: int
+
+
+class NumerosDaCampanhaOut(BaseModel):
+    numeros: List[NumeroDaCampanhaOut]
+
+
+# --- Visão geral (spec §1.3) ------------------------------------------------
+
+
+class PontoDaSerieOut(BaseModel):
+    data: str
+    entradas: int
+    saidas: int
+
+
+class EstadoDosGruposOut(BaseModel):
+    total: int
+    abertos: int
+    cheios: int
+    disponiveis: int
+
+
+class VisaoGeralOut(BaseModel):
+    """
+    KPIs operacionais + ritmo. Sem comissão, lucro ou ROAS — isso é Resultados.
+
+    `taxa_entrada` e `evasao` vêm `None` quando o denominador não existe: 0,0
+    afirmaria "ninguém converteu", que é outra coisa.
+    """
+
+    periodo: Dict[str, object]
+    cliques: int
+    entradas: int
+    entradas_do_link: int
+    taxa_entrada: Optional[float]
+    saidas: int
+    evasao: Optional[float]
+    participantes: int
+    grupos: EstadoDosGruposOut
+    serie: List[PontoDaSerieOut]
 
 
 # --- F7: anúncios × grupos e resultados -------------------------------------
@@ -71,6 +142,13 @@ class AnuncioVinculavelOut(BaseModel):
     nome: Optional[str]
     status: Optional[str]
     sub_id: Optional[str]
+    # Gasto no período consultado. Existe porque há campanhas com nome
+    # IDÊNTICO no Meta — sem o gasto elas são indistinguíveis na hora de
+    # escolher qual vincular (spec §4.4).
+    gasto: float = 0.0
+    # Veiculação REAL, não `effective_status`: campanha com orçamento vitalício
+    # esgotado fica ACTIVE para sempre na Meta sem entregar nada (spec §4.2).
+    veiculando: bool = False
     vinculada: bool
     # Vinculada a OUTRA campanha de grupos: a tela desabilita em vez de deixar
     # a afiliada clicar e tomar 409. Traz id além do nome para o link levar

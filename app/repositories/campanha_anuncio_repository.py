@@ -111,10 +111,37 @@ class CampanhaAnuncioRepository:
         quer = vinculo == "com_grupo"
         return [c for c in campanhas if (c.id in vinculadas) == quer]
 
-    def campanhas_de_anuncio(self, user_id: int) -> List[Campaign]:
-        return (
-            self.db.query(Campaign)
-            .filter(Campaign.user_id == user_id)
-            .order_by(Campaign.name)
+    def campanhas_de_anuncio(self, user_id: int,
+                             ad_account_ids: Optional[List[str]] = None) -> List[Campaign]:
+        """
+        Campanhas de anúncio da usuária, opcionalmente só das contas escolhidas.
+
+        `ad_account_ids` vem de `FacebookIntegration.account_ids_list()` (spec
+        §4.6): sem o filtro, esta lista diverge da tela de Anúncios, que já o
+        aplica — a afiliada via aqui contas que desmarcou lá.
+        Lista VAZIA ≠ None: vazia significa "nenhuma conta escolhida", e aí não
+        há o que listar; None é "não filtrar".
+        """
+        q = self.db.query(Campaign).filter(Campaign.user_id == user_id)
+        if ad_account_ids is not None:
+            if not ad_account_ids:
+                return []
+            q = q.filter(Campaign.ad_account_id.in_(ad_account_ids))
+        return q.order_by(Campaign.name).all()
+
+    def gasto_por_campaign(self, user_id: int, campaign_ids: List[int],
+                           inicio: date, fim: date) -> Dict[int, float]:
+        """campaign_id → gasto no período. Uma query para a lista toda (sem N+1)."""
+        if not campaign_ids:
+            return {}
+        linhas = (
+            self.db.query(CampaignDailyInsight.campaign_id,
+                          func.coalesce(func.sum(CampaignDailyInsight.spend), 0.0))
+            .filter(CampaignDailyInsight.user_id == user_id,
+                    CampaignDailyInsight.campaign_id.in_(campaign_ids),
+                    CampaignDailyInsight.date >= inicio,
+                    CampaignDailyInsight.date <= fim)
+            .group_by(CampaignDailyInsight.campaign_id)
             .all()
         )
+        return {cid: float(total or 0.0) for cid, total in linhas}

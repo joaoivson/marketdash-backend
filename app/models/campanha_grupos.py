@@ -34,6 +34,11 @@ class Campanha(Base):
     estrategia_entrada = Column(String(16), nullable=False, default=ESTRATEGIA_SEQUENCIAL)
     abertura_automatica = Column(Boolean, nullable=False, default=True)
     reabertura_automatica = Column(Boolean, nullable=False, default=True)
+    # Teto de participantes POR CAMPANHA, abaixo da `capacidade` do grupo.
+    # NULL = sem limite próprio (vale a capacidade). Não é 1024 por default
+    # porque "não configurado" precisa ser distinguível de "configurado no
+    # máximo": só o NULL acompanha uma capacidade que mude no futuro.
+    limite_participantes = Column(Integer, nullable=True)
     prefixo = Column(Text, nullable=True)
     sufixo = Column(Text, nullable=True)
     modo_imagem = Column(String(16), nullable=False, default=MODO_IMAGEM_LINK)
@@ -50,4 +55,22 @@ class CampanhaGrupo(Base):
                       primary_key=True)
     posicao = Column(Integer, nullable=False, default=0)
     aberto = Column(Boolean, nullable=False, default=True)
+    adicionado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CampanhaNumero(Base):
+    """Quais números a campanha usa (espelho da 079).
+
+    Existe porque o roteador distribui o envio entre os números do conjunto, e
+    porque a oferta de grupos precisa ser escopada: um grupo do número A numa
+    campanha que dispara pelo B faz o envio falhar em silêncio — B não
+    participa daquele grupo.
+    """
+
+    __tablename__ = "campanha_numeros"
+
+    campanha_id = Column(Integer, ForeignKey("campanhas.id", ondelete="CASCADE"),
+                         primary_key=True)
+    instancia_id = Column(Integer, ForeignKey("whatsapp_instancias.id", ondelete="CASCADE"),
+                          primary_key=True, index=True)
     adicionado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

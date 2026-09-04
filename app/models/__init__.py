@@ -33,7 +33,7 @@ from app.models.sync_run import SyncRun
 from app.models.whatsapp_proxies import WhatsappProxy
 from app.models.waha_servidores import WahaServidor
 from app.models.whatsapp_grupos import WhatsappInstancia, WhatsappGrupo, WhatsappGrupoInstancia
-from app.models.campanha_grupos import Campanha, CampanhaGrupo
+from app.models.campanha_grupos import Campanha, CampanhaGrupo, CampanhaNumero
 from app.models.integracao import Integracao
 from app.models.campanha_anuncio import CampanhaAnuncio
 from app.models.campanha_link import (
@@ -55,7 +55,7 @@ __all__ = [
     "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
     "SyncRun",
     "WhatsappInstancia", "WhatsappGrupo", "WhatsappGrupoInstancia", "WhatsappProxy",
-    "Campanha", "CampanhaGrupo", "Integracao",
+    "Campanha", "CampanhaGrupo", "CampanhaNumero", "Integracao",
     "CampanhaLink", "CampanhaLinkEvento", "GrupoEvento", "GrupoSnapshot",
     "CampanhaAnuncio",
     "Roteiro", "RoteiroPasso", "RoteiroExecucao", "RoteiroMensagem",

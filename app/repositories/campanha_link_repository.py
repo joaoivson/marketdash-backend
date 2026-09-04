@@ -14,6 +14,24 @@ from app.models.campanha_link import (
 from app.models.whatsapp_grupos import WhatsappGrupo
 
 
+# Teto efetivo de um grupo: o MENOR entre a capacidade real do WhatsApp e o
+# limite que a campanha configurou. A capacidade continua sendo o teto absoluto
+# (spec §3.4) — o limite da campanha só aperta, nunca afrouxa.
+#
+# Existe uma vez só de propósito: a regra de lotação é lida em três lugares
+# (escolher, abrir o próximo, fechar os lotados) e o dia em que uma cópia ficar
+# para trás o grupo continua recebendo gente depois de "cheio", em silêncio.
+TETO_SQL = "LEAST(g.capacidade, COALESCE(c.limite_participantes, g.capacidade))"
+
+
+def teto_efetivo(grupo=WhatsappGrupo, campanha=Campanha):
+    """Mesma regra do `TETO_SQL`, em SQLAlchemy (para os filtros do ORM)."""
+    return func.least(
+        grupo.capacidade,
+        func.coalesce(campanha.limite_participantes, grupo.capacidade),
+    )
+
+
 class CampanhaLinkRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -53,11 +71,12 @@ class CampanhaLinkRepository:
                 SELECT cg.grupo_id, cg.posicao
                   FROM campanha_grupos cg
                   JOIN whatsapp_grupos g ON g.id = cg.grupo_id
+                  JOIN campanhas c ON c.id = cg.campanha_id
                  WHERE cg.campanha_id = :campanha_id
                    AND cg.aberto
                    AND g.ativo
                    AND g.link_convite IS NOT NULL
-                   AND g.participantes < g.capacidade
+                   AND g.participantes < {TETO_SQL}
                  ORDER BY {ordem}
                  LIMIT 1
                    FOR UPDATE OF cg SKIP LOCKED
@@ -72,11 +91,12 @@ class CampanhaLinkRepository:
         return (
             self.db.query(CampanhaGrupo)
             .join(WhatsappGrupo, WhatsappGrupo.id == CampanhaGrupo.grupo_id)
+            .join(Campanha, Campanha.id == CampanhaGrupo.campanha_id)
             .filter(CampanhaGrupo.campanha_id == campanha_id,
                     CampanhaGrupo.aberto.is_(False),
                     WhatsappGrupo.ativo.is_(True),
                     WhatsappGrupo.link_convite.isnot(None),
-                    WhatsappGrupo.participantes < WhatsappGrupo.capacidade)
+                    WhatsappGrupo.participantes < teto_efetivo())
             .order_by(CampanhaGrupo.posicao)
             .first()
         )
@@ -85,9 +105,10 @@ class CampanhaLinkRepository:
         return (
             self.db.query(CampanhaGrupo)
             .join(WhatsappGrupo, WhatsappGrupo.id == CampanhaGrupo.grupo_id)
+            .join(Campanha, Campanha.id == CampanhaGrupo.campanha_id)
             .filter(CampanhaGrupo.campanha_id == campanha_id,
                     CampanhaGrupo.aberto.is_(True),
-                    WhatsappGrupo.participantes >= WhatsappGrupo.capacidade)
+                    WhatsappGrupo.participantes >= teto_efetivo())
             .all()
         )
 
@@ -123,9 +144,13 @@ class CampanhaLinkRepository:
 
     def registrar_evento_de_grupo(self, grupo_id: int, tipo: str, origem: str,
                                   identificador_hash: str,
-                                  link_evento_id: Optional[int] = None) -> GrupoEvento:
+                                  link_evento_id: Optional[int] = None,
+                                  identificador: Optional[str] = None,
+                                  identificador_tipo: Optional[str] = None) -> GrupoEvento:
         evento = GrupoEvento(grupo_id=grupo_id, tipo=tipo, origem=origem,
                              identificador_hash=identificador_hash,
+                             identificador=identificador,
+                             identificador_tipo=identificador_tipo,
                              link_evento_id=link_evento_id)
         self.db.add(evento)
         self.db.flush()

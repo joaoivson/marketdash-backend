@@ -6,11 +6,19 @@ aqui: ele dá só a contagem líquida, e sem saber QUEM entrou e QUEM saiu não 
 para dizer quantos dos que entraram continuam no grupo — que é o número que
 decide se vale pagar por mais uma pessoa.
 
-LGPD: o JID do participante vira um pseudônimo NESTE handler, antes de qualquer
-persistência — o número cru nunca chega ao banco nem ao log. O pseudônimo é
-`HMAC-SHA256(segredo, jid)`, e o segredo nunca é vazio: `sha256` de telefone sem
-segredo é reversível em minutos, e a política de privacidade promete o
-contrário. Ver `_segredo_do_hash`.
+Dados pessoais — mudou em 03/09/2026. O evento passa a guardar DUAS coisas:
+
+* `identificador` — o JID como veio do WhatsApp, para a afiliada poder exportar
+  os leads. Exportar hash é inútil, e evento gravado só como hash não se
+  reverte: por isso a mudança precisou vir antes de qualquer campanha rodar em
+  produção. **A política de privacidade precisa refletir isso antes da
+  promoção** — ver docs/PROMOCAO_PARA_PRODUCAO.md.
+* `identificador_hash` — o pseudônimo `HMAC-SHA256(segredo, jid)`, que continua
+  sendo a chave que casa entrada com saída ("entraram e ficaram") e que os
+  índices usam. O segredo nunca é vazio: `sha256` de telefone sem segredo é
+  reversível em minutos. Ver `_segredo_do_hash`.
+
+O log continua sem o número — só a contagem.
 """
 import hashlib
 import hmac
@@ -35,6 +43,11 @@ logger = logging.getLogger(__name__)
 JANELA_ATRIBUICAO_MIN = 15
 
 ACOES = {"join": EVENTO_ENTRADA, "leave": EVENTO_SAIDA}
+
+# Tipo do identificador do participante. LID é o id opaco que o WhatsApp usa
+# quando a pessoa esconde o número — não serve para exportação de lead.
+TIPO_TELEFONE = "telefone"
+TIPO_LID = "lid"
 
 
 def _segredo_do_hash() -> str:
@@ -79,6 +92,22 @@ def identificador(jid: str) -> str:
                     hashlib.sha256).hexdigest()
 
 
+def classificar(jid: str) -> tuple[str, str]:
+    """
+    Identificador cru + o tipo dele.
+
+    O WhatsApp entrega `@lid` no lugar do telefone quando a pessoa tem
+    privacidade ativa — o webhook já trata isso no fallback
+    `id|JID|PhoneNumber|LID`. LID é opaco: NÃO é telefone e não pode ser
+    exportado como se fosse, senão a "lista de leads" vira uma coluna de
+    números que não discam. Guardar o tipo aqui evita adivinhar pelo sufixo a
+    cada leitura.
+    """
+    limpo = (jid or "").strip()
+    tipo = TIPO_LID if limpo.lower().endswith("@lid") else TIPO_TELEFONE
+    return limpo[:64], tipo
+
+
 class GrupoEventoService:
     def __init__(self, db: Session):
         self.db = db
@@ -118,8 +147,10 @@ class GrupoEventoService:
             else:
                 origem = ORIGEM_DESCONHECIDA
                 link_evento_id = None
+            cru, tipo_id = classificar(jid)
             self.repo.registrar_evento_de_grupo(
-                grupo.id, tipo, origem, identificador(jid), link_evento_id
+                grupo.id, tipo, origem, identificador(jid), link_evento_id,
+                identificador=cru, identificador_tipo=tipo_id,
             )
             gravados += 1
 

@@ -16,11 +16,12 @@ from app.models.user import User
 from app.repositories.subscription_repository import SubscriptionRepository
 from app.schemas.campanhas_grupos import (
     AnunciosDaCampanhaOut, CampanhaAtualizar, CampanhaCriar, CampanhaDetalheOut,
-    CampanhaOut, GrupoDaCampanhaItem, GrupoDaCampanhaOut, ResultadosOut,
-    ResumoConsolidadoOut, VinculosDeAnuncioOut,
+    CampanhaOut, GrupoDaCampanhaItem, GrupoDaCampanhaOut, NumerosDaCampanhaOut,
+    ResultadosOut, ResumoConsolidadoOut, VinculosDeAnuncioOut, VisaoGeralOut,
 )
 from app.services.campanha_grupos_service import (
-    CampanhaGruposService, GrupoInvalido, LimiteDeCampanhas,
+    CampanhaGruposService, GrupoForaDosNumeros, GrupoInvalido, LimiteDeCampanhas,
+    NumeroEmUso, NumeroInvalido,
 )
 from app.services.campanha_link_service import CampanhaLinkService
 
@@ -59,20 +60,34 @@ def _out(campanha, total_grupos: int) -> CampanhaOut:
         abertura_automatica=campanha.abertura_automatica,
         reabertura_automatica=campanha.reabertura_automatica,
         prefixo=campanha.prefixo, sufixo=campanha.sufixo,
-        modo_imagem=campanha.modo_imagem, total_grupos=total_grupos,
-        criado_em=campanha.criado_em,
+        modo_imagem=campanha.modo_imagem,
+        limite_participantes=campanha.limite_participantes,
+        total_grupos=total_grupos, criado_em=campanha.criado_em,
     )
 
 
 def _grupos_out(servico: CampanhaGruposService, campanha) -> list[GrupoDaCampanhaOut]:
+    # Uma consulta para todos os grupos: `instancias_por_grupo` já devolve o
+    # mapa inteiro, e pedir por grupo aqui seria N+1 numa tela de listagem.
+    das_instancias = servico.repo_grupos.instancias_por_grupo(campanha.user_id)
     return [
         GrupoDaCampanhaOut(
             grupo_id=g.id, posicao=v.posicao, aberto=v.aberto,
-            nome=g.nome, participantes=g.participantes,
+            nome=g.nome, participantes=g.participantes, capacidade=g.capacidade,
             permite_envio=g.permite_envio, ativo=g.ativo, sub_id=g.sub_id,
+            instancia_ids=das_instancias.get(g.id, []),
         )
         for v, g in servico.grupos_da_campanha(campanha)
     ]
+
+
+def _detalhe_out(servico: CampanhaGruposService, campanha) -> CampanhaDetalheOut:
+    grupos = _grupos_out(servico, campanha)
+    base = _out(campanha, len(grupos))
+    return CampanhaDetalheOut(
+        **base.model_dump(), grupos=grupos,
+        instancia_ids=servico.repo_numeros.instancia_ids(campanha.id),
+    )
 
 
 @router.get("/vinculos-de-anuncio", response_model=VinculosDeAnuncioOut)
@@ -203,9 +218,10 @@ def criar(
     db: Session = Depends(get_db),
 ):
     try:
-        campanha = _servico(db, current_user).criar(
-            current_user.id, payload.nome, payload.descricao
-        )
+        # Só o nome: `descricao` saiu de CampanhaCriar (§1.1) e o Pydantic v2
+        # não guarda campo que não declarou — ler `payload.descricao` aqui
+        # levantava AttributeError, que nenhum `except` abaixo pega (500).
+        campanha = _servico(db, current_user).criar(current_user.id, payload.nome)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except LimiteDeCampanhas as e:
@@ -218,10 +234,7 @@ def detalhe(
     campanha=Depends(campanha_da_usuaria),
     db: Session = Depends(get_db),
 ):
-    servico = _servico(db)
-    grupos = _grupos_out(servico, campanha)
-    base = _out(campanha, len(grupos))
-    return CampanhaDetalheOut(**base.model_dump(), grupos=grupos)
+    return _detalhe_out(_servico(db), campanha)
 
 
 @router.patch("/{campanha_id}", response_model=CampanhaOut)
@@ -254,9 +267,92 @@ def definir_grupos(
         )
     except GrupoInvalido:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
-    grupos = _grupos_out(servico, campanha)
-    base = _out(campanha, len(grupos))
-    return CampanhaDetalheOut(**base.model_dump(), grupos=grupos)
+    except GrupoForaDosNumeros as e:
+        # 422 e não 404: os grupos existem — o que não bate é o escopo. A
+        # mensagem nomeia os grupos e diz para onde ir resolver.
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Estes grupos não pertencem a nenhum número da campanha: "
+                    f"{', '.join(e.nomes)}. Ajuste a aba Números ou remova-os."),
+        )
+    return _detalhe_out(servico, campanha)
+
+
+# --- Números da campanha (spec §2) -------------------------------------------
+
+
+def _mascarar(numero: str | None) -> str | None:
+    """Últimos 4 dígitos bastam para a afiliada reconhecer o chip."""
+    limpo = "".join(c for c in (numero or "") if c.isdigit())
+    return f"•••• {limpo[-4:]}" if len(limpo) >= 4 else (numero or None)
+
+
+@router.get("/{campanha_id}/numeros", response_model=NumerosDaCampanhaOut)
+def listar_numeros(campanha=Depends(campanha_da_usuaria), db: Session = Depends(get_db)):
+    """Números da conta + quais esta campanha usa + grupos que dependem de cada um."""
+    instancias, selecionados, contagem = _servico(db).numeros_da_campanha(campanha)
+    return {
+        "numeros": [
+            {
+                "id": i.id,
+                "nome_exibicao": i.nome_exibicao,
+                "numero": _mascarar(i.numero),
+                "status": i.status,
+                "selecionado": i.id in selecionados,
+                "grupos_na_campanha": contagem.get(i.id, 0),
+            }
+            for i in instancias
+        ]
+    }
+
+
+@router.put("/{campanha_id}/numeros", response_model=NumerosDaCampanhaOut)
+def definir_numeros(
+    payload: list[int],
+    campanha=Depends(campanha_da_usuaria),
+    db: Session = Depends(get_db),
+):
+    servico = _servico(db)
+    try:
+        servico.definir_numeros(campanha, payload)
+    except NumeroInvalido:
+        raise HTTPException(status_code=404, detail="Número não encontrado.")
+    except NumeroEmUso as e:
+        # 409 explicado, no mesmo formato do conflito de anúncios: dizer só
+        # "não pode" deixa a afiliada sem o próximo passo. Aqui o passo é
+        # remover os grupos listados na aba Grupos.
+        travas = "; ".join(
+            f'{numero} (grupos: {", ".join(grupos)})'
+            for numero, grupos in sorted(e.grupos_por_numero.items())
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Estes números ainda têm grupos nesta campanha: {travas}. "
+                    f"Remova os grupos na aba Grupos antes de desmarcar."),
+        )
+    return listar_numeros(campanha=campanha, db=db)
+
+
+# --- Visão geral (spec §1.3) -------------------------------------------------
+
+
+@router.get("/{campanha_id}/visao-geral", response_model=VisaoGeralOut)
+def visao_geral(
+    dias: int = 7,
+    campanha=Depends(campanha_da_usuaria),
+    db: Session = Depends(get_db),
+):
+    """KPIs operacionais + entradas × saídas por dia. Sem métrica financeira."""
+    from app.services.campanha_visao_geral_service import (
+        DIAS_VALIDOS, CampanhaVisaoGeralService,
+    )
+
+    if dias not in DIAS_VALIDOS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Período inválido. Use um de: {', '.join(map(str, DIAS_VALIDOS))}.",
+        )
+    return CampanhaVisaoGeralService(db).resumo(campanha, dias)
 
 
 # --- link de entrada (F6) ----------------------------------------------------
@@ -328,7 +424,7 @@ def atividade(
 def _periodo(inicio: str | None, fim: str | None):
     """Período do relatório. Default: últimos 30 dias em BRT (o dia civil que
     a afiliada enxerga), nunca UTC."""
-    from datetime import timedelta
+    from datetime import date as _date, timedelta
 
     from app.services.janela_envio_service import BRT
     from datetime import datetime as _dt
@@ -348,19 +444,71 @@ def _periodo(inicio: str | None, fim: str | None):
     return d_ini, d_fim
 
 
+def _contas_selecionadas(db: Session, user_id: int) -> list[str] | None:
+    """
+    Contas de anúncio marcadas em Configurações › Facebook Ads (spec §4.6).
+
+    `None` quando não há integração — aí não filtra, para não esvaziar a lista
+    de quem sincronizou antes de a seleção existir.
+    """
+    from app.repositories.facebook_integration_repository import (
+        FacebookIntegrationRepository,
+    )
+
+    integracao = FacebookIntegrationRepository(db).get_by_user_id(user_id)
+    return integracao.account_ids_list() if integracao else None
+
+
 @router.get("/{campanha_id}/anuncios", response_model=AnunciosDaCampanhaOut)
 def listar_anuncios(
+    inicio: str | None = None,
+    fim: str | None = None,
     campanha=Depends(campanha_da_usuaria),
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
     """Campanhas de anúncio do Meta + quais estão vinculadas a ESTA campanha
-    de grupos (o multi-select da tela)."""
+    de grupos (o multi-select da tela), com gasto no período e veiculação real."""
+    from datetime import date as _date, timedelta
+
     from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+    from app.repositories.campaign_repository import CampaignRepository
+    from app.services.campaign_service import (
+        RECENT_ACTIVITY_WINDOW_DAYS, _is_active, _still_delivering,
+    )
 
     repo = CampanhaAnuncioRepository(db)
-    anuncios = repo.campanhas_de_anuncio(current_user.id)
+    d_ini, d_fim = _periodo(inicio, fim)
     vinculadas = set(repo.campaign_ids(campanha.id))
+
+    anuncios = repo.campanhas_de_anuncio(
+        current_user.id, ad_account_ids=_contas_selecionadas(db, current_user.id)
+    )
+    # Anúncio JÁ VINCULADO nunca some da lista, mesmo que a conta dele tenha
+    # sido desmarcada depois: senão a afiliada perde a única forma de
+    # desvincular, e o gasto segue entrando no lucro sem ela poder ver por quê.
+    faltando = vinculadas - {c.id for c in anuncios}
+    if faltando:
+        anuncios = anuncios + [
+            c for c in repo.campanhas_de_anuncio(current_user.id) if c.id in faltando
+        ]
+
+    gastos = repo.gasto_por_campaign(current_user.id, [c.id for c in anuncios],
+                                     d_ini, d_fim)
+    # Veiculação real (spec §4.2): campanha com orçamento vitalício esgotado
+    # fica ACTIVE para sempre na Meta. Mesma regra do card "campanhas ativas".
+    recentes = CampaignRepository(db).campaign_ids_with_recent_activity(
+        current_user.id,
+        since=_date.today() - timedelta(days=RECENT_ACTIVITY_WINDOW_DAYS),
+    )
+    veiculando = {
+        c.id: bool(_is_active(c) and not c.ad_review_issue
+                   and _still_delivering(c, recentes))
+        for c in anuncios
+    }
+    # Ordenado por gasto desc (spec §4.3): alfabético jogava "alvejantepo1805"
+    # acima de campanha com R$800 gastos, e é a que gasta que ela quer vincular.
+    anuncios = sorted(anuncios, key=lambda c: gastos.get(c.id, 0.0), reverse=True)
     # Quem já pertence a OUTRA campanha de grupos vem marcado: a tela
     # desabilita a linha em vez de deixar clicar e tomar 409 no salvar.
     ocupados = repo.vinculos_de_outras_campanhas(campanha.id, [c.id for c in anuncios])
@@ -373,6 +521,8 @@ def listar_anuncios(
                 "nome": c.name,
                 "status": c.status,
                 "sub_id": c.sub_id,
+                "gasto": round(gastos.get(c.id, 0.0), 2),
+                "veiculando": veiculando.get(c.id, False),
                 "vinculada": c.id in vinculadas,
                 # id junto do nome: sem o id a tela só consegue linkar para a
                 # lista, e a afiliada tem que caçar qual campanha desvincular.
@@ -390,6 +540,8 @@ def listar_anuncios(
 @router.put("/{campanha_id}/anuncios", response_model=AnunciosDaCampanhaOut)
 def definir_anuncios(
     payload: list[int],
+    inicio: str | None = None,
+    fim: str | None = None,
     campanha=Depends(campanha_da_usuaria),
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
@@ -424,7 +576,11 @@ def definir_anuncios(
         )
     repo.definir(campanha.id, list(dict.fromkeys(payload)))
     db.commit()
-    return listar_anuncios(campanha=campanha, current_user=current_user, db=db)
+    # Repassa o período: sem ele a resposta vinha com o gasto dos últimos 30
+    # dias e reordenada, enquanto o chip da tela seguia marcando "7 dias" —
+    # número de outra janela numa tela que decide investimento.
+    return listar_anuncios(inicio=inicio, fim=fim, campanha=campanha,
+                           current_user=current_user, db=db)
 
 
 @router.get("/{campanha_id}/resultados", response_model=ResultadosOut)
@@ -487,22 +643,42 @@ def _seguro_para_planilha(valor: str) -> str:
     return texto
 
 
+def _telefone(identificador: str | None, tipo: str | None) -> str:
+    """
+    Só o dígito do número, e só quando é telefone de verdade.
+
+    LID (`tipo == "lid"`) e evento antigo (sem identificador) saem vazios: a
+    coluna em branco é a verdade, e é melhor do que um id opaco na coluna
+    "telefone" — que a afiliada tentaria discar.
+    """
+    if not identificador or tipo != "telefone":
+        return ""
+    return "".join(c for c in identificador.split("@")[0] if c.isdigit())
+
+
 @router.get("/{campanha_id}/leads/export")
 def exportar_leads(
     inicio: str | None = None,
     fim: str | None = None,
+    grupos: str | None = None,
     campanha=Depends(campanha_da_usuaria),
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
     """
-    CSV dos EVENTOS DE ENTRADA (decisão de produto, 25/08).
+    CSV dos EVENTOS DE ENTRADA do período.
 
-    Exporta data, grupo, origem e se a pessoa continua no grupo — **nunca**
-    número de telefone: com `getParticipants=false` nós sequer coletamos os
-    números, e o identificador que guardamos é um hash irreversível. Quem
-    esperava "lista de contatos" recebe o que existe, com a explicação no
-    cabeçalho do arquivo.
+    Colunas: data, grupo, telefone, origem e se a pessoa continua no grupo.
+
+    `telefone` sai preenchido só quando o WhatsApp entregou um número de
+    verdade. Quando a pessoa tem privacidade ativa, o que chega é um LID — um
+    id opaco que não disca — e a coluna fica VAZIA de propósito: LID exportado
+    como telefone viraria uma lista de contatos que não existe. Eventos
+    gravados antes da migration 079 também saem sem telefone: eles só têm o
+    hash, e hash não volta a ser número.
+
+    `grupos` (opcional) = ids separados por vírgula; ausente exporta todos os
+    grupos da campanha.
     """
     import csv
     import io
@@ -517,6 +693,24 @@ def exportar_leads(
     if not nomes:
         raise HTTPException(status_code=404, detail="A campanha não tem grupos.")
 
+    # Seleção de grupos (spec §3.6). Validada contra os grupos da campanha: id
+    # de fora vira 422, não um CSV silenciosamente vazio.
+    if grupos is not None:
+        try:
+            pedidos = {int(p) for p in grupos.split(",") if p.strip()}
+        except ValueError:
+            raise HTTPException(status_code=422,
+                                detail="Lista de grupos inválida.")
+        estranhos = pedidos - set(nomes)
+        if estranhos:
+            raise HTTPException(
+                status_code=422,
+                detail="Há grupos que não pertencem a esta campanha na seleção.",
+            )
+        if not pedidos:
+            raise HTTPException(status_code=422, detail="Selecione ao menos um grupo.")
+        nomes = {gid: nome for gid, nome in nomes.items() if gid in pedidos}
+
     from app.services.campanha_resultado_service import _intervalo_brt
 
     d_ini, d_fim = _periodo(inicio, fim)
@@ -524,6 +718,7 @@ def exportar_leads(
 
     entradas = (
         db.query(GrupoEvento.grupo_id, GrupoEvento.identificador_hash,
+                 GrupoEvento.identificador, GrupoEvento.identificador_tipo,
                  GrupoEvento.origem, GrupoEvento.criado_em)
         .filter(GrupoEvento.grupo_id.in_(list(nomes)),
                 GrupoEvento.tipo == EVENTO_ENTRADA,
@@ -552,7 +747,7 @@ def exportar_leads(
 
     buffer = io.StringIO()
     escritor = csv.writer(buffer)
-    escritor.writerow(["data_entrada", "grupo", "origem", "ainda_no_grupo"])
+    escritor.writerow(["data_entrada", "grupo", "telefone", "origem", "ainda_no_grupo"])
     for e in entradas:
         # "Ainda no grupo" é por ENTRADA, não por pessoa: quem entrou, saiu e
         # voltou tem duas linhas — a primeira é "nao", a segunda "sim".
@@ -563,6 +758,7 @@ def exportar_leads(
         escritor.writerow([
             e.criado_em.isoformat() if e.criado_em else "",
             _seguro_para_planilha(nomes.get(e.grupo_id, "")),
+            _seguro_para_planilha(_telefone(e.identificador, e.identificador_tipo)),
             _seguro_para_planilha(e.origem),
             "nao" if saiu else "sim",
         ])
