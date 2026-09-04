@@ -1,4 +1,4 @@
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from datetime import date
 
 from sqlalchemy import func
@@ -104,6 +104,33 @@ class DatasetRowRepository:
             query = query.limit(limit).offset(offset)
         return query.all()
 
+    # Colunas que a API expõe (DatasetRowResponse). Consultar por COLUNA em vez de
+    # entidade evita materializar um objeto ORM por linha — na conta maior são 67 mil
+    # linhas por request, e o custo de construir a entidade (identity map, tracking de
+    # estado) é várias vezes o de ler a tupla. `serialize_row` só lê atributos, então
+    # a Row nomeada serve igual.
+    _COLUNAS_DA_API = (
+        DatasetRow.id,
+        DatasetRow.dataset_id,
+        DatasetRow.user_id,
+        DatasetRow.date,
+        DatasetRow.time,
+        DatasetRow.product,
+        DatasetRow.platform,
+        DatasetRow.category,
+        DatasetRow.status,
+        DatasetRow.channel,
+        DatasetRow.attribution_type,
+        DatasetRow.sub_id1,
+        DatasetRow.order_id,
+        DatasetRow.product_id,
+        DatasetRow.revenue,
+        DatasetRow.commission,
+        DatasetRow.cost,
+        DatasetRow.profit,
+        DatasetRow.quantity,
+    )
+
     def list_by_user(
         self,
         user_id: int,
@@ -111,9 +138,9 @@ class DatasetRowRepository:
         end_date: Optional[date] = None,
         limit: Optional[int] = None,
         offset: int = 0,
-    ) -> List[DatasetRow]:
+    ) -> List[Any]:
         """Lista linhas de datasets do usuário, sempre filtrando por user_id para garantir isolamento de dados."""
-        query = self.db.query(DatasetRow).filter(DatasetRow.user_id == user_id)
+        query = self.db.query(*self._COLUNAS_DA_API).filter(DatasetRow.user_id == user_id)
         if start_date:
             query = query.filter(DatasetRow.date >= start_date)
         if end_date:
