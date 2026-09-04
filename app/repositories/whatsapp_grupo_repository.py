@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy import exists
 
-from app.models.whatsapp_grupos import WhatsappGrupo, WhatsappGrupoInstancia
+from app.models.whatsapp_grupos import (
+    GrupoParticipante, WhatsappGrupo, WhatsappGrupoInstancia,
+)
 
 
 class WhatsappGrupoRepository:
@@ -130,3 +132,73 @@ class WhatsappGrupoRepository:
     def marcar_tocado(self, grupo: WhatsappGrupo) -> None:
         grupo.atualizado_em = datetime.now(timezone.utc)
         self.db.add(grupo)
+
+    # --- participantes (080) -------------------------------------------------
+
+    def substituir_participantes(self, grupo_id: int, itens: List[dict]) -> int:
+        """
+        Substitui a lista de membros do grupo pela que o sync acabou de ver.
+
+        SUBSTITUI, não acumula: a tabela responde "quem está no grupo AGORA".
+        Quem saiu já está em `grupo_eventos` — deixar o histórico aqui faria a
+        exportação devolver gente que não está mais no grupo, que é exatamente
+        o defeito do modelo antigo (exportar eventos de entrada).
+
+        `visto_em` é preservado no upsert: ele é a primeira vez que vimos a
+        pessoa, e reescrevê-lo a cada sync transformaria "entrou em 12/08" em
+        "entrou hoje" para o grupo inteiro, todo dia.
+        """
+        agora = datetime.now(timezone.utc)
+        atuais = {
+            p.identificador: p
+            for p in self.db.query(GrupoParticipante)
+            .filter(GrupoParticipante.grupo_id == grupo_id)
+            .all()
+        }
+        desejados = set()
+        for item in itens:
+            ident = (item.get("identificador") or "")[:64]
+            if not ident:
+                continue
+            desejados.add(ident)
+            atual = atuais.get(ident)
+            if atual is None:
+                self.db.add(GrupoParticipante(
+                    grupo_id=grupo_id,
+                    identificador=ident,
+                    telefone=item.get("telefone"),
+                    identificador_hash=item.get("identificador_hash"),
+                    admin=bool(item.get("admin")),
+                    visto_em=agora,
+                    confirmado_em=agora,
+                ))
+                continue
+            # O telefone pode chegar num sync e faltar no seguinte (o engine
+            # varia). Não apagar o que já se sabe: `or atual.telefone`.
+            atual.telefone = item.get("telefone") or atual.telefone
+            atual.identificador_hash = (
+                item.get("identificador_hash") or atual.identificador_hash
+            )
+            atual.admin = bool(item.get("admin"))
+            atual.confirmado_em = agora
+            self.db.add(atual)
+
+        sumiram = [i for i in atuais if i not in desejados]
+        if sumiram:
+            (
+                self.db.query(GrupoParticipante)
+                .filter(GrupoParticipante.grupo_id == grupo_id,
+                        GrupoParticipante.identificador.in_(sumiram))
+                .delete(synchronize_session=False)
+            )
+        return len(desejados)
+
+    def participantes_de(self, grupo_ids: List[int]) -> List[GrupoParticipante]:
+        if not grupo_ids:
+            return []
+        return (
+            self.db.query(GrupoParticipante)
+            .filter(GrupoParticipante.grupo_id.in_(grupo_ids))
+            .order_by(GrupoParticipante.grupo_id, GrupoParticipante.visto_em)
+            .all()
+        )

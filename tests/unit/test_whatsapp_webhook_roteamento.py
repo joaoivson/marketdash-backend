@@ -224,19 +224,40 @@ def test_grupo_desconhecido_nao_captura(ambiente, monkeypatch):
 # nenhum erro. Aqui o preço de errar é o mesmo: nenhuma entrada ou saída
 # registrada, em silêncio, e a F6 inteira sem dado.
 
+# O participante chega ao service como PAR `(identidade, telefone)` — os dois
+# são campos DIFERENTES, e tê-los colapsado num só foi o bug de 04/09: em
+# homologação, 49 de 49 eventos nasceram `identificador_tipo='lid'` e a
+# exportação de leads saiu com a coluna telefone vazia em 100% das linhas.
 @pytest.mark.parametrize("payload,esperado_jid,esperado_participantes", [
     # forma documentada
     ({"type": "join", "group": {"id": "120363000000000001@g.us"},
       "participants": [{"id": "5511999998888@c.us", "role": "participant"}]},
-     "120363000000000001@g.us", ["5511999998888@c.us"]),
+     "120363000000000001@g.us", [("5511999998888@c.us", "5511999998888@c.us")]),
     # PascalCase, como o GOWS faz no REST
     ({"type": "join", "group": {"JID": "120363000000000001@g.us"},
       "participants": [{"JID": "5511999998888@s.whatsapp.net"}]},
-     "120363000000000001@g.us", ["5511999998888@s.whatsapp.net"]),
-    # endereçamento LID: sem `id`, só telefone
+     "120363000000000001@g.us",
+     [("5511999998888@s.whatsapp.net", "5511999998888@s.whatsapp.net")]),
+    # só telefone, sem id
     ({"type": "leave", "group": {"id": "120363000000000001@g.us"},
       "participants": [{"PhoneNumber": "5511999998888@s.whatsapp.net"}]},
-     "120363000000000001@g.us", ["5511999998888@s.whatsapp.net"]),
+     "120363000000000001@g.us",
+     [("5511999998888@s.whatsapp.net", "5511999998888@s.whatsapp.net")]),
+    # O CASO REAL DE PRODUÇÃO, que nenhum teste cobria: endereçamento LID
+    # traz o `JID` como `@lid` E o telefone ao lado. A identidade continua
+    # sendo o LID (é ela que vira hash e casa entrada com saída); o telefone
+    # é o que vai para a coluna exportável.
+    ({"type": "join", "group": {"JID": "120363000000000001@g.us"},
+      "participants": [{"JID": "84729130@lid",
+                        "PhoneNumber": "5511999998888@s.whatsapp.net"}]},
+     "120363000000000001@g.us",
+     [("84729130@lid", "5511999998888@s.whatsapp.net")]),
+    # LID sem telefone nenhum: telefone é None, e a coluna sai vazia — que é a
+    # verdade. LID exportado como telefone viraria lista de números que não
+    # discam.
+    ({"type": "join", "group": {"JID": "120363000000000001@g.us"},
+      "participants": [{"JID": "84729130@lid"}]},
+     "120363000000000001@g.us", [("84729130@lid", None)]),
 ])
 def test_participantes_sao_lidos_em_qualquer_caixa(
     ambiente, monkeypatch, payload, esperado_jid, esperado_participantes

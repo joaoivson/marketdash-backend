@@ -96,3 +96,43 @@ class WhatsappGrupoInstancia(Base):
     instancia_id = Column(Integer, ForeignKey("whatsapp_instancias.id", ondelete="CASCADE"),
                           primary_key=True)
     sou_admin = Column(Boolean, nullable=False, default=False)
+
+
+class GrupoParticipante(Base):
+    """Quem está no grupo AGORA (espelho da 080).
+
+    **Inverte a decisão de 03/09.** Até aqui a lista de membros era usada em
+    memória e descartada, e o banco guardava só a contagem — por isso
+    "exportar leads" só conseguia exportar EVENTOS de entrada, e um grupo com
+    946 pessoas acumuladas em meses exportava 8 linhas.
+
+    É também o caminho que resolve LID→telefone: o payload REST de
+    `/api/{sessao}/groups` traz `PhoneNumber` ao lado do `JID`, enquanto o
+    webhook de entrada nem sempre traz — foi por isso que 49 de 49 eventos
+    nasceram como `lid`. A política de privacidade precisa refletir isto.
+
+    O sync é a única escrita: faz upsert de quem está e apaga quem sumiu, para
+    a tabela nunca virar histórico (quem saiu está em `grupo_eventos`).
+    """
+
+    __tablename__ = "grupo_participantes"
+
+    grupo_id = Column(Integer, ForeignKey("whatsapp_grupos.id", ondelete="CASCADE"),
+                      primary_key=True)
+    # Identidade COMO VEIO do WhatsApp, igual a `grupo_eventos.identificador`:
+    # "5511999999999@c.us" ou "84729130@lid".
+    identificador = Column(String(64), primary_key=True)
+    # O telefone resolvido, quando o WhatsApp o informa. Coluna SEPARADA do
+    # identificador porque em grupo LID os dois são valores diferentes — e foi
+    # exatamente essa confusão que fez o CSV sair com a coluna vazia.
+    telefone = Column(String(32), nullable=True)
+    # Mesmo HMAC de `grupo_eventos.identificador_hash`: é por ele que a
+    # exportação acha a data de entrada de quem tem evento registrado.
+    identificador_hash = Column(String(64), nullable=True, index=True)
+    admin = Column(Boolean, nullable=False, default=False)
+    # Primeira vez que o sync viu a pessoa. NÃO é a entrada real de quem já
+    # estava no grupo antes do módulo existir — por isso a exportação prefere
+    # a data do evento quando ela existe.
+    visto_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    confirmado_em = Column(DateTime(timezone=True), nullable=False,
+                           server_default=func.now())

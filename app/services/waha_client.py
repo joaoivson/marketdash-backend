@@ -385,9 +385,15 @@ class WahaClient:
         """
         Uma página de grupos da sessão, COM participantes no payload.
 
-        LGPD: a lista de membros é usada em memória (contar participantes e
-        descobrir se o número é admin) e descartada — NUNCA persistida. O que
-        vai para o banco são só agregados: jid, nome, tamanho, sou_admin.
+        Dados pessoais — mudou em 04/09/2026 (migration 080). Para grupo que a
+        afiliada ATIVOU, a lista de membros passa a ser persistida em
+        `grupo_participantes` (ver whatsapp_grupo_sync_service): sem ela não
+        existe "exportar os leads deste grupo", só "exportar os eventos de
+        entrada", que num grupo de 946 pessoas devolve 8 linhas.
+
+        Para todo o resto — grupo não ativado — segue valendo o de antes: a
+        lista é usada em memória (contar participantes e descobrir se o número
+        é admin) e descartada; vão para o banco só os agregados.
         """
         status, dados = self._pedir(
             "GET", f"/api/{self.sessao}/groups",

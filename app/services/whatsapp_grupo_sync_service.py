@@ -11,8 +11,17 @@ Duas decisões da spec moram aqui e não podem regredir:
 2. Grupo que some do retorno vira `ativo=False`, NUNCA é deletado: apagar a
    linha destruiria o histórico de comissão por grupo.
 
-LGPD: a lista de participantes que o WAHA devolve é consumida em memória
-(contagem + "sou admin?") e descartada. Nada de membro individual toca o banco.
+Dados pessoais — mudou em 04/09/2026 (migration 080). A lista de
+participantes deixou de ser só contagem: para grupo **ativado** pela usuária
+ela é persistida em `grupo_participantes`, porque "exportar os leads do grupo"
+é impossível sem ela — o modelo anterior só sabia exportar EVENTOS de entrada,
+e um grupo com 946 pessoas acumuladas em meses exportava 8 linhas.
+
+O recorte é o mínimo que atende: **só grupo ativado**. Grupo que a afiliada
+apenas tem no WhatsApp e nunca ligou continua sendo contagem e nada mais.
+É também aqui que o telefone de quem está com privacidade (LID) se resolve:
+o payload REST traz `PhoneNumber` ao lado do `JID`, o que o webhook nem
+sempre traz. A política de privacidade precisa refletir isto.
 """
 import logging
 import random
@@ -134,6 +143,53 @@ def _extrair_agregados(dados: Dict[str, Any], meus_ids: set) -> Dict[str, Any]:
     }
 
 
+def _participantes_do_payload(dados: Dict[str, Any], meus_ids: set) -> list:
+    """
+    Lista de membros pronta para `grupo_participantes` — identidade, telefone
+    e papel, por pessoa.
+
+    **Identidade e telefone são campos DIFERENTES.** Em grupo com endereçamento
+    LID o `JID` é `…@lid` e o número vem em `PhoneNumber`; colapsar os dois num
+    valor só foi o que fez 49 de 49 eventos nascerem sem telefone. A identidade
+    segue a mesma precedência do resto do módulo (`id|JID|PhoneNumber|LID`)
+    para casar com `grupo_eventos.identificador`.
+
+    O nosso próprio número sai da lista: ele não é lead.
+    """
+    from app.services.grupo_evento_service import identificador as _hash
+
+    saida = []
+    for p in (_valor(dados, "participants") or []):
+        bruto = _valor(p, "id", "JID", "PhoneNumber", "LID")
+        if isinstance(bruto, dict):
+            bruto = bruto.get("_serialized") or bruto.get("user")
+        identidade = str(bruto or "").strip()
+        if not identidade:
+            continue
+        if meus_ids and (_identidades(p) & meus_ids):
+            continue
+        telefone = _valor(p, "PhoneNumber", "phoneNumber", "participantPn", "phone")
+        if isinstance(telefone, dict):
+            telefone = telefone.get("_serialized") or telefone.get("user")
+        telefone = str(telefone or "").strip()
+        if not telefone and not identidade.lower().endswith("@lid"):
+            telefone = identidade
+        # Só dígitos na coluna de telefone: é o que a afiliada cola no
+        # discador, e `@c.us`/`@s.whatsapp.net` no meio da planilha não serve
+        # para nada. O identificador cru continua na coluna dele.
+        so_digitos = "".join(c for c in telefone.split("@")[0] if c.isdigit())
+        admin = bool(_valor(p, "IsAdmin")) or bool(_valor(p, "IsSuperAdmin")) or (
+            str(_valor(p, "role") or "") in ("admin", "superadmin")
+        )
+        saida.append({
+            "identificador": identidade[:64],
+            "telefone": (so_digitos or None) and so_digitos[:32],
+            "identificador_hash": _hash(identidade),
+            "admin": admin,
+        })
+    return saida
+
+
 class WhatsappGrupoSyncService:
     def __init__(self, db: Session, cliente: Optional[WahaClient] = None):
         self.db = db
@@ -171,7 +227,7 @@ class WhatsappGrupoSyncService:
             sync_repo.mark_failed(run, error_message=str(e)[:500])
             raise
         detalhes = {k: resultado[k] for k in ("novos", "atualizados", "desativados",
-                                              "ignorados", "convites")}
+                                              "ignorados", "convites", "membros")}
         if self._falha_convite:
             # Fica no run para ser auditável em /admin/sincronizacoes: "169
             # grupos de admin e zero convites" precisa de motivo, não de log.
@@ -196,7 +252,7 @@ class WhatsappGrupoSyncService:
         grupos_por_jid = self.repo.por_jids(instancia.user_id)
         vinculos = self.repo.vinculos_da_instancia(instancia.id)
 
-        vistos = novos = atualizados = ignorados = 0
+        vistos = novos = atualizados = ignorados = membros = 0
         grupo_ids_vistos = []
         precisam_convite = []
         offset = 0
@@ -228,6 +284,21 @@ class WhatsappGrupoSyncService:
                     grupo.id, instancia.id, agregados["sou_admin"],
                     vinculo=vinculos.get(grupo.id),
                 )
+                # Lista de membros SÓ de grupo ativado (080). É o recorte
+                # mínimo que atende a exportação de leads sem transformar o
+                # banco em cópia da agenda de quem nunca usou o módulo.
+                if grupo.ativado:
+                    try:
+                        membros += self.repo.substituir_participantes(
+                            grupo.id, _participantes_do_payload(dados, meus_ids),
+                        )
+                    except Exception:
+                        # Nunca derruba o sync: grupo continua atualizado, só
+                        # a lista de membros deste fica com a do sync anterior.
+                        logger.exception(
+                            "Participantes do grupo %s não puderam ser gravados",
+                            grupo.id,
+                        )
                 grupo_ids_vistos.append(grupo.id)
             if ignorados_na_pagina:
                 # Página com itens e nenhum reconhecido como grupo é sintoma de
@@ -267,7 +338,7 @@ class WhatsappGrupoSyncService:
 
         return {"vistos": vistos, "novos": novos, "atualizados": atualizados,
                 "desativados": desativados, "ignorados": ignorados,
-                "convites": convites}
+                "convites": convites, "membros": membros}
 
     def _preencher_convites(self, cliente: WahaClient, grupos: list) -> int:
         """

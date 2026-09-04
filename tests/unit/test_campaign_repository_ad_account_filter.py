@@ -16,6 +16,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.campaign import Campaign, CampaignDailyInsight
+# `list_campaigns` consulta o vínculo campanha-de-grupos ↔ anúncio para tirar
+# essas campanhas do Lucro e do ROAS Real — sem as tabelas, a query estoura.
+from app.models.campanha_anuncio import CampanhaAnuncio
+from app.models.campanha_grupos import Campanha
 from app.models.facebook_integration import FacebookIntegration
 from app.models.user_settings import UserSettings
 from app.repositories.campaign_repository import CampaignRepository
@@ -33,6 +37,8 @@ def db():
     CampaignDailyInsight.__table__.create(engine)
     FacebookIntegration.__table__.create(engine)
     UserSettings.__table__.create(engine)
+    Campanha.__table__.create(engine)
+    CampanhaAnuncio.__table__.create(engine)
     sessao = sessionmaker(bind=engine)()
     yield sessao
     sessao.close()

@@ -32,6 +32,24 @@ def teto_efetivo(grupo=WhatsappGrupo, campanha=Campanha):
     )
 
 
+# "Cheio" com o override da usuária por cima (migration 080). NULL no override
+# = vale a ocupação; TRUE/FALSE = a decisão dela vence.
+#
+# Os dois casos reais que o override resolve: segurar um grupo ANTES de lotar,
+# e destravar um grupo cuja contagem o WhatsApp não atualizou. Antes disso,
+# "cheio" só existia derivado e o grupo lotado nunca era MARCADO — a linha
+# ficava amarela e ele continuava recebendo.
+CHEIO_SQL = f"COALESCE(cg.cheio_override, g.participantes >= {TETO_SQL})"
+
+
+def cheio_efetivo(vinculo=CampanhaGrupo, grupo=WhatsappGrupo, campanha=Campanha):
+    """Mesma regra do `CHEIO_SQL`, em SQLAlchemy."""
+    return func.coalesce(
+        vinculo.cheio_override,
+        grupo.participantes >= teto_efetivo(grupo, campanha),
+    )
+
+
 class CampanhaLinkRepository:
     def __init__(self, db: Session):
         self.db = db
@@ -76,7 +94,7 @@ class CampanhaLinkRepository:
                    AND cg.aberto
                    AND g.ativo
                    AND g.link_convite IS NOT NULL
-                   AND g.participantes < {TETO_SQL}
+                   AND NOT {CHEIO_SQL}
                  ORDER BY {ordem}
                  LIMIT 1
                    FOR UPDATE OF cg SKIP LOCKED
@@ -96,7 +114,7 @@ class CampanhaLinkRepository:
                     CampanhaGrupo.aberto.is_(False),
                     WhatsappGrupo.ativo.is_(True),
                     WhatsappGrupo.link_convite.isnot(None),
-                    WhatsappGrupo.participantes < teto_efetivo())
+                    cheio_efetivo().is_(False))
             .order_by(CampanhaGrupo.posicao)
             .first()
         )
@@ -108,7 +126,7 @@ class CampanhaLinkRepository:
             .join(Campanha, Campanha.id == CampanhaGrupo.campanha_id)
             .filter(CampanhaGrupo.campanha_id == campanha_id,
                     CampanhaGrupo.aberto.is_(True),
-                    WhatsappGrupo.participantes >= teto_efetivo())
+                    cheio_efetivo().is_(True))
             .all()
         )
 

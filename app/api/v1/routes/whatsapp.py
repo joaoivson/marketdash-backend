@@ -100,6 +100,33 @@ def _tratar_status(db: Session, nome_sessao: str, evento: dict, payload: dict) -
     aplicar_evento_de_status(repo, instancia, status_waha, numero)
 
 
+def _participante(bruto) -> tuple[str, str | None]:
+    """
+    (identidade, telefone) de um participante do evento.
+
+    **São duas coisas diferentes, e tratá-las como uma só foi o bug.** Em grupo
+    com endereçamento LID o payload traz o `JID` como `…@lid` E o telefone num
+    campo separado — o mesmo formato que `_identidades` já lê no sync
+    (whatsapp_grupo_sync_service.py). Como `campo()` devolve o PRIMEIRO nome
+    presente e `JID` vinha antes de `PhoneNumber`, o LID sempre ganhava: em
+    homologação, 49 de 49 eventos nasceram `identificador_tipo='lid'` e a
+    exportação de leads saiu com a coluna telefone vazia em 100% das linhas.
+
+    A ordem da IDENTIDADE fica como estava de propósito: é ela que vira o
+    `identificador_hash`, a chave que casa entrada com saída. Trocá-la
+    invalidaria o pareamento de todos os eventos já gravados.
+    """
+    identidade = str(campo(bruto, "id", "JID", "PhoneNumber", "LID") or "").strip()
+    telefone = str(
+        campo(bruto, "PhoneNumber", "phoneNumber", "participantPn", "phone") or ""
+    ).strip()
+    # Sem campo explícito, a própria identidade é o telefone — a menos que ela
+    # seja um LID, que é id opaco e não disca.
+    if not telefone and identidade and not identidade.lower().endswith("@lid"):
+        telefone = identidade
+    return identidade, (telefone or None)
+
+
 def _tratar_participantes(db: Session, nome_sessao: str, payload: dict) -> None:
     """
     Entradas e saídas de grupo (F6). Só sessões DESTE ambiente, e só de quem
@@ -120,12 +147,16 @@ def _tratar_participantes(db: Session, nome_sessao: str, payload: dict) -> None:
     # nenhuma entrada/saída registrada, em silêncio, e F6 inteira sem dado.
     grupo_jid = str(campo(campo(payload, "group") or {}, "id", "JID") or "")
     acao = str(campo(payload, "type", "action") or "")
-    participantes = [
-        str(campo(p, "id", "JID", "PhoneNumber", "LID") or "")
-        for p in (campo(payload, "participants") or [])
-    ]
-    participantes = [p for p in participantes if p]
+    participantes = [_participante(p) for p in (campo(payload, "participants") or [])]
+    participantes = [p for p in participantes if p[0]]
     if not grupo_jid or not participantes:
+        # Descarte MUDO foi o que impediu distinguir "o WAHA não manda o
+        # evento" de "manda e a gente joga fora". Só as CHAVES do payload —
+        # os valores carregam telefone de terceiro e não podem ir para o log.
+        logger.warning(
+            "group.v2.participants descartado (sessão=%s): grupo=%s chaves=%s",
+            nome_sessao, bool(grupo_jid), sorted(payload.keys())[:12],
+        )
         return
 
     from app.services.grupo_evento_service import GrupoEventoService

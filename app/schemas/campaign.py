@@ -23,6 +23,12 @@ class CampaignDailyPoint(BaseModel):
     # Shopee naquele dia (distinto de upload com 0 cliques).
     clicks_shopee: Optional[int] = None
     cpc_shopee: Optional[float] = None
+    # Leads do pixel (evento `Lead` no link de entrada). `None` = o Meta não
+    # reportou lead naquele dia — que é DIFERENTE de "ninguém virou lead".
+    # Colapsar os dois em 0 apaga a distinção "sem pixel" × "zero conversão",
+    # que é a regra explícita deste módulo.
+    leads: Optional[int] = None
+    cpl: Optional[float] = None
 
 
 class CampaignMetrics(BaseModel):
@@ -45,6 +51,10 @@ class CampaignMetrics(BaseModel):
     direct_orders: int = 0
     profit: float = 0.0              # lucro líquido = commission_net - spend_with_tax
     roas: float = 0.0                # ROAS Real = commission_net / spend_with_tax
+    # Leads do pixel. `None` = nenhum dia do período reportou lead (sem pixel
+    # configurado); 0 = houve relatório e ninguém virou lead.
+    leads: Optional[int] = None
+    cpl: Optional[float] = None
 
 
 class CampaignResponse(BaseModel):

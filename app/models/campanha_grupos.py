@@ -14,6 +14,13 @@ from app.db.base import Base
 CAMPANHA_ATIVA = "ativa"
 CAMPANHA_PAUSADA = "pausada"
 CAMPANHA_ARQUIVADA = "arquivada"
+# Estado TERMINAL do "excluir" da listagem (080). É soft-delete de propósito:
+# hard-delete levaria `campanha_links` no CASCADE, o slug deixaria de existir e
+# `/g/{slug}` só poderia responder 404 — enquanto o anúncio já veiculando
+# continua mandando tráfego por dias. Com a linha viva, o link responde 200 com
+# "campanha encerrada". Também preserva a atribuição de gasto
+# (`campanha_anuncios`) e os cliques do link, que são histórico financeiro.
+CAMPANHA_ENCERRADA = "encerrada"
 
 ESTRATEGIA_SEQUENCIAL = "sequencial"
 ESTRATEGIA_ALEATORIA = "aleatoria"
@@ -55,6 +62,15 @@ class CampanhaGrupo(Base):
                       primary_key=True)
     posicao = Column(Integer, nullable=False, default=0)
     aberto = Column(Boolean, nullable=False, default=True)
+    # "Cheio" e "Aberto" são dois eixos (espelho da 080). `aberto` é a decisão
+    # da usuária; `cheio` é a ocupação — e antes desta coluna ele só existia
+    # derivado, o que fazia um grupo com 946/900 aparecer "Aberto" para sempre.
+    #
+    # NULL = sem override (vale a regra automática); TRUE/FALSE = a usuária
+    # sobrescreveu. Os dois casos reais que o override resolve: segurar um
+    # grupo ANTES de lotar, e destravar quando o WhatsApp não atualizou a
+    # contagem. Ver `cheio_efetivo` em campanha_grupos_service.
+    cheio_override = Column(Boolean, nullable=True)
     adicionado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -74,3 +90,28 @@ class CampanhaNumero(Base):
     instancia_id = Column(Integer, ForeignKey("whatsapp_instancias.id", ondelete="CASCADE"),
                           primary_key=True, index=True)
     adicionado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CampanhaSubId(Base):
+    """Sub IDs vinculados à CAMPANHA, à mão (espelho da 080).
+
+    Diferente do vínculo de Anúncios, que é 1:1 por invariante de dinheiro:
+    aqui a campanha aceita VÁRIOS. O total dos Resultados soma estes com os
+    sub_ids dos grupos da campanha — e a dedup é obrigatória, porque o mesmo
+    sub_id vinculado à mão E pertencente a um grupo contaria a comissão duas
+    vezes.
+
+    Sem UNIQUE global em `sub_id`: ele é texto livre, e um UNIQUE global faria
+    uma afiliada impedir a outra de usar "promo1". A regra de "um sub_id só
+    numa campanha" é validada no service, por usuária.
+    """
+
+    __tablename__ = "campanha_sub_ids"
+
+    campanha_id = Column(Integer, ForeignKey("campanhas.id", ondelete="CASCADE"),
+                         primary_key=True)
+    # NORMALIZADO (o mesmo `normalizar_sub_id` do KpiService): sem isso "WGEA"
+    # e "wgea" viram dois vínculos e a comissão entra em dobro.
+    sub_id = Column(String(120), primary_key=True)
+    vinculado_em = Column(DateTime(timezone=True), nullable=False,
+                          server_default=func.now())

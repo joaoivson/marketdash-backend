@@ -25,7 +25,7 @@ from app.models.campanha_link import (
     EVENTO_ENTRADA, ORIGEM_LINK, CampanhaLink, CampanhaLinkEvento, GrupoEvento,
 )
 from app.models.whatsapp_grupos import WhatsappGrupo
-from app.repositories.campanha_link_repository import teto_efetivo
+from app.repositories.campanha_link_repository import cheio_efetivo
 from app.services.admin_metrics_service import BRT, _brt_date
 from app.services.campanha_grupos_service import CampanhaGruposService
 from app.services.campanha_resultado_service import _intervalo_brt
@@ -53,15 +53,27 @@ class CampanhaVisaoGeralService:
         pares = servico.grupos_da_campanha(campanha)
         grupo_ids = [g.id for _v, g in pares]
 
-        # Fecha no último dia FECHADO em Brasília, igual a `presetRangeKeys` no
-        # frontend. Incluir o dia corrente poria um ponto pela metade na ponta
-        # do gráfico — que a afiliada lê como queda, não como dia em curso.
-        fim = _brt_date(datetime.now(BRT)) - timedelta(days=1)
+        # Inclui HOJE, e o último ponto vem marcado como parcial.
+        #
+        # A versão anterior fechava no último dia FECHADO em Brasília, para não
+        # pôr um ponto pela metade na ponta do gráfico. O preço foi maior que o
+        # benefício: campanha que começou hoje aparecia com Entradas e Saídas
+        # em ZERO enquanto o movimento acontecia — foi exatamente o que se viu
+        # em homologação, com 18 eventos gravados no dia e o gráfico reto.
+        # "Zero" e "ainda não fechou" são afirmações diferentes, e a primeira
+        # faz a afiliada concluir que o link não está funcionando.
+        #
+        # Diferente dos atalhos de período do resto do produto: ali se compara
+        # um dia com outro, e meio dia distorce; aqui a pergunta é "está
+        # entrando gente?", que sem o dia corrente não tem resposta.
+        hoje = _brt_date(datetime.now(BRT))
+        fim = hoje
         inicio = fim - timedelta(days=dias - 1)
         ini_utc, fim_utc = _intervalo_brt(inicio, fim)
 
         cliques = self._cliques(campanha.id, ini_utc, fim_utc)
-        entradas, saidas, serie = self._eventos(grupo_ids, ini_utc, fim_utc, inicio, fim)
+        entradas, saidas, serie = self._eventos(grupo_ids, ini_utc, fim_utc,
+                                                inicio, fim, hoje)
         entradas_do_link = self._entradas_do_link(grupo_ids, ini_utc, fim_utc)
 
         return {
@@ -108,14 +120,14 @@ class CampanhaVisaoGeralService:
         )
 
     def _eventos(self, grupo_ids: List[int], ini_utc, fim_utc,
-                 inicio: date, fim: date):
+                 inicio: date, fim: date, hoje: date):
         """Totais + a série diária de entradas × saídas, já em dia civil BRT."""
         serie = {
             (inicio + timedelta(days=i)).isoformat(): {"entradas": 0, "saidas": 0}
             for i in range((fim - inicio).days + 1)
         }
         if not grupo_ids:
-            return 0, 0, self._serie_ordenada(serie)
+            return 0, 0, self._serie_ordenada(serie, hoje)
 
         # Traz os timestamps e agrupa em Python: `cast(col, Date)` truncaria no
         # fuso da sessão do Postgres, não em BRT.
@@ -139,12 +151,22 @@ class CampanhaVisaoGeralService:
             balde = serie.get(dia.isoformat())
             if balde is not None:
                 balde[chave] += 1
-        return entradas, saidas, self._serie_ordenada(serie)
+        return entradas, saidas, self._serie_ordenada(serie, hoje)
 
     @staticmethod
-    def _serie_ordenada(serie: Dict[str, Dict[str, int]]) -> List[Dict]:
+    def _serie_ordenada(serie: Dict[str, Dict[str, int]], hoje: date) -> List[Dict]:
+        """
+        A série, com o dia corrente marcado `parcial`.
+
+        A marca existe para a tela poder desenhar o último ponto diferente: um
+        dia em curso ao lado de dias inteiros parece queda, e foi por medo
+        dessa leitura que o dia de hoje ficava de fora — o que era pior, porque
+        campanha nova aparecia inteira em zero.
+        """
+        chave_hoje = hoje.isoformat()
         return [
-            {"data": dia, "entradas": v["entradas"], "saidas": v["saidas"]}
+            {"data": dia, "entradas": v["entradas"], "saidas": v["saidas"],
+             "parcial": dia == chave_hoje}
             for dia, v in sorted(serie.items())
         ]
 
@@ -181,11 +203,13 @@ class CampanhaVisaoGeralService:
         ficou sem convite — e quem clicasse no link veria "vagas esgotadas"
         com o painel afirmando que estava tudo certo.
 
-        "Cheio" usa `teto_efetivo()`, a mesma expressão da rotação.
+        "Cheio" usa `cheio_efetivo()`, a mesma expressão da rotação — o que
+        inclui o override manual da usuária (080). Recalcular a lotação aqui
+        faria o painel contar "disponível" um grupo que ela segurou à mão.
         """
         linhas = (
             self.db.query(CampanhaGrupo.aberto,
-                          WhatsappGrupo.participantes >= teto_efetivo(),
+                          cheio_efetivo(),
                           WhatsappGrupo.ativo,
                           WhatsappGrupo.link_convite.isnot(None))
             .join(WhatsappGrupo, WhatsappGrupo.id == CampanhaGrupo.grupo_id)

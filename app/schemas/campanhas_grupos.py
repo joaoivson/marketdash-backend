@@ -47,12 +47,25 @@ class GrupoDaCampanhaItem(BaseModel):
     grupo_id: int
     posicao: int = 0
     aberto: bool = True
+    # Override de "cheio" (080). `None` = sem override, vale a ocupação.
+    # Precisa ser explicitamente enviado para ser gravado — quem manda a tupla
+    # sem ele não mexe no que já estava.
+    cheio_override: Optional[bool] = None
 
 
 class GrupoDaCampanhaOut(BaseModel):
     grupo_id: int
     posicao: int
+    # Decisão da usuária: participa da rotação de entrada?
     aberto: bool
+    # Estado EFETIVO de lotação — `cheio_override` quando existe, senão a
+    # ocupação contra o teto. É este que a tela mostra no select Sim/Não.
+    cheio: bool
+    # O override cru, para a tela saber se o valor é dela ou do sistema.
+    cheio_override: Optional[bool] = None
+    # Teto efetivo (o menor entre capacidade e limite da campanha) — a tela
+    # mostra "946/900" sem repetir a regra em JavaScript.
+    teto: int
     nome: Optional[str]
     participantes: int
     # Capacidade real do WhatsApp — a tela mostra ocupação (951/900) usando o
@@ -100,6 +113,9 @@ class PontoDaSerieOut(BaseModel):
     data: str
     entradas: int
     saidas: int
+    # O dia corrente ainda não fechou. A tela desenha esse ponto diferente
+    # (tracejado + rótulo) para não ser lido como queda.
+    parcial: bool = False
 
 
 class EstadoDosGruposOut(BaseModel):
@@ -184,11 +200,12 @@ class LinhaDeResultadoOut(BaseModel):
     cliques: int
     pedidos: int
     comissao_liquida: float
-    gasto_atribuido: float
-    lucro: float
-    # None quando não há participante: a métrica não existe, e 0,00 diria
-    # "cada pessoa rende zero", que é outra afirmação.
-    lucro_por_pessoa: Optional[float] = None
+    # Sem `gasto_atribuido`, `lucro` e `lucro_por_pessoa` (04/09). Os três
+    # dependiam de ratear o gasto da campanha entre os grupos, e não existe
+    # informação para essa divisão: o rateio caía em "partes iguais" sempre que
+    # ninguém entrava no período, ignorando tamanho, data de entrada e volume.
+    # Gasto, lucro e ROAS agora só existem no nível da CAMPANHA, em `totais`.
+    # A comissão por grupo continua real — vem do Sub ID do grupo, rastreada.
 
 
 class TotaisDeResultadoOut(BaseModel):
@@ -200,8 +217,12 @@ class TotaisDeResultadoOut(BaseModel):
     cliques: int
     pedidos: int
     comissao_liquida: float
+    # O investimento INTEIRO da campanha, uma vez — não a soma de um rateio.
     gasto_atribuido: float
     lucro: float
+    # None sem investimento: ROAS não existe, e 0.00x afirmaria que cada real
+    # gasto voltou zero.
+    roas: Optional[float] = None
     # None quando não há participante: a métrica não existe, e 0,00 diria
     # "cada pessoa rende zero", que é outra afirmação.
     lucro_por_pessoa: Optional[float] = None
@@ -251,3 +272,22 @@ class ResumoConsolidadoOut(BaseModel):
     leads: Optional[int] = None
     custo_por_entrada: Optional[float] = None
     por_campanha: List[ResumoDeCampanhaOut]
+
+
+# --- Sub IDs da campanha (080) ----------------------------------------------
+
+
+class SubIdVinculavelOut(BaseModel):
+    """Uma opção da lista de "Vincular Sub ID" da campanha de grupos."""
+
+    sub_id: str
+    pedidos: int
+    comissao_liquida: float
+    vinculado: bool
+    # Preenchido quando o Sub ID NÃO pode ser vinculado, com o motivo pronto
+    # para a tela ("já entra pelo grupo X", "vinculado ao anúncio Y").
+    bloqueado_por: Optional[str] = None
+
+
+class SubIdsDaCampanhaOut(BaseModel):
+    sub_ids: List[SubIdVinculavelOut]

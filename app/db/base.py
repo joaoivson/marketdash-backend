@@ -52,6 +52,13 @@ def _apply_safe_migrations(engine, logger):
         "ALTER TABLE grupo_eventos ADD COLUMN IF NOT EXISTS identificador VARCHAR(64)",
         "ALTER TABLE grupo_eventos ADD COLUMN IF NOT EXISTS "
         "identificador_tipo VARCHAR(12)",
+        # 080 (Cheio × Aberto): `campanha_grupos` já existe em todo ambiente e
+        # `create_all` NÃO adiciona coluna — sem isto, QUALQUER leitura de
+        # vínculo (a aba Grupos inteira, e o roteamento do /g) quebra se o
+        # deploy chegar antes da migration. As tabelas `grupo_participantes` e
+        # `campanha_sub_ids` são NOVAS: essas o create_all cria — e é por isso
+        # que a 080 precisa chegar antes, para nascerem com RLS.
+        "ALTER TABLE campanha_grupos ADD COLUMN IF NOT EXISTS cheio_override BOOLEAN",
     ]
     from sqlalchemy import text
     try:

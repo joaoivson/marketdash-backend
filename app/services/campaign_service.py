@@ -178,6 +178,7 @@ def _compute_metrics(
     ad_rate: float = 0.0,
     comm_rate: float = 0.0,
     reach: int = 0,
+    leads: Optional[int] = None,
 ) -> CampaignMetrics:
     """ad_rate/comm_rate são FRAÇÕES (ex.: 0.18). Sem imposto = 0 → líquido == bruto."""
     commission = comm.get("commission", 0.0)
@@ -207,6 +208,10 @@ def _compute_metrics(
         direct_orders=direct_orders,
         profit=round(profit, 2),
         roas=roas,
+        leads=leads,
+        # CPL sobre o gasto COM imposto, como todo custo unitário do produto.
+        # `None` sem lead reportado E sem lead algum: dividir por zero não é 0.
+        cpl=(round(spend_with_tax / leads, 2) if leads else None),
     )
 
 
@@ -232,9 +237,12 @@ class CampaignService:
         ad_rate: float = 0.0,
         comm_rate: float = 0.0,
         reach: int = 0,
+        leads: Optional[int] = None,
     ) -> CampaignResponse:
         linked = bool(campaign.sub_id)
-        metrics = _compute_metrics(spend, clicks, impressions, comm, ad_rate, comm_rate, reach)
+        metrics = _compute_metrics(
+            spend, clicks, impressions, comm, ad_rate, comm_rate, reach, leads
+        )
         return CampaignResponse(
             id=campaign.id,
             fb_campaign_id=campaign.fb_campaign_id,
@@ -302,11 +310,19 @@ class CampaignService:
         insights = self.repo.list_insights(user_id, start_date=start_date, end_date=end_date)
         spend_map: dict[int, dict] = {}
         for ins in insights:
-            agg = spend_map.setdefault(ins.campaign_id, {"spend": 0.0, "clicks": 0, "impressions": 0, "reach": 0})
+            agg = spend_map.setdefault(
+                ins.campaign_id,
+                {"spend": 0.0, "clicks": 0, "impressions": 0, "reach": 0, "leads": None},
+            )
             agg["spend"] += ins.spend or 0.0
             agg["clicks"] += ins.clicks or 0
             agg["impressions"] += ins.impressions or 0
             agg["reach"] += ins.reach or 0
+            # `+=` cru transformaria NULL em 0 e apagaria a distinção "sem
+            # pixel" × "ninguém virou lead". Só sai de None quando ALGUM dia
+            # reportou o número.
+            if ins.leads is not None:
+                agg["leads"] = (agg["leads"] or 0) + ins.leads
 
         # Comissões agregadas pelos sub_ids vinculados (mesmo recorte de período do gasto).
         linked_sub_ids = [c.sub_id for c in campaigns if c.sub_id]
@@ -314,7 +330,10 @@ class CampaignService:
 
         responses: List[CampaignResponse] = []
         for c in campaigns:
-            agg = spend_map.get(c.id, {"spend": 0.0, "clicks": 0, "impressions": 0, "reach": 0})
+            agg = spend_map.get(
+                c.id,
+                {"spend": 0.0, "clicks": 0, "impressions": 0, "reach": 0, "leads": None},
+            )
             comm = comm_map.get(c.sub_id, {}) if c.sub_id else {}
             # Só entram campanhas com movimentação no período: gasto, entrega (cliques/
             # impressões) ou venda atribuída ao sub_id vinculado. Remove as zeradas.
@@ -328,14 +347,26 @@ class CampaignService:
                 continue
             responses.append(
                 self._build_response(
-                    c, agg["spend"], agg["clicks"], agg["impressions"], comm, ad_rate, comm_rate, agg["reach"]
+                    c, agg["spend"], agg["clicks"], agg["impressions"], comm, ad_rate,
+                    comm_rate, agg["reach"], agg["leads"],
                 )
             )
 
         # Ordena por maior gasto no topo. Vínculo não afeta a ordem.
         responses.sort(key=lambda r: r.metrics.spend, reverse=True)
 
-        kpis = self._compute_kpis(responses, budget_now, active_count_now)
+        # Campanha de grupo NÃO tem comissão atribuída — o rastreio é o link de
+        # entrada, não o Sub ID. Deixar o gasto dela no Lucro e no ROAS Real
+        # afunda o número principal da tela com um prejuízo que não existe: em
+        # homologação eram R$1.223 de campanha de grupo dentro de um "Lucro
+        # −R$5.084,43" e de um "ROAS 0,41x".
+        #
+        # Sai o PAR (gasto E comissão), não só o gasto: tirar apenas o gasto de
+        # uma campanha que também tem Sub ID daria ROAS infinito.
+        from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
+
+        de_grupo = set(CampanhaAnuncioRepository(self.db).campanha_por_campaign(user_id))
+        kpis = self._compute_kpis(responses, budget_now, active_count_now, de_grupo)
         return CampaignListResponse(kpis=kpis, campaigns=responses, has_tax=has_tax)
 
     def sub_id_options(self, user_id: int, campaign_id: int) -> SubIdOptionsResponse:
@@ -362,21 +393,40 @@ class CampaignService:
         return SubIdOptionsResponse(options=options)
 
     def _compute_kpis(
-        self, responses: List[CampaignResponse], total_daily_budget: float, active_campaigns_count: int
+        self, responses: List[CampaignResponse], total_daily_budget: float,
+        active_campaigns_count: int, ids_de_grupo: Optional[set] = None,
     ) -> CampaignKPIs:
+        """
+        KPIs do topo.
+
+        **Gasto soma TUDO** — é o número que a afiliada confere contra o Meta, e
+        omitir parte dele faria a tela discordar da plataforma.
+
+        **Lucro e ROAS Real excluem campanha vinculada a grupo**, com gasto e
+        comissão juntos: essas campanhas não têm comissão atribuída por desenho
+        (o rastreio é o link de entrada), então o gasto delas entrava na conta
+        como prejuízo puro.
+        """
+        ids_de_grupo = ids_de_grupo or set()
+        atribuiveis = [r for r in responses if r.id not in ids_de_grupo]
+
         total_spend = sum(r.metrics.spend for r in responses)
         total_clicks = sum(r.metrics.clicks for r in responses)
         total_commission = sum(r.metrics.commission for r in responses)
         total_spend_with_tax = sum(r.metrics.spend_with_tax for r in responses)
         total_commission_net = sum(r.metrics.commission_net for r in responses)
+
+        gasto_atribuivel = sum(r.metrics.spend_with_tax for r in atribuiveis)
+        comissao_atribuivel = sum(r.metrics.commission_net for r in atribuiveis)
         return CampaignKPIs(
             avg_cpc=round(total_spend / total_clicks, 2) if total_clicks > 0 else None,
             total_spend=round(total_spend, 2),
             total_spend_with_tax=round(total_spend_with_tax, 2),
             total_commission=round(total_commission, 2),
             total_commission_net=round(total_commission_net, 2),
-            total_profit=round(total_commission_net - total_spend_with_tax, 2),
-            avg_roas=round(total_commission_net / total_spend_with_tax, 2) if total_spend_with_tax > 0 else 0.0,
+            total_profit=round(comissao_atribuivel - gasto_atribuivel, 2),
+            avg_roas=(round(comissao_atribuivel / gasto_atribuivel, 2)
+                      if gasto_atribuivel > 0 else 0.0),
             total_daily_budget=round(total_daily_budget, 2),
             active_campaigns_count=active_campaigns_count,
         )
@@ -438,6 +488,11 @@ class CampaignService:
                     roas=round(comm_net / spend_wt, 2) if spend_wt > 0 else 0.0,
                     clicks_shopee=clicks_shopee,
                     cpc_shopee=round(spend / clicks_shopee, 2) if clicks_shopee else None,
+                    leads=(ins.leads if ins else None),
+                    # `None` quando o dia não reportou lead: sem pixel, a
+                    # coluna mostra o estado explicativo, nunca 0.
+                    cpl=(round(spend_wt / ins.leads, 2)
+                         if ins and ins.leads else None),
                 )
             )
 
@@ -450,6 +505,10 @@ class CampaignService:
         sum_clicks = sum(p.clicks for p in daily)
         sum_impr = sum(p.impressions for p in daily)
         sum_reach = sum(i.reach or 0 for i in insights)
+        # `None` se NENHUM dia reportou — some() puro transformaria em 0 e
+        # apagaria a distinção "sem pixel" × "ninguém virou lead".
+        _leads = [p.leads for p in daily if p.leads is not None]
+        sum_leads = sum(_leads) if _leads else None
         metrics = CampaignMetrics(
             spend=sum_spend,
             spend_with_tax=sum_spend_wt,
@@ -465,6 +524,8 @@ class CampaignService:
             direct_orders=comm_period.get("direct_orders", 0),
             profit=round(sum_comm_net - sum_spend_wt, 2),
             roas=round(sum_comm_net / sum_spend_wt, 2) if sum_spend_wt > 0 else 0.0,
+            leads=sum_leads,
+            cpl=(round(sum_spend_wt / sum_leads, 2) if sum_leads else None),
         )
         linked = bool(campaign.sub_id)
         response = CampaignResponse(

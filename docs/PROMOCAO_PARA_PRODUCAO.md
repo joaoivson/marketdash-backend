@@ -514,8 +514,26 @@ homologação.
 >
 > ⚠️ **A `079` traz o bloqueio jurídico da §3.8** — não a aplique antes de a
 > política de privacidade estar publicada com o texto novo.
+>
+> ⚠️ **A `080` tem o MESMO bloqueio, e mais forte.** Ela cria
+> `grupo_participantes`, que passa a guardar a **lista de membros** dos grupos
+> que a afiliada ativou — e não só a contagem, como era até 04/09. É uma
+> inversão da decisão de LGPD anterior (`waha_client.listar_grupos` afirmava que
+> a lista "nunca é persistida"), e existe porque não há outro jeito de "exportar
+> quem está no grupo agora": o modelo antigo só sabia exportar EVENTOS de
+> entrada, e um grupo com 946 pessoas acumuladas em meses devolvia 8 linhas.
+>
+> O recorte é o mínimo que atende: **só grupo ativado**. Grupo que a afiliada
+> apenas tem no WhatsApp e nunca ligou continua sendo contagem e nada mais. O
+> texto novo já está em `PrivacyPolicy.tsx` — publique antes de aplicar.
+>
+> A `080` também é a que corrige o **telefone vazio na exportação**: as colunas
+> de `grupo_eventos` já existiam desde a 079, mas o webhook lia `JID` (que em
+> grupo com endereçamento LID **é** o `@lid`) antes de `PhoneNumber`. Em
+> homologação, 49 de 49 eventos nasceram `identificador_tipo='lid'`.
 | — | `077_remove_resumo_blacklist.sql` | **desagenda** `whatsapp-resumo-9am-brt` + DROP de 3 tabelas | **PENDENTE** | OK (03/09) |
 | — | `078_shopee_sync_por_usuario.sql` | função `trigger_shopee_sync_user` (só a função — agendamento é manual e diverge) | **PENDENTE** | **PENDENTE** |
+| 16 | `080_grupos_participantes_cheio_subids.sql` | `campanha_grupos.cheio_override` · `grupo_participantes` (lista de membros) · `campanha_sub_ids` | **PENDENTE** | OK (04/09) |
 
 > ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
 > **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,

@@ -28,7 +28,9 @@ from app.models.campanha_link import CampanhaLink
 from app.models.custom_link_event import CustomLinkEvent
 from app.models.dataset_row import DatasetRow
 from app.models.roteiro import MSG_ENVIADA, RoteiroMensagem
+from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
 from app.repositories.campanha_link_repository import CampanhaLinkRepository
+from app.repositories.campanha_sub_id_repository import CampanhaSubIdRepository
 from app.services.janela_envio_service import BRT
 from app.utils.order_status import STATUS_CANCELADO, STATUS_DO_KPI
 from app.services.kpi_service import KpiService, normalizar_sub_id
@@ -68,29 +70,40 @@ class CampanhaResultadoService:
             return {"linhas": [], "totais": self._totais_vazios()}
 
         grupo_ids = [g.id for g in grupos]
-        sub_ids = {g.sub_id for g in grupos if g.sub_id}
+        sub_ids_de_grupo = {normalizar_sub_id(g.sub_id) for g in grupos if g.sub_id}
+
+        # Sub IDs vinculados À MÃO à campanha (080): comissão que não passa por
+        # grupo rastreado. Entram no TOTAL, nunca numa linha de grupo — não há
+        # como saber a qual grupo pertencem, e inventar seria o mesmo erro do
+        # rateio que acabou de sair daqui.
+        manuais = {
+            normalizar_sub_id(s)
+            for s in CampanhaSubIdRepository(self.db).sub_ids(campanha.id)
+        }
+        # Dedup obrigatória: o mesmo sub_id vinculado à mão E pertencente a um
+        # grupo somaria a comissão DUAS vezes.
+        manuais -= sub_ids_de_grupo
 
         ini_utc, fim_utc = _intervalo_brt(inicio, fim)
         eventos = self.repo_link.eventos_por_grupo(grupo_ids, ini_utc, fim_utc)
         mensagens = self._mensagens_por_grupo(user_id, grupo_ids, inicio, fim)
         cliques = self._cliques_por_grupo(grupos, inicio, fim)
-        comissao = self._comissao_por_sub_id(user_id, sub_ids, inicio, fim)
-        gasto_por_grupo = self._gasto_atribuido(user_id, campanha, grupo_ids, eventos,
-                                                inicio, fim)
+        # UMA consulta para os dois conjuntos: separar em duas faria a mesma
+        # varredura de dataset_rows duas vezes.
+        comissao = self._comissao_por_sub_id(
+            user_id, sub_ids_de_grupo | manuais, inicio, fim
+        )
 
         linhas = []
         for g in grupos:
             ev = eventos.get(g.id, {})
             dados_comissao = comissao.get(normalizar_sub_id(g.sub_id), {})
             liquida = dados_comissao.get("comissao_liquida", 0.0)
-            gasto = gasto_por_grupo.get(g.id, 0.0)
-            participantes = g.participantes or 0
-            lucro = _duas_casas(liquida - gasto)
             linhas.append({
                 "grupo_id": g.id,
                 "grupo": g.nome,
                 "sub_id": g.sub_id,
-                "participantes": participantes,
+                "participantes": g.participantes or 0,
                 "entradas": ev.get("entradas", 0),
                 "saidas": ev.get("saidas", 0),
                 "ficaram": ev.get("ficaram", 0),
@@ -101,18 +114,26 @@ class CampanhaResultadoService:
                 "cliques": cliques.get(g.id, 0),
                 "pedidos": dados_comissao.get("pedidos", 0),
                 "comissao_liquida": _duas_casas(liquida),
-                "gasto_atribuido": _duas_casas(gasto),
-                "lucro": lucro,
-                # A métrica que decide o investimento. Sem participante ela NÃO
-                # existe — e 0,00 seria uma afirmação diferente ("cada pessoa
-                # rende zero"), que é o mesmo colapso null-vs-zero que o resto
-                # do módulo evita em `leads` e `cpl`.
-                "lucro_por_pessoa": (_duas_casas(lucro / participantes)
-                                     if participantes else None),
             })
 
-        linhas.sort(key=lambda l: l["lucro"], reverse=True)
-        return {"linhas": linhas, "totais": self._totais(linhas)}
+        # Ordena por COMISSÃO. Ordenava por `lucro`, que era comissão menos um
+        # gasto rateado — ou seja, a ordem da tabela dependia de um número
+        # inventado.
+        linhas.sort(key=lambda l: l["comissao_liquida"], reverse=True)
+
+        comissao_manual = _duas_casas(sum(
+            comissao.get(s, {}).get("comissao_liquida", 0.0) for s in manuais
+        ))
+        pedidos_manuais = sum(
+            comissao.get(s, {}).get("pedidos", 0) for s in manuais
+        )
+        gasto = CampanhaAnuncioRepository(self.db).gasto_com_imposto(
+            user_id, campanha.id, inicio, fim
+        )
+        return {
+            "linhas": linhas,
+            "totais": self._totais(linhas, comissao_manual, pedidos_manuais, gasto),
+        }
 
     # --- fontes -------------------------------------------------------------
 
@@ -193,47 +214,85 @@ class CampanhaResultadoService:
             bucket["comissao_liquida"] = bucket["comissao_bruta"] * (1 - comm_rate)
         return resultado
 
-    def _gasto_atribuido(self, user_id: int, campanha, grupo_ids: List[int],
-                         eventos: Dict, inicio: date, fim: date) -> Dict[int, float]:
-        """
-        Gasto dos anúncios vinculados, rateado por ENTRADAS do período.
-
-        O rateio é explícito e a tela diz de onde vem: sem isso, o "lucro por
-        grupo" seria comissão pura e a afiliada tomaria decisão de
-        investimento ignorando o que pagou para encher o grupo.
-        """
-        from app.repositories.campanha_anuncio_repository import CampanhaAnuncioRepository
-
-        gasto_total = CampanhaAnuncioRepository(self.db).gasto_com_imposto(
-            user_id, campanha.id, inicio, fim
-        )
-        if not gasto_total:
-            return {}
-        entradas = {gid: (eventos.get(gid, {}).get("entradas", 0)) for gid in grupo_ids}
-        soma = sum(entradas.values())
-        if not soma:
-            # Sem entrada no período, ratear igualmente é menos errado do que
-            # jogar tudo no primeiro grupo.
-            return {gid: gasto_total / len(grupo_ids) for gid in grupo_ids}
-        return {gid: gasto_total * (n / soma) for gid, n in entradas.items()}
-
     # --- totais -------------------------------------------------------------
 
     def _totais_vazios(self) -> Dict:
         return {"participantes": 0, "entradas": 0, "saidas": 0, "ficaram": 0,
                 "mensagens": 0, "cliques": 0, "pedidos": 0,
                 "comissao_liquida": 0.0, "gasto_atribuido": 0.0, "lucro": 0.0,
-                "lucro_por_pessoa": None}
+                "roas": None, "lucro_por_pessoa": None}
 
-    def _totais(self, linhas: List[Dict]) -> Dict:
+    def _totais(self, linhas: List[Dict], comissao_manual: float = 0.0,
+                pedidos_manuais: int = 0, gasto: float = 0.0) -> Dict:
+        """
+        Totais da CAMPANHA — o único nível em que gasto, lucro e ROAS existem.
+
+        **Não é a soma de um rateio.** O gasto entra INTEIRO, uma vez, como o
+        `/resumo` do Dashboard já fazia. A versão anterior somava as parcelas
+        rateadas por grupo, e como o rateio dividia igualmente quando ninguém
+        entrava no período, o "lucro por pessoa" de destaque saía de uma
+        divisão arbitrária — foi o que produziu −R$0,65 e −R$0,92 lado a lado
+        para dois grupos de tamanhos completamente diferentes.
+
+        `comissao_manual` são os Sub IDs vinculados à campanha (080), que não
+        têm linha de grupo e por isso só existem aqui.
+        """
         t = self._totais_vazios()
         for l in linhas:
             for chave in ("participantes", "entradas", "saidas", "ficaram",
                           "mensagens", "cliques", "pedidos"):
                 t[chave] += l[chave]
-            for chave in ("comissao_liquida", "gasto_atribuido", "lucro"):
-                t[chave] = _duas_casas(t[chave] + l[chave])
+            t["comissao_liquida"] = _duas_casas(
+                t["comissao_liquida"] + l["comissao_liquida"]
+            )
+        t["comissao_liquida"] = _duas_casas(t["comissao_liquida"] + comissao_manual)
+        t["pedidos"] += pedidos_manuais
+        t["gasto_atribuido"] = _duas_casas(gasto)
+        t["lucro"] = _duas_casas(t["comissao_liquida"] - t["gasto_atribuido"])
+        # ROAS Real com a mesma fórmula do resto do produto: comissão LÍQUIDA
+        # sobre gasto COM imposto. Sem investimento não existe ROAS — `None`,
+        # nunca 0,00, que afirmaria "cada real gasto voltou zero".
+        t["roas"] = (_duas_casas(t["comissao_liquida"] / t["gasto_atribuido"])
+                     if t["gasto_atribuido"] else None)
         t["lucro_por_pessoa"] = (
             _duas_casas(t["lucro"] / t["participantes"]) if t["participantes"] else None
         )
         return t
+
+    # --- Sub IDs vinculáveis (080) -------------------------------------------
+
+    def sub_ids_disponiveis(self, user_id: int, inicio: date,
+                            fim: date) -> Dict[str, Dict]:
+        """
+        Todo Sub ID que teve venda no período, com pedidos e comissão líquida.
+
+        É o mesmo recorte de `_comissao_por_sub_id` — allowlist de status e a
+        fórmula do KpiService — só que sem alvo: aqui a pergunta é "quais
+        existem?", não "quanto trouxe este conjunto".
+        """
+        _ad_rate, comm_rate = KpiService(self.db).taxas(user_id)
+        linhas = (
+            self.db.query(DatasetRow.sub_id1, DatasetRow.order_id,
+                          DatasetRow.commission, DatasetRow.status)
+            .filter(DatasetRow.user_id == user_id,
+                    DatasetRow.date >= inicio, DatasetRow.date <= fim,
+                    DatasetRow.sub_id1.isnot(None),
+                    func.lower(func.coalesce(DatasetRow.status, "")).in_(STATUS_DO_KPI))
+            .all()
+        )
+        saida: Dict[str, Dict] = {}
+        pedidos: Dict[str, set] = {}
+        for sub_id1, order_id, comissao, status in linhas:
+            chave = normalizar_sub_id(sub_id1)
+            if not chave:
+                continue
+            bucket = saida.setdefault(chave, {"comissao_bruta": 0.0, "pedidos": 0})
+            bucket["comissao_bruta"] += float(comissao or 0.0)
+            if order_id and str(status or "").lower() not in STATUS_CANCELADO:
+                pedidos.setdefault(chave, set()).add(order_id)
+        for chave, bucket in saida.items():
+            bucket["pedidos"] = len(pedidos.get(chave, ()))
+            bucket["comissao_liquida"] = _duas_casas(
+                bucket["comissao_bruta"] * (1 - comm_rate)
+            )
+        return saida

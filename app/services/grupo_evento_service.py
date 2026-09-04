@@ -92,18 +92,21 @@ def identificador(jid: str) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def classificar(jid: str) -> tuple[str, str]:
+def classificar(jid: str, telefone: Optional[str] = None) -> tuple[str, str]:
     """
-    Identificador cru + o tipo dele.
+    Identificador a GRAVAR + o tipo dele.
 
     O WhatsApp entrega `@lid` no lugar do telefone quando a pessoa tem
-    privacidade ativa — o webhook já trata isso no fallback
-    `id|JID|PhoneNumber|LID`. LID é opaco: NÃO é telefone e não pode ser
-    exportado como se fosse, senão a "lista de leads" vira uma coluna de
-    números que não discam. Guardar o tipo aqui evita adivinhar pelo sufixo a
-    cada leitura.
+    privacidade ativa. LID é opaco: NÃO é telefone e não pode ser exportado
+    como se fosse, senão a "lista de leads" vira uma coluna de números que não
+    discam. Guardar o tipo aqui evita adivinhar pelo sufixo a cada leitura.
+
+    `telefone` vem do campo SEPARADO do payload (`PhoneNumber`), que em grupo
+    LID chega ao lado do `@lid`. Quando ele existe, é ele que vai para a
+    coluna — adivinhar pelo sufixo do JID era o que fazia 100% dos eventos
+    nascerem 'lid' mesmo com o número disponível no mesmo payload.
     """
-    limpo = (jid or "").strip()
+    limpo = (telefone or jid or "").strip()
     tipo = TIPO_LID if limpo.lower().endswith("@lid") else TIPO_TELEFONE
     return limpo[:64], tipo
 
@@ -115,11 +118,23 @@ class GrupoEventoService:
         self.repo_grupos = WhatsappGrupoRepository(db)
 
     def registrar(self, user_id: int, jid_grupo: str, acao: str,
-                  jids_participantes: List[str]) -> int:
-        """Processa um evento de participantes. Devolve quantos foram gravados."""
+                  jids_participantes: List) -> int:
+        """
+        Processa um evento de participantes. Devolve quantos foram gravados.
+
+        `jids_participantes` aceita duas formas: a string do JID (chamador
+        antigo e testes) ou o par `(identidade, telefone)` que o webhook passa
+        desde a correção do telefone — a identidade continua sendo o que vira
+        hash, e o telefone é o que vai para a coluna exportável.
+        """
         tipo = ACOES.get((acao or "").lower())
         if not tipo or not jids_participantes:
             return 0   # promote/demote não são entrada nem saída
+
+        pares = [
+            (p, None) if isinstance(p, str) else (p[0], p[1] if len(p) > 1 else None)
+            for p in jids_participantes
+        ]
 
         grupo = self.repo_grupos.por_jid(user_id, jid_grupo)
         if not grupo:
@@ -138,7 +153,7 @@ class GrupoEventoService:
         )
 
         gravados = 0
-        for jid in jids_participantes:
+        for jid, telefone in pares:
             if not jid:
                 continue
             if tipo == EVENTO_ENTRADA:
@@ -147,7 +162,7 @@ class GrupoEventoService:
             else:
                 origem = ORIGEM_DESCONHECIDA
                 link_evento_id = None
-            cru, tipo_id = classificar(jid)
+            cru, tipo_id = classificar(jid, telefone)
             self.repo.registrar_evento_de_grupo(
                 grupo.id, tipo, origem, identificador(jid), link_evento_id,
                 identificador=cru, identificador_tipo=tipo_id,

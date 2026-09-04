@@ -171,7 +171,7 @@ def link_de_entrada(slug: str, request: Request, db: Session = Depends(get_db)):
     from html import escape
 
     from app.services.campanha_link_service import (
-        CampanhaLinkService, LinkInvalido, SemVaga,
+        CampanhaEncerrada, CampanhaLinkService, LinkInvalido, SemVaga,
     )
 
     is_preview = request.url.path.startswith("/g/preview/")
@@ -191,6 +191,14 @@ def link_de_entrada(slug: str, request: Request, db: Session = Depends(get_db)):
             "Vagas esgotadas",
             "Todos os grupos estão cheios no momento. Tente de novo mais tarde.",
         ))
+    except CampanhaEncerrada:
+        # 200, não 404: o anúncio que aponta para cá continua veiculando por
+        # dias depois da exclusão, e um 404 faz o Meta tratar o destino como
+        # quebrado além de mostrar tela de erro a quem clicou.
+        return HTMLResponse(status_code=200, content=_pagina_simples(
+            "Campanha encerrada",
+            "Esta campanha foi encerrada e não está mais recebendo participantes.",
+        ))
     except LinkInvalido:
         return HTMLResponse(status_code=404, content=_pagina_simples(
             "Link indisponível", "Este link não está mais ativo."
@@ -202,15 +210,15 @@ def link_de_entrada(slug: str, request: Request, db: Session = Depends(get_db)):
     imagem = escape(previa["imagem"] or "", quote=True)
     destino = escape(convite, quote=True)
 
-    eventos = link.pixel_eventos or {}
+    # PageView e Lead disparam SEMPRE (04/09). Os dois toggles saíram da tela:
+    # quem configurou um pixel quer os dois eventos, e desligar o Lead quebra o
+    # CPL — a métrica principal de campanha de grupo — sem nenhum aviso.
+    # A coluna `pixel_eventos` continua no banco, mas deixou de ser lida: linha
+    # antiga gravada com `false` não pode continuar apagando o evento.
     pixel_js = ""
     if link.pixel_facebook_id:
         pixel_id = escape(link.pixel_facebook_id, quote=True)
-        disparos = []
-        if eventos.get("pageview", True):
-            disparos.append("fbq('track','PageView');")
-        if eventos.get("lead", True):
-            disparos.append("fbq('track','Lead');")
+        disparos = ["fbq('track','PageView');", "fbq('track','Lead');"]
         pixel_js = f"""<script>
 !function(f,b,e,v,n,t,s){{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
 n.callMethod.apply(n,arguments):n.queue.push(arguments)}};if(!f._fbq)f._fbq=n;

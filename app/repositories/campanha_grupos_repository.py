@@ -5,7 +5,9 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.campanha_grupos import CAMPANHA_ARQUIVADA, Campanha, CampanhaGrupo
+from app.models.campanha_grupos import (
+    CAMPANHA_ARQUIVADA, CAMPANHA_ENCERRADA, Campanha, CampanhaGrupo,
+)
 
 
 class CampanhaGruposRepository:
@@ -13,15 +15,23 @@ class CampanhaGruposRepository:
         self.db = db
 
     def por_usuario(self, user_id: int, incluir_arquivadas: bool = False) -> List[Campanha]:
-        q = self.db.query(Campanha).filter(Campanha.user_id == user_id)
+        """Campanhas da usuária. `encerrada` NUNCA volta — é terminal."""
+        q = (
+            self.db.query(Campanha)
+            .filter(Campanha.user_id == user_id,
+                    Campanha.status != CAMPANHA_ENCERRADA)
+        )
         if not incluir_arquivadas:
             q = q.filter(Campanha.status != CAMPANHA_ARQUIVADA)
         return q.order_by(Campanha.criado_em.desc()).all()
 
     def por_id(self, user_id: int, campanha_id: int) -> Optional[Campanha]:
+        """Ownership embutida. Encerrada devolve None — vira 404, como deve:
+        a campanha excluída não abre mais, só o `/g/{slug}` dela responde."""
         return (
             self.db.query(Campanha)
-            .filter(Campanha.id == campanha_id, Campanha.user_id == user_id)
+            .filter(Campanha.id == campanha_id, Campanha.user_id == user_id,
+                    Campanha.status != CAMPANHA_ENCERRADA)
             .first()
         )
 
@@ -45,9 +55,11 @@ class CampanhaGruposRepository:
         )
 
     def total_ativas(self, user_id: int) -> int:
+        """Denominador do limite do plano — encerrada não ocupa vaga."""
         return (
             self.db.query(func.count(Campanha.id))
-            .filter(Campanha.user_id == user_id, Campanha.status != CAMPANHA_ARQUIVADA)
+            .filter(Campanha.user_id == user_id,
+                    Campanha.status.notin_((CAMPANHA_ARQUIVADA, CAMPANHA_ENCERRADA)))
             .scalar()
         ) or 0
 
@@ -56,24 +68,28 @@ class CampanhaGruposRepository:
         self.db.flush()
         return campanha
 
-    def substituir_vinculos(self, campanha_id: int,
-                            itens: List[Tuple[int, int, bool]]) -> None:
-        """Substitui o conjunto de vínculos: itens = [(grupo_id, posicao, aberto)].
+    def substituir_vinculos(self, campanha_id: int, itens: List[Tuple]) -> None:
+        """Substitui o conjunto: itens = [(grupo_id, posicao, aberto[, cheio_override])].
 
         Upsert + remoção dos ausentes em memória (o conjunto é pequeno — dezenas
         de grupos por campanha), numa transação só; o commit é de quem chamou.
         """
         atuais = {v.grupo_id: v for v in self.vinculos(campanha_id)}
-        desejados = {grupo_id for grupo_id, _, _ in itens}
-        for grupo_id, posicao, aberto in itens:
+        desejados = {item[0] for item in itens}
+        for grupo_id, posicao, aberto, *resto in itens:
+            # `cheio_override` é o 4º elemento e é OPCIONAL: chamador antigo
+            # (e teste) manda a tupla de 3 e não mexe no override.
             vinculo = atuais.get(grupo_id)
             if vinculo:
                 vinculo.posicao = posicao
                 vinculo.aberto = aberto
+                if resto:
+                    vinculo.cheio_override = resto[0]
             else:
                 self.db.add(CampanhaGrupo(
                     campanha_id=campanha_id, grupo_id=grupo_id,
                     posicao=posicao, aberto=aberto,
+                    cheio_override=(resto[0] if resto else None),
                 ))
         for grupo_id, vinculo in atuais.items():
             if grupo_id not in desejados:

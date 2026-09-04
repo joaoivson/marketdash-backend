@@ -11,6 +11,170 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-04b (Campanhas de grupos e Anúncios: segunda rodada do documento delta)
+
+Segundo documento delta, depois de testar a rodada anterior na tela. Cross-stack,
+**com migration 080**. Cinco itens do documento não se confirmaram contra o
+código — estão registrados abaixo porque a investigação vale mais do que a
+correção que não era necessária.
+
+### O bloqueador: o telefone estava sendo lido do campo errado
+
+A exportação saía com `telefone` vazio em 8 de 8 linhas. A cadeia
+`service → repository → model` estava **correta** e gravando; o defeito era uma
+linha acima, no webhook (`app/api/v1/routes/whatsapp.py`):
+
+```python
+campo(p, "id", "JID", "PhoneNumber", "LID")   # JID vem ANTES de PhoneNumber
+```
+
+`campo()` devolve o primeiro nome presente. Em grupo com endereçamento LID o
+`JID` **é** `…@lid` e o telefone chega em `PhoneNumber`, ao lado — o próprio
+repo documenta isso em `whatsapp_grupo_sync_service._identidades`. Então o LID
+sempre ganhava. Medido no banco de homologação: dos 49 eventos gravados depois
+do deploy da 079, **49 eram `lid` e zero eram `telefone`**.
+
+O webhook passa a ler os dois como campos **separados**. A identidade continua
+com a mesma precedência de antes — é ela que vira `identificador_hash`, e trocá-la
+invalidaria o pareamento entrada↔saída de todos os eventos já gravados.
+
+Nenhum teste cobria o caso real: os três parametrizados assumiam formas
+**mutuamente exclusivas** (`{id}`, `{JID}`, `{PhoneNumber}`), nunca
+`{JID: "…@lid", PhoneNumber: "…"}` juntos. É esse buraco que deixou passar.
+
+### Exportar leads passa a ser "quem está no grupo agora"
+
+Era eventos de entrada dos últimos 30 dias — por isso um grupo com 946 pessoas
+acumuladas em meses exportava 8 linhas. A fonte agora é `grupo_participantes`
+(080), que o sync mantém com a lista atual de membros.
+
+⚠️ **Inverte a decisão de LGPD de 03/09.** `waha_client.listar_grupos` afirmava
+que a lista de membros "nunca é persistida". Não há outro caminho para a
+funcionalidade pedida — o recorte é o mínimo que atende: **só grupo ativado**.
+A `PrivacyPolicy.tsx` já foi atualizada; publicar antes de aplicar a 080.
+
+Colunas: `telefone · grupo · data_entrada`, sem filtro de período. A data vem do
+evento de entrada quando existe e, na falta dele, de quando o sync viu a pessoa
+aparecer **depois** de já estar acompanhando o grupo. Quem já estava lá no
+primeiro sync sai sem data — inventar uma seria pior.
+
+### "Cheio" e "Aberto" viram dois eixos
+
+`campanha_grupos.cheio_override` (nullable: `NULL` = automático). `aberto` volta
+a ser só a decisão da afiliada; quem tira da rotação é `cheio`.
+
+A rotação **sempre** respeitou o limite (`TETO_SQL`, com teste dedicado). O que
+não existia era o grupo ser MARCADO: `aberto` só virava `false` no ramo em que a
+campanha inteira esgotava, e só com `reabertura_automatica=false` — cujo default
+é `true`. Resultado na tela: 946/900 aparecendo "Aberto" para sempre. A varredura
+de esgotamento passa a gravar `cheio_override` em vez de desfazer o `aberto` da
+usuária.
+
+### O rateio de gasto por grupo foi removido
+
+`_gasto_atribuido` distribuía o gasto da campanha entre os grupos — proporcional
+às entradas do período e, quando **ninguém entrava**, em partes iguais. Foi como
+R$1.223,05 virou R$611,52 em dois grupos de tamanhos completamente diferentes, e
+produziu "Lucro por pessoa −R$0,65 / −R$0,92" — justamente a métrica de destaque
+do módulo.
+
+Gasto, lucro, ROAS e lucro por pessoa agora só existem no nível da **campanha**,
+com o investimento inteiro entrando uma vez (o mesmo que `/resumo` já fazia). A
+comissão por grupo continua na linha: essa é real, vem do Sub ID do grupo.
+
+### Sub IDs vinculados à campanha
+
+Tabela `campanha_sub_ids` (N por campanha, contra 1:1 de Anúncios). Bloqueia o
+que já entra por outro caminho — Sub ID de grupo da campanha, de campanha de
+tráfego direto, ou de outra campanha de grupos — e a soma deduplica, porque a
+mesma comissão em duas pontas é o problema que a regra existe para evitar.
+
+### Tela de Anúncios: campanha de grupo não tem comissão
+
+Campanha vinculada a grupo é rastreada pelo link de entrada, não pelo Sub ID.
+Ela entrava em "Lucro −R$5.084,43" e "ROAS 0.41x" como prejuízo puro.
+
+- **Gasto continua somando tudo** — é o número conferido contra o Meta.
+- **Lucro e ROAS Real excluem o PAR** (gasto *e* comissão) dessas campanhas: só
+  o gasto sairia e o ROAS de uma campanha com Sub ID viraria infinito.
+- Card e dia a dia ganham conjunto próprio: `Gasto · Leads · CPL · CPC · CTR` e
+  `Data · Gasto · Impressões · Cliques · CTR · CPC · Leads · CPL`. Sem o bloco
+  "Anúncios × Shopee", que depende do Sub ID.
+- `leads`/`cpl` entram em `CampaignMetrics` e `CampaignDailyPoint`. `None` ≠ `0`:
+  soma com `+=` cru apagaria a distinção "sem pixel" × "ninguém virou lead".
+- Somem o aviso "não vinculada" e o botão "Vincular ao Sub ID" quando há grupo.
+- Os alertas do topo ("sem vínculo", "ROAS abaixo de 1") passam a ignorá-las —
+  contagem e filtro com o **mesmo** predicado, senão o banner diz "3" e a lista
+  mostra 5.
+
+### "Onde seu anúncio está rodando" foi removido
+
+Mostrava ROAS 9,25x no Instagram enquanto o KPI do topo da mesma tela mostrava
+0,41x. Não era problema de ambiente: o card mede ROAS como faturamento/gasto — a
+fórmula que o "ROAS Real" abandonou de propósito — e ignora os dois impostos.
+Estava atrás de `!isProductionHost()`, o que só adiava; já tinha subido para
+produção uma vez.
+
+### Visão geral: a janela excluía o dia de hoje
+
+O gráfico fechava no último dia FECHADO em Brasília. Campanha que começou hoje
+aparecia com Entradas e Saídas em **zero** com movimento acontecendo — foi
+exatamente o caso reportado: 18 eventos gravados no dia, gráfico reto. Confirmado
+no banco: 100% dos eventos da campanha eram de 04/09.
+
+Hoje entra, e o último ponto vem marcado `parcial` — a tela rotula "· hoje" para
+o dia em curso não ser lido como queda.
+
+### Excluir e duplicar campanha
+
+**Excluir** é soft-delete (`status = encerrada`). Hard-delete levaria
+`campanha_links` no CASCADE, o slug deixaria de existir e `/g/{slug}` só poderia
+responder 404 — enquanto o anúncio já veiculando continua mandando tráfego por
+dias. Agora responde **200** com "campanha encerrada". O `excluir()` também
+cancela as execuções de roteiro pendentes (não há revoke de Celery no módulo: o
+cancelamento é por estado) e desliga monitoramentos que apontavam para ela — o FK
+é `SET NULL` e eles continuariam capturando e replicando para lugar nenhum.
+
+**Duplicar** copia configuração, prévia, pixel e números; **não** copia grupos,
+anúncios nem Sub IDs. Os dois últimos são invariantes de dinheiro:
+`campanha_anuncios.campaign_id` tem UNIQUE global, e copiar levantaria
+IntegrityError — se não levantasse, contaria o mesmo gasto duas vezes.
+
+### Resto da rodada
+
+- **Configurações vira aba** (era o único elemento de navegação da campanha fora
+  da barra de abas). Nome, duplicar e excluir foram para a listagem; "Link ativo"
+  veio da aba Link. Os dois switches de abertura ganharam descrição.
+- **Listagem**: "Enviar oferta" removido (envio rápido é roteiro de um passo e
+  pertence à campanha), menu de três pontinhos, e o contador de grupos corrigido.
+- **Aba Grupos**: coluna "Envio" removida, filtros Todos/Cheios/Não cheios,
+  seleção em lote e o teto vindo pronto do backend.
+- **Números**: o 409 passa a reverter a seleção — a tela ficava com o checkbox
+  desmarcado, "Alterações não salvas" aceso e "1 grupo nesta campanha" embaixo,
+  que se lê como "o bloqueio não funcionou".
+- **Link de entrada**: três blocos, prévia colapsada e vazia por padrão (o link
+  vai em anúncio, onde o Meta usa a criativa dele), preview dentro do mesmo card.
+  Toggles PageView/Lead removidos — **backend e frontend**: só apagar os toggles
+  deixaria linha antiga com `false` apagando o Lead em silêncio.
+- **Checkbox quadrado** (`CheckboxQuadrado`): `--radius: 0.75rem` + `rounded-sm`
+  numa caixa de 16px dá raio igual a metade do lado — um círculo. O controle
+  sempre foi checkbox; o que enganava era a borda. Aplicado ao módulo de grupos;
+  os demais usos do app continuam redondos.
+- **Byte NUL** literal dentro de `assinatura()` em `LinkDeEntradaDaCampanha.tsx`
+  (`].join("\0")`), que fazia o `grep` tratar o arquivo como binário e suprimir
+  a saída sem erro — quem investigasse o componente o veria vazio.
+
+### O que o documento supunha e o código contradisse
+
+| Documento | Código |
+|---|---|
+| `/g/{slug}` retorna 404 | Funciona em hml. Em produção o módulo **inteiro** é develop-only (nem a rota, nem o `location /g/` do nginx) — e o "404" é HTTP **200** servindo o SPA |
+| Contador de grupos lê fonte diferente | As duas fontes concordam. Era cache do Zustand (`loaded && !force`) — corrigido com SWR |
+| Bloqueio de remoção de número não implementado | Implementado desde a 079, com testes. O sintoma era o frontend não reverter após o 409 |
+| Modal "Adicionar grupos" com radio | Já era `<Checkbox>` multi-select. O defeito é o raio da borda, e é global |
+| Prévia é "card verde flutuante" | Já era bolha de WhatsApp; o problema era ela morar numa coluna sticky separada |
+| Rateio dividiu igualmente entre 2 grupos | Só quando **ninguém** entra no período; com entradas é proporcional. O defeito é o mesmo, mas são dois caminhos |
+
 ## [Não versionado] - 2026-09-04 (Campanhas de grupos: rodada de correções do documento delta)
 
 Documento delta do Luiz sobre Visão geral, Números, Grupos e Anúncios, depois de

@@ -23,7 +23,9 @@ from typing import Dict, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.models.campanha_grupos import ESTRATEGIA_ALEATORIA, Campanha
+from app.models.campanha_grupos import (
+    CAMPANHA_ARQUIVADA, CAMPANHA_ENCERRADA, ESTRATEGIA_ALEATORIA, Campanha,
+)
 from app.models.campanha_link import CampanhaLink
 from app.repositories.campanha_link_repository import CampanhaLinkRepository
 from app.utils.bot_detection import is_bot
@@ -40,6 +42,16 @@ class LinkInvalido(Exception):
 
 class SemVaga(Exception):
     """Todos os grupos lotados/fechados — a página diz "vagas esgotadas"."""
+
+
+class CampanhaEncerrada(Exception):
+    """A campanha foi excluída — a página diz isso, com 200.
+
+    NÃO é `LinkInvalido`. O anúncio que aponta para este link continua
+    veiculando por dias depois da exclusão, e devolver 404 para esse tráfego
+    é o pior desfecho: o Meta passa a tratar o destino como quebrado e a
+    pessoa vê uma tela de erro em vez de uma explicação.
+    """
 
 
 def _hash_ip(ip: Optional[str], user_agent: Optional[str]) -> Optional[str]:
@@ -76,11 +88,10 @@ class CampanhaLinkService:
         if "pixel_facebook_id" in mudancas:
             pixel = (str(mudancas["pixel_facebook_id"] or "").strip())[:32]
             link.pixel_facebook_id = pixel or None
-        if isinstance(mudancas.get("pixel_eventos"), dict):
-            link.pixel_eventos = {
-                "pageview": bool(mudancas["pixel_eventos"].get("pageview", True)),
-                "lead": bool(mudancas["pixel_eventos"].get("lead", True)),
-            }
+        # `pixel_eventos` deixou de ser configurável (04/09): PageView e Lead
+        # disparam sempre. Ignorar o campo aqui — em vez de só tirar os toggles
+        # da tela — impede que um cliente antigo continue gravando `false` numa
+        # coluna que ninguém mais lê.
         if isinstance(mudancas.get("ativo"), bool):
             link.ativo = mudancas["ativo"]
         link.atualizado_em = datetime.now(timezone.utc)
@@ -98,7 +109,9 @@ class CampanhaLinkService:
         if not link or not link.ativo:
             raise LinkInvalido("Link não encontrado.")
         campanha = self.repo.campanha_do_link(link)
-        if not campanha or campanha.status == "arquivada":
+        if campanha is not None and campanha.status == CAMPANHA_ENCERRADA:
+            raise CampanhaEncerrada()
+        if not campanha or campanha.status == CAMPANHA_ARQUIVADA:
             raise LinkInvalido("Campanha indisponível.")
 
         aleatorio = campanha.estrategia_entrada == ESTRATEGIA_ALEATORIA
@@ -116,10 +129,19 @@ class CampanhaLinkService:
                 escolha = self.repo.escolher_grupo(campanha.id, aleatorio)
 
         if escolha is None:
-            # Fecha os que lotaram para a próxima visita não pagar a varredura.
-            for vinculo in self.repo.lotados_abertos(campanha.id):
-                if not campanha.reabertura_automatica:
-                    vinculo.aberto = False
+            # PRENDE os lotados como cheios — não fecha o `aberto` deles.
+            #
+            # `aberto` voltou a ser só a decisão da usuária (080); quem tira da
+            # rotação é `cheio`. Escrever `aberto=False` aqui desfazia a escolha
+            # dela por baixo, e como "cheio" só existia derivado, o grupo com
+            # 946/900 aparecia "Aberto" na tela para sempre.
+            #
+            # O pin só acontece com `reabertura_automatica` DESLIGADA: com ela
+            # ligada, a lotação cair abaixo do teto já devolve o grupo à
+            # rotação sozinha, que é justamente o que a opção promete.
+            if not campanha.reabertura_automatica:
+                for vinculo in self.repo.lotados_abertos(campanha.id):
+                    vinculo.cheio_override = True
                     self.db.add(vinculo)
             self.db.commit()
             raise SemVaga()

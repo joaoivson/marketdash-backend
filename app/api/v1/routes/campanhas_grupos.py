@@ -6,7 +6,7 @@ próxima rota da fase herda o guard em vez de lembrar de copiá-lo.
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import require_plan
@@ -17,11 +17,12 @@ from app.repositories.subscription_repository import SubscriptionRepository
 from app.schemas.campanhas_grupos import (
     AnunciosDaCampanhaOut, CampanhaAtualizar, CampanhaCriar, CampanhaDetalheOut,
     CampanhaOut, GrupoDaCampanhaItem, GrupoDaCampanhaOut, NumerosDaCampanhaOut,
-    ResultadosOut, ResumoConsolidadoOut, VinculosDeAnuncioOut, VisaoGeralOut,
+    ResultadosOut, ResumoConsolidadoOut, SubIdsDaCampanhaOut,
+    VinculosDeAnuncioOut, VisaoGeralOut,
 )
 from app.services.campanha_grupos_service import (
     CampanhaGruposService, GrupoForaDosNumeros, GrupoInvalido, LimiteDeCampanhas,
-    NumeroEmUso, NumeroInvalido,
+    NumeroEmUso, NumeroInvalido, SubIdEmUso,
 )
 from app.services.campanha_link_service import CampanhaLinkService
 
@@ -70,15 +71,24 @@ def _grupos_out(servico: CampanhaGruposService, campanha) -> list[GrupoDaCampanh
     # Uma consulta para todos os grupos: `instancias_por_grupo` já devolve o
     # mapa inteiro, e pedir por grupo aqui seria N+1 numa tela de listagem.
     das_instancias = servico.repo_grupos.instancias_por_grupo(campanha.user_id)
-    return [
-        GrupoDaCampanhaOut(
+    saida = []
+    for v, g in servico.grupos_da_campanha(campanha):
+        # Teto e "cheio" saem daqui prontos, e não do JavaScript: a regra é a
+        # MESMA que decide a rotação (campanha_link_repository), e uma segunda
+        # cópia no frontend é como a tela passou a dizer "Aberto" para um grupo
+        # que o roteador já tinha parado de escolher.
+        teto = min(g.capacidade,
+                   campanha.limite_participantes or g.capacidade)
+        cheio = (v.cheio_override if v.cheio_override is not None
+                 else (g.participantes or 0) >= teto)
+        saida.append(GrupoDaCampanhaOut(
             grupo_id=g.id, posicao=v.posicao, aberto=v.aberto,
+            cheio=cheio, cheio_override=v.cheio_override, teto=teto,
             nome=g.nome, participantes=g.participantes, capacidade=g.capacidade,
             permite_envio=g.permite_envio, ativo=g.ativo, sub_id=g.sub_id,
             instancia_ids=das_instancias.get(g.id, []),
-        )
-        for v, g in servico.grupos_da_campanha(campanha)
-    ]
+        ))
+    return saida
 
 
 def _detalhe_out(servico: CampanhaGruposService, campanha) -> CampanhaDetalheOut:
@@ -185,6 +195,11 @@ def resumo_consolidado(
     totais["lucro"] = round(totais["comissao_liquida"] - investimento_com_imposto, 2)
     totais["lucro_por_pessoa"] = (round(totais["lucro"] / totais["participantes"], 2)
                                   if totais["participantes"] else None)
+    # Mesma fórmula do resto do produto: comissão LÍQUIDA sobre gasto COM
+    # imposto. Sem investimento, `None` — 0.00x afirmaria que cada real gasto
+    # voltou zero, que é outra coisa.
+    totais["roas"] = (round(totais["comissao_liquida"] / investimento_com_imposto, 2)
+                      if investimento_com_imposto else None)
     por_campanha.sort(key=lambda l: l["lucro"], reverse=True)
     return {
         "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},
@@ -254,6 +269,118 @@ def atualizar(
     return _out(campanha, total)
 
 
+@router.post("/{campanha_id}/duplicar", response_model=CampanhaOut, status_code=201)
+def duplicar(
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """
+    Cópia da campanha SEM os grupos — é como a próxima campanha nasce já com
+    prévia, estratégia, limite e números configurados.
+
+    Vínculo de anúncio e Sub ID NÃO são copiados: os dois são invariantes de
+    dinheiro (UNIQUE global em `campanha_anuncios.campaign_id`), e duplicá-los
+    contaria o mesmo gasto/comissão em duas campanhas.
+    """
+    servico = _servico(db, current_user)
+    try:
+        nova = servico.duplicar(campanha)
+    except LimiteDeCampanhas as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    # 0 grupos: a cópia nasce vazia de propósito.
+    return _out(nova, 0)
+
+
+@router.delete("/{campanha_id}", status_code=204)
+def excluir(
+    campanha=Depends(campanha_da_usuaria),
+    db: Session = Depends(get_db),
+):
+    """
+    Encerra a campanha e desarma o que continuaria rodando sem ela.
+
+    É soft-delete: a linha fica para `/g/{slug}` poder responder "campanha
+    encerrada" com 200 enquanto o anúncio ainda veicula, e para preservar a
+    atribuição de gasto e os cliques do link, que são histórico financeiro.
+    Os grupos continuam nos Números e a comissão já atribuída ao Sub ID
+    permanece — nada disso pende da campanha.
+    """
+    _servico(db).excluir(campanha)
+    return Response(status_code=204)
+
+
+@router.get("/{campanha_id}/sub-ids", response_model=SubIdsDaCampanhaOut)
+def listar_sub_ids(
+    inicio: str | None = None,
+    fim: str | None = None,
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """
+    Sub IDs que a usuária pode vincular a esta campanha, com pedidos e comissão
+    do período — é a mesma informação do "Vincular ao Sub ID" de Anúncios, para
+    ela escolher sabendo quanto cada um trouxe.
+
+    Quem NÃO pode ser vinculado vem na lista mesmo assim, com `bloqueado_por`
+    dizendo o motivo: esconder a opção faz a afiliada procurar o Sub ID que ela
+    sabe que existe e concluir que a tela está quebrada.
+    """
+    from app.services.campanha_resultado_service import CampanhaResultadoService
+
+    d_ini, d_fim = _periodo(inicio, fim)
+    servico = _servico(db)
+    vinculados = set(servico.sub_ids(campanha))
+    bloqueados = servico._sub_ids_bloqueados(campanha)
+
+    resultado = CampanhaResultadoService(db)
+    metricas = resultado.sub_ids_disponiveis(current_user.id, d_ini, d_fim)
+
+    # União: o que teve movimento no período + o que já está vinculado (mesmo
+    # sem venda). Sem a segunda parte, desmarcar sem querer um Sub ID sem
+    # pedidos no período o faria sumir da lista e ela não conseguiria voltar.
+    todos = sorted(set(metricas) | vinculados)
+    return {
+        "sub_ids": [
+            {
+                "sub_id": s,
+                "pedidos": metricas.get(s, {}).get("pedidos", 0),
+                "comissao_liquida": metricas.get(s, {}).get("comissao_liquida", 0.0),
+                "vinculado": s in vinculados,
+                "bloqueado_por": (None if s in vinculados else bloqueados.get(s)),
+            }
+            for s in todos
+        ]
+    }
+
+
+@router.put("/{campanha_id}/sub-ids", response_model=SubIdsDaCampanhaOut)
+def definir_sub_ids(
+    payload: list[str],
+    inicio: str | None = None,
+    fim: str | None = None,
+    campanha=Depends(campanha_da_usuaria),
+    current_user: User = Depends(require_plan("max")),
+    db: Session = Depends(get_db),
+):
+    """Substitui o conjunto inteiro — mesmo contrato do PUT de anúncios."""
+    servico = _servico(db)
+    try:
+        servico.definir_sub_ids(campanha, payload)
+    except SubIdEmUso as e:
+        # 409 explicado, no mesmo formato do conflito de anúncios e números:
+        # dizer só "não pode" deixa a afiliada sem o próximo passo.
+        travas = "; ".join(f"{sub_id} ({motivo})"
+                           for sub_id, motivo in sorted(e.motivos.items()))
+        raise HTTPException(
+            status_code=409,
+            detail=f"Estes Sub IDs já entram por outro caminho: {travas}.",
+        )
+    return listar_sub_ids(inicio=inicio, fim=fim, campanha=campanha,
+                          current_user=current_user, db=db)
+
+
 @router.put("/{campanha_id}/grupos", response_model=CampanhaDetalheOut)
 def definir_grupos(
     payload: list[GrupoDaCampanhaItem],
@@ -263,7 +390,8 @@ def definir_grupos(
     servico = _servico(db)
     try:
         servico.definir_grupos(
-            campanha, [(i.grupo_id, i.posicao, i.aberto) for i in payload]
+            campanha,
+            [(i.grupo_id, i.posicao, i.aberto, i.cheio_override) for i in payload],
         )
     except GrupoInvalido:
         raise HTTPException(status_code=404, detail="Grupo não encontrado.")
@@ -643,39 +771,33 @@ def _seguro_para_planilha(valor: str) -> str:
     return texto
 
 
-def _telefone(identificador: str | None, tipo: str | None) -> str:
-    """
-    Só o dígito do número, e só quando é telefone de verdade.
-
-    LID (`tipo == "lid"`) e evento antigo (sem identificador) saem vazios: a
-    coluna em branco é a verdade, e é melhor do que um id opaco na coluna
-    "telefone" — que a afiliada tentaria discar.
-    """
-    if not identificador or tipo != "telefone":
-        return ""
-    return "".join(c for c in identificador.split("@")[0] if c.isdigit())
-
-
 @router.get("/{campanha_id}/leads/export")
 def exportar_leads(
-    inicio: str | None = None,
-    fim: str | None = None,
     grupos: str | None = None,
     campanha=Depends(campanha_da_usuaria),
     current_user: User = Depends(require_plan("max")),
     db: Session = Depends(get_db),
 ):
     """
-    CSV dos EVENTOS DE ENTRADA do período.
+    CSV de quem está NOS GRUPOS AGORA — não dos eventos de entrada.
 
-    Colunas: data, grupo, telefone, origem e se a pessoa continua no grupo.
+    Colunas: telefone, grupo, data_entrada.
 
-    `telefone` sai preenchido só quando o WhatsApp entregou um número de
-    verdade. Quando a pessoa tem privacidade ativa, o que chega é um LID — um
-    id opaco que não disca — e a coluna fica VAZIA de propósito: LID exportado
-    como telefone viraria uma lista de contatos que não existe. Eventos
-    gravados antes da migration 079 também saem sem telefone: eles só têm o
-    hash, e hash não volta a ser número.
+    **Mudou de conceito em 04/09.** Antes exportava as entradas dos últimos 30
+    dias, e por isso um grupo com 946 pessoas acumuladas em meses exportava 8
+    linhas — inútil para quem quer falar com os leads. A fonte agora é
+    `grupo_participantes` (migration 080), que o sync mantém com quem está no
+    grupo neste momento. Sem filtro de período: a lista é um retrato, não uma
+    janela.
+
+    `data_entrada` sai preenchida quando existe evento de entrada da pessoa
+    (`grupo_eventos`, casado pelo mesmo HMAC) e, na falta dele, quando o sync
+    viu a pessoa aparecer DEPOIS de já estar acompanhando o grupo. Quem já
+    estava no grupo antes do primeiro sync sai sem data — não temos como
+    inventá-la.
+
+    `telefone` fica vazio para quem entrou com o número oculto: o WhatsApp
+    entrega um LID, que é id opaco e não disca.
 
     `grupos` (opcional) = ids separados por vírgula; ausente exporta todos os
     grupos da campanha.
@@ -685,7 +807,8 @@ def exportar_leads(
 
     from fastapi.responses import StreamingResponse
 
-    from app.models.campanha_link import EVENTO_ENTRADA, EVENTO_SAIDA, GrupoEvento
+    from app.models.campanha_link import EVENTO_ENTRADA, GrupoEvento
+    from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
     from app.services.campanha_grupos_service import CampanhaGruposService
 
     pares = CampanhaGruposService(db).grupos_da_campanha(campanha)
@@ -711,62 +834,54 @@ def exportar_leads(
             raise HTTPException(status_code=422, detail="Selecione ao menos um grupo.")
         nomes = {gid: nome for gid, nome in nomes.items() if gid in pedidos}
 
-    from app.services.campanha_resultado_service import _intervalo_brt
+    participantes = WhatsappGrupoRepository(db).participantes_de(list(nomes))
 
-    d_ini, d_fim = _periodo(inicio, fim)
-    ini_utc, fim_utc = _intervalo_brt(d_ini, d_fim)
-
-    entradas = (
-        db.query(GrupoEvento.grupo_id, GrupoEvento.identificador_hash,
-                 GrupoEvento.identificador, GrupoEvento.identificador_tipo,
-                 GrupoEvento.origem, GrupoEvento.criado_em)
-        .filter(GrupoEvento.grupo_id.in_(list(nomes)),
-                GrupoEvento.tipo == EVENTO_ENTRADA,
-                GrupoEvento.criado_em >= ini_utc,
-                GrupoEvento.criado_em < fim_utc)
-        .order_by(GrupoEvento.criado_em)
-        .all()
-    )
-
-    # As SAÍDAS não são limitadas pela JANELA — quem entrou no período e saiu
-    # depois dele não continua no grupo —, mas são limitadas aos identificadores
-    # que aparecem nestas entradas. Sem esse recorte, uma campanha madura traz
-    # o histórico de saída inteiro de todos os grupos só para descartá-lo.
-    hashes = {e.identificador_hash for e in entradas}
-    saidas_por_chave: dict = {}
+    # Data de entrada pelo evento, quando existe. Uma query para todos os
+    # grupos: pedir por pessoa seria N+1 num grupo de 946.
+    entrada_por_chave: dict = {}
+    hashes = {p.identificador_hash for p in participantes if p.identificador_hash}
     if hashes:
         for gid, h, quando in (
             db.query(GrupoEvento.grupo_id, GrupoEvento.identificador_hash,
                      GrupoEvento.criado_em)
             .filter(GrupoEvento.grupo_id.in_(list(nomes)),
-                    GrupoEvento.tipo == EVENTO_SAIDA,
+                    GrupoEvento.tipo == EVENTO_ENTRADA,
                     GrupoEvento.identificador_hash.in_(list(hashes)))
             .all()
         ):
-            saidas_por_chave.setdefault((gid, h), []).append(quando)
+            # A ENTRADA MAIS RECENTE: quem saiu e voltou está no grupo por
+            # causa da última, não da primeira.
+            atual = entrada_por_chave.get((gid, h))
+            if atual is None or (quando and quando > atual):
+                entrada_por_chave[(gid, h)] = quando
+
+    # Fallback honesto: o sync só sabe a data de quem apareceu DEPOIS de já
+    # estarmos acompanhando o grupo. O primeiro sync trouxe todo mundo de uma
+    # vez, e para essa gente `visto_em` é a data do sync, não da entrada.
+    primeiro_sync: dict = {}
+    for p in participantes:
+        atual = primeiro_sync.get(p.grupo_id)
+        if atual is None or (p.visto_em and p.visto_em < atual):
+            primeiro_sync[p.grupo_id] = p.visto_em
 
     buffer = io.StringIO()
     escritor = csv.writer(buffer)
-    escritor.writerow(["data_entrada", "grupo", "telefone", "origem", "ainda_no_grupo"])
-    for e in entradas:
-        # "Ainda no grupo" é por ENTRADA, não por pessoa: quem entrou, saiu e
-        # voltou tem duas linhas — a primeira é "nao", a segunda "sim".
-        # Resolver pelo estado final marcaria as duas como "sim" e inflaria a
-        # permanência justamente da coorte que a exportação existe para medir.
-        posteriores = saidas_por_chave.get((e.grupo_id, e.identificador_hash), ())
-        saiu = any(s > e.criado_em for s in posteriores if s and e.criado_em)
+    escritor.writerow(["telefone", "grupo", "data_entrada"])
+    for p in participantes:
+        quando = entrada_por_chave.get((p.grupo_id, p.identificador_hash))
+        if quando is None and p.visto_em and primeiro_sync.get(p.grupo_id):
+            if p.visto_em > primeiro_sync[p.grupo_id]:
+                quando = p.visto_em
         escritor.writerow([
-            e.criado_em.isoformat() if e.criado_em else "",
-            _seguro_para_planilha(nomes.get(e.grupo_id, "")),
-            _seguro_para_planilha(_telefone(e.identificador, e.identificador_tipo)),
-            _seguro_para_planilha(e.origem),
-            "nao" if saiu else "sim",
+            _seguro_para_planilha(p.telefone or ""),
+            _seguro_para_planilha(nomes.get(p.grupo_id, "")),
+            quando.isoformat() if quando else "",
         ])
     buffer.seek(0)
     # Nome de arquivo ASCII e fixo: header HTTP é codificado em latin-1 pelo
     # Starlette e um emoji no nome da campanha (rotineiro) derruba a request
     # com UnicodeEncodeError — 500 sem mensagem, sem saída para a usuária.
-    nome_arquivo = f"entradas-campanha-{campanha.id}-{d_ini}-a-{d_fim}.csv"
+    nome_arquivo = f"participantes-campanha-{campanha.id}.csv"
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
