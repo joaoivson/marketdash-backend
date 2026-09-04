@@ -598,7 +598,17 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 | `1bd8d6a` | runs presos em `running` para sempre |
 | `4c72e6f` | backfill tolera ausência da coluna `leads` em produção |
 | `c36b6d5` / `d924d6c` | chaves novas do Supabase (aditivo) |
-| *(04/09, ainda sem commit próprio — `webhook_helpers`, `kiwify`, `cakto`)* | estorno do pedido antigo renomeava a conta de volta pelo CPF: quem recomprava corrigindo um e-mail errado ficava com a assinatura em uma conta e o login em outra, e via "Assinatura Necessária" depois de pagar. Sem migration; o dado da aluna afetada já foi corrigido em produção, o **código não** |
+| `4f52d83` | estorno do pedido antigo renomeava a conta de volta pelo CPF: quem recomprava corrigindo um e-mail errado ficava com a assinatura em uma conta e o login em outra, e via "Assinatura Necessária" depois de pagar. Sem migration; o dado da aluna afetada já foi corrigido em produção, o **código não** — decisão do João: sobe junto com a leva da develop |
+| ~~`4acc1cc`~~ + ~~front `a5aee68`~~ | performance do dashboard (pedir só o período). **JÁ EM PRODUÇÃO desde 04/09**, por cherry-pick — ver aviso abaixo |
+
+> ⚠️ **Dois commits já estão em `main` por cherry-pick (04/09/2026)** — backend
+> `4acc1cc` → `8ffb6f9` e frontend `a5aee68` → `8e4092f` (performance do
+> dashboard). O SHA em `main` é **outro**, então o merge `develop → main`
+> voltará a trazer as mesmas mudanças: espere conflito em `datasetStore.ts`,
+> `clicksStore.ts`, `Dashboard.tsx`, `Reports.tsx`,
+> `ShopeeIntegrationSettings.tsx` e `dataset_row_repository.py`. Resolver
+> **mantendo o lado da develop** (é a mesma mudança, mais recente), nunca
+> descartando o cherry-pick sem olhar.
 
 ### 8.6 O que a rodada de 31/08 acrescentou
 

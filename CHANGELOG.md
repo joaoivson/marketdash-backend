@@ -145,7 +145,9 @@ impediam qualquer comando `docker compose` — corrigido.
 ## [Não versionado] - 2026-09-04 (Performance do dashboard: pedir o período, não a base inteira)
 
 Relato do Luiz: "demora muito carregar esse dashboard… coisa de minuto".
-Cross-stack, **sem migration**.
+Cross-stack, **sem migration**. **Em produção desde 04/09** — subiu por
+cherry-pick em `main` (backend `8ffb6f9`, frontend `8e4092f`), sem merge da
+`develop`, que tem 83 + 50 commits de módulos ainda não promovidos.
 
 ### O que estava acontecendo
 O dashboard chamava `/datasets/all/rows` **sem período** e filtrava no

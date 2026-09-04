@@ -137,6 +137,9 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   ⚠️ Em hml/produção **implantados** a flag não muda nada ainda: o backend
   desta feature não foi commitado nem deployado.
 
+- **A performance do dashboard (04/09) ESTÁ em produção**, por cherry-pick em
+  `main` — não por merge da develop. O fix do rename de e-mail, não.
+
 - **Fix do rename de e-mail por CPF (04/09) não está em produção.** O dado da
   aluna afetada já foi corrigido à mão no banco de prod; o **código** só existe
   na `develop` (sobe com a leva das outras demandas). Até subir, qualquer
