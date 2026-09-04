@@ -86,7 +86,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py`, `webhook_helpers.py` | Fonte de assinatura em produção. **A conta só é renomeada pelo CPF em evento que LIBERA acesso** (`allow_email_update=(action == "activate")`): estorno e cancelamento chegam com o e-mail do **pedido antigo** e podem chegar depois de uma recompra — renomear ali devolvia a conta paga para o e-mail errado e o login criava conta nova, sem assinatura (caso Anne, 03-04/09/2026) |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
-| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Números/grupos das alunas (F1 do módulo de grupos); hml. **O Resumo diário saiu por inteiro em 03/09/2026** (rotas, services, models, job pg_cron — migration 077), junto com a Blacklist; a sessão global do resumo deixou de existir. `POST /whatsapp/webhook` e o tratamento de status/participantes **ficam** — são infra do módulo de grupos, não do resumo |
+| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Números/grupos das alunas (F1 do módulo de grupos); hml. **O Resumo diário saiu por inteiro em 03/09/2026** (rotas, services, models, job pg_cron — migration 077), junto com a Blacklist; a sessão global do resumo deixou de existir. `POST /whatsapp/webhook` e o tratamento de status/participantes **ficam** — são infra do módulo de grupos, não do resumo. ⚠️ Desde a 079 (04/09) o evento de participantes grava o **número real** além do hash — ver "Em voo" |
 | **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migrations 068 **e 069** em hml (cron horário ativo); **no ar em hml** (API+worker+admin, verificado ponta a ponta em 31/08); produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
 
 ## Planos
@@ -118,6 +118,44 @@ PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q
 O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 
 ## Em voo / pendente de humano
+
+- **Campanhas de grupos: rodada de correções (04/09) EM HOMOLOGAÇÃO.**
+  Migration **079** aplicada em hml (`campanha_numeros` + backfill,
+  `campanhas.limite_participantes`, `grupo_eventos.identificador` e
+  `identificador_tipo`); backend e frontend deployados e validados contra a URL
+  real. Produção não tem o módulo, então lá nada foi aplicado.
+
+  **A privacidade INVERTEU, e a política já acompanhou.** Desde a 079,
+  `grupo_eventos` guarda o **número real** de quem entra no grupo — o hash
+  continua ao lado (é ele que casa entrada com saída), mas deixou de ser a única
+  coisa guardada. A política prometia o contrário e foi reescrita em 04/09
+  (`marketdash-frontend/src/features/landing/pages/PrivacyPolicy.tsx`): o que
+  guardamos, para quê, quem é o controlador (a afiliada — nós tratamos por conta
+  e ordem dela) e a retenção. Detalhe em `docs/PROMOCAO_PARA_PRODUCAO.md` §3.8.
+
+  ⚠️ **A ordem importa na promoção**: a política publicada **antes** da 079 ir
+  a produção, não depois.
+
+  ⚠️ **Dívida conhecida**: apagar o contato de **uma** pessoa que peça é
+  **manual, via suporte** — não existe endpoint nem tela. É o que a política
+  promete hoje; se o volume crescer, vira ferramenta.
+
+  ⚠️ **`WHATSAPP_HASH_SALT` é opcional, e esse é o perigo.** Sem ela,
+  `_segredo_do_hash()` deriva de `SHOPEE_ENCRYPTION_KEY` (e, na falta,
+  `JWT_SECRET`; sem nenhum, recusa gravar). Definir a env **depois** do primeiro
+  evento troca a origem do segredo e o casamento entrada↔saída para de bater —
+  **sem erro nenhum**, porque o hash novo simplesmente não encontra o antigo.
+  Fixe antes do primeiro evento em produção.
+
+  Duas consequências que valem para quem for mexer:
+  - **LID.** Quem oculta o número chega como `84729130@lid`, id opaco que não
+    disca. `classificar()` (`grupo_evento_service.py`) separa telefone de LID, e
+    o CSV sai com a coluna `telefone` **vazia** no caso do LID — inventar um
+    número ali daria uma lista de contatos que não existe.
+  - **A regra de lotação existe uma vez só**: `TETO_SQL`/`teto_efetivo()` em
+    `campanha_link_repository.py`. É lida pelas 3 queries de rotação **e** pelo
+    contador da Visão geral. Duplicá-la faz a tela dizer "há vaga" num grupo que
+    o roteador já não escolhe.
 
 - **Proxy por sessão (27/08)**: implementado, **flag ligada** e **pool vazio** —
   ou seja, ainda sem efeito prático: cada sessão continua saindo pelo IP do
@@ -166,7 +204,9 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   comments+messages). Falta só o João assinar o campo `messages` no painel
   Meta para as DMs serem entregues. `GET /me/stories` confirmado na nossa variante (200 com o
   story real). Ver CHANGELOG 2026-09-02.
-- **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **070**
+- **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **074**
+  (`whatsapp_grupos.ativado`) e **079** (campanhas de grupos, ver acima)
+  aplicadas em hml — nenhuma das duas em produção; **070**
   (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
   hml em 31/08 — ⚠️ é `ALTER TABLE`, a armadilha *inversa* do `create_all`:
   subir o model antes dela quebra `GET /instancias` com `UndefinedColumn`; **052–056 (Instagram) APLICADAS em produção em 02/09** (a feature

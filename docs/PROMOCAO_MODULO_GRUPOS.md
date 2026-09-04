@@ -5,6 +5,14 @@
 > arquivo existe para que a promoção seja uma sequência conferível, e não uma
 > reconstrução de memória no dia.
 
+> 🔴 **NÃO EXECUTE A SEÇÃO 3 DAQUI.** A lista de migrations dela para na `067`
+> e hoje faltam **seis** do lote (`068`, `070`, `074`, `075`, `076`, `077`,
+> `079`). Rodar por este arquivo sobe o módulo com schema incompleto.
+> A lista fechada é a **§8.1** do mestre; a ordem, a **§3.1**.
+>
+> Este arquivo fica como **contexto histórico** — o porquê de cada decisão —,
+> não como roteiro.
+>
 > ⚠️ **O documento mestre agora é [`PROMOCAO_PARA_PRODUCAO.md`](PROMOCAO_PARA_PRODUCAO.md)**,
 > que cobre Grupos **e** Instagram, traz o estado do banco medido em 26/08/2026 e
 > a ordem de execução consolidada. Este arquivo ficou como detalhamento do módulo

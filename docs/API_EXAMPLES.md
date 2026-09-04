@@ -1,5 +1,14 @@
 # Exemplos de Uso da API
 
+> ⚠️ **Documento legado — não confira nada por aqui, e não acrescente endpoint
+> novo.** Ele descreve uma API que mudou de forma:
+> - o prefixo real é **`/api/v1`** (`API_V1_STR` em `core/config.py`);
+> - a autenticação é **Supabase Auth no frontend** — o backend valida o token
+>   com `auth.get_user()` e **não emite JWT próprio**.
+>
+> A fonte da verdade dos endpoints é o **`/openapi.json`** do próprio serviço
+> (ou `/docs`), que nasce do código e não envelhece.
+
 Este documento contém exemplos práticos de como usar a API do MarketDash Backend.
 
 ## 🔐 1. Autenticação

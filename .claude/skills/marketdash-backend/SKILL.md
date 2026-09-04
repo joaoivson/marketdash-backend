@@ -63,7 +63,8 @@ vira várias linhas.
 | **Afiliados (indique)** | `affiliates.py` | `affiliate_service` |
 | **Assinatura** | `subscription.py`, `kiwify.py`, `cakto.py`, `payment.py` | `subscription_service`, `kiwify_service`, `charges` |
 | **Painel admin** | `admin_panel.py` | `admin_metrics_service`, `admin_dre_service`, `platform_usage_service` |
-| **WhatsApp** | `whatsapp.py` | `whatsapp_resumo_service`, `evolution_client` |
+| **WhatsApp** | `whatsapp.py`, `whatsapp_conexoes.py` | `waha_client`, `whatsapp_instancia_service`, `whatsapp_grupo_sync_service` |
+| **Campanhas de GRUPOS** (≠ Campanhas acima) | `campanhas_grupos.py`, `roteiros.py`, `monitoramentos.py`, `templates.py`, `ofertas.py` | `campanha_grupos_service`, `campanha_visao_geral_service`, `campanha_link_service`, `campanha_resultado_service`, `grupo_evento_service`, `roteiro_envio_service` |
 
 ## Regras de domínio
 
@@ -78,7 +79,17 @@ vira várias linhas.
    incompleta da API apagava dado bom.
 5. **Espelho Meta → AdSpend** grava gasto e cliques com `source` marcado, e
    guarda backup do valor manual antes de sobrescrever.
-6. **As três datas não são a mesma**: data da venda ≠ data do gasto ≠ data da
+6. **A regra de lotação de grupo existe UMA vez.**
+   `TETO_SQL` / `teto_efetivo()` em `campanha_link_repository.py` =
+   `LEAST(capacidade, COALESCE(campanhas.limite_participantes, capacidade))`.
+   É lida pelas três queries de rotação (`escolher_grupo`, `proximo_fechado`,
+   `lotados_abertos`) **e** pelo contador "cheios/disponíveis" da Visão geral.
+   Ela nasceu duplicada e divergiu: a tela dizia "há vaga" num grupo que o
+   roteador já não escolhia. Query nova de "grupos disponíveis" **reusa o
+   helper** — e lembre que disponível exige também `g.ativo` e
+   `link_convite IS NOT NULL`, não só estar aberto e com vaga.
+
+7. **As três datas não são a mesma**: data da venda ≠ data do gasto ≠ data da
    sincronização. Cruzamento é sempre pela data do fato.
 
 ## Planos

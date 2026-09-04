@@ -74,9 +74,26 @@ webhook) e `whatsapp_conexoes.py` (números/grupos das alunas) · runbook
 - **WAHA substituiu a Evolution em 25/08** (engine GOWS/whatsmeow, ~60MB por
   sessão). Sessão = número conectado; nome `mkd{ref4}u{user_id}x{hex4}` roteia
   o webhook e separa hml de prod no mesmo servidor.
-- Resumo diário: sessão global `WAHA_SESSAO_RESUMO`, cron
-  `/internal/cron/whatsapp-resumo`; eventos `message` (SAIR) +
-  `session.status`. Sessões de aluna: SÓ `session.status` (LGPD).
+- Resumo diário: **removido por inteiro em 03/09/2026** (migration 077) — a
+  sessão global e o cron não existem mais. O `POST /whatsapp/webhook` e o
+  tratamento de status/participantes **ficam**: são infra do módulo de grupos.
+- Sessões de aluna assinam
+  `EVENTOS_DE_ALUNA = ["session.status", "group.v2.participants"]`
+  (`whatsapp_instancia_service.py:35`). O webhook é mínimo por decisão, mas
+  `group.v2.participants` é a **única** forma de saber quem entrou e saiu do
+  grupo — sem ele não há lead, funil nem "entraram e ficaram". `message` só
+  entra em sessão com **monitoramento** ativo (`EVENTO_DE_MONITORAMENTO`), e é
+  por SESSÃO, não por chat: o primeiro `if` do handler é que descarta o que não
+  é do grupo monitorado.
+- **`grupo_eventos` guarda o número real do participante** desde 04/09
+  (migration 079). A decisão anterior — *"o número nunca toca o banco"* — foi
+  **invertida**: exportar lead com hash é inútil, e evento gravado só como hash
+  não se reverte. O `identificador_hash` **continua** ao lado (HMAC com segredo
+  fora do banco) porque é ele que casa entrada com saída.
+  `classificar()` (`grupo_evento_service.py`) decide o tipo: `@lid` — quem está
+  com privacidade ativa — é `'lid'` e sai com a coluna **telefone vazia** no
+  CSV; qualquer outro é `'telefone'`. Nunca escreva o LID na coluna de
+  telefone: vira uma lista de contatos que não disca.
 - Sync de grupos cria `sub_id`/`custom_link` na primeira vez (atribuição) e
   grava `sync_runs` com `source="whatsapp_grupos"`.
 - No Coolify, **fixe WAHA_DASHBOARD_* e WAHA_API_KEY por env** — sem isso as

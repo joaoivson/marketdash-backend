@@ -22,17 +22,25 @@ porta pública. As credenciais (WAHA_API_KEY etc.) vivem SÓ nas envs dos dois
 apps no Coolify. Pendência anotada: volume `/app/.media` + env
 `WHATSAPP_FILES_FOLDER` quando a F3 começar a mandar mídia.
 
-**Um único servidor WAHA pode atender hml E prod**: as sessões carregam o
+****NÃO compartilhe o servidor WAHA entre ambientes.** Tecnicamente um único servidor WAHA atenderia hml E prod**: as sessões carregam o
 prefixo do ambiente no nome (`mkd{ref4-do-banco}...`), e o webhook ignora
 sessão de prefixo alheio. Ainda assim, a sessão do RESUMO precisa ser única
 por número — o mesmo número pareado em dois lugares derruba a sessão dos dois.
+>
+> ⚠️ Com os dois bancos agendando `pg_cron` contra o MESMO WAHA, a afiliada
+> recebe tudo em duplicidade — e foi um cron contra infra compartilhada que
+> derrubou o banco em 20/07. A regra da promoção é servidor **próprio** por
+> ambiente.
 
 ## Variáveis do backend (.env / Coolify)
 
 ```
 WAHA_URL=            # ex.: http://waha:3000 (mesma rede) ou http://IP:3001
 WAHA_API_KEY=        # a MESMA do serviço WAHA (env WAHA_API_KEY lá)
-WAHA_SESSAO_RESUMO=  # nome da sessão do número do MarketDash, ex.: mkdytjpresumo
+WAHA_SESSAO_RESUMO=  # nome da sessão do número do MarketDash, ex.: mkdytjpresumo  # LEGADO — o resumo diário saiu do produto (migration 077,
+                     # 03/09/2026). Serve só para o webhook IGNORAR a
+                     # sessão antiga, que pode seguir viva no WAHA.
+                     # Ambiente NOVO (produção) não precisa definir.
 WAHA_WEBHOOK_TOKEN=  # openssl rand -hex 32 — vai como X-Webhook-Token e chave HMAC
 WAHA_WEBHOOK_URL=    # https://api.<ambiente>.marketdash.com.br/api/v1/whatsapp/webhook
 ```
@@ -77,6 +85,22 @@ memória `reference_coolify`). Fixe tudo por env desde o primeiro deploy.
   nenhum conteúdo de mensagem chega ao backend (LGPD).
 - Webhook único: `POST /api/v1/whatsapp/webhook`, autenticado por
   `X-Webhook-Token`, roteado pelo nome da sessão.
+
+> **Eventos assinados por sessão de aluna** (`whatsapp_instancia_service.py`):
+> `EVENTOS_DE_ALUNA = ["session.status", "group.v2.participants"]`.
+> `group.v2.participants` é a única forma de saber quem entrou e saiu do grupo —
+> sem ele não há lead, funil nem "entraram e ficaram".
+>
+> ⚠️ **`message` é assinado SIM — quando a sessão tem monitoramento ativo**
+> (`EVENTO_DE_MONITORAMENTO`). E o evento é por **SESSÃO, não por chat**: com
+> monitoramento ligado, todas as conversas daquele número chegam ao webhook, e
+> é o primeiro `if` do handler que descarta o que não é do grupo monitorado.
+> A assimetria é do gateway, está declarada na política, e é por isso que se
+> escolhe **uma** sessão ouvinte por monitoramento.
+>
+> ⚠️ **Desde 04/09 (migration 079) o evento de participantes grava o número
+> real** em `grupo_eventos.identificador`, com `identificador_tipo` separando
+> telefone de LID. O hash continua ao lado. Ver `PROMOCAO_PARA_PRODUCAO.md` §3.8.
 
 ## Migração da Evolution (operacional, uma vez por ambiente)
 

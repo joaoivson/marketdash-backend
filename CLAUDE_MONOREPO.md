@@ -24,18 +24,29 @@ Cada subprojeto tem seu próprio `CLAUDE.md` com detalhes de arquitetura, comand
 ```bash
 # Backend
 cd marketdash-backend && python -m uvicorn app.main:app --reload --port 8081
-cd marketdash-backend && pytest tests/ -v
+cd marketdash-backend && PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q
 cd marketdash-backend && celery -A app.tasks.celery_app worker --loglevel=info
 
 # Frontend
 cd marketdash-frontend && npm run dev    # Dev :8080, proxy /api → :8081
 cd marketdash-frontend && npm run build
 cd marketdash-frontend && npm run lint
-cd marketdash-frontend && npx tsc --noEmit
+cd marketdash-frontend && npx tsc -p tsconfig.app.json --noEmit
 
 # Infra
 cd marketdash-backend && docker-compose up  # PostgreSQL, Redis, App, Worker
 ```
+
+> ⚠️ **Os dois comandos de verificação têm armadilha, e nos dois o erro é
+> silencioso na direção errada:**
+> - `pytest tests/ -v` **sempre falha** (o venv default é 3.9 e quebra na
+>   coleção) — e a falha parece problema do código que se acabou de escrever.
+>   Use o `.venv312` acima. Parte da suíte depende do Postgres local em
+>   `:5434`; sem ele, esses arquivos **pulam em verde**.
+> - `npx tsc --noEmit` na raiz do frontend **sempre passa**, mesmo com erro de
+>   tipo: o `tsconfig.json` tem `"files": []`. Só `-p tsconfig.app.json` (ou
+>   `npx tsc -b`) olha o `src/`. Há ~25 erros pré-existentes: o critério é
+>   "não aumentou".
 
 ## Fluxo de Auth End-to-End
 

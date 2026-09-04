@@ -297,24 +297,45 @@ primeiro evento real.
 
 > A versão anterior usava `sha256(jid + salt)` com o salt vazio em todos os
 > ambientes: o espaço inteiro de celulares BR (~1,08 bi) era reversível em ~11
-> minutos a 1,5 M hashes/s. A política de privacidade promete "código
-> irreversível" — agora é verdade.
+> minutos a 1,5 M hashes/s. O HMAC com segredo corrigiu isso, e a política
+> continua podendo chamar o hash de "código irreversível".
+>
+> ⚠️ **O que mudou em 04/09 (migration `079`):** o hash deixou de ser a *única*
+> coisa guardada — `grupo_eventos.identificador` agora tem o número. A
+> irreversibilidade do hash continua verdadeira e continua importando (é o que
+> casa entrada com saída), mas **ela não é mais o argumento de privacidade do
+> módulo**: o argumento agora é a finalidade e o controle, descritos na §3.8.
+> Não use esta seção para concluir que o número não é armazenado.
 
 ### 3.8 Textos legais
 
-> 🔴 **BLOQUEIO — mudou em 04/09/2026.** A política atual promete que o número de
-> quem entra no grupo **nunca é armazenado** (só um código irreversível). Desde a
-> migration `079` isso **deixou de ser verdade**: `grupo_eventos.identificador`
-> guarda o telefone, porque exportação de lead com hash não serve para nada.
+> ✅ **RESOLVIDO em 04/09/2026 — mas confira antes de subir.** A política
+> prometia que o número de quem entra no grupo **nunca é armazenado** ("um
+> código irreversível … o número de telefone de terceiros não é armazenado").
+> Desde a migration `079` isso deixou de ser verdade: `grupo_eventos` guarda o
+> identificador real ao lado do hash.
 >
-> A política **precisa ser atualizada antes do merge `develop→main`** — não
-> depois. O que ela precisa passar a dizer:
-> - guardamos o identificador de quem **entra em grupo da campanha** (telefone
->   ou, quando a pessoa oculta o número, um id opaco do WhatsApp);
-> - para quê: a afiliada exportar os contatos dos próprios grupos;
-> - por quanto tempo, e como pedir remoção.
+> O texto foi reescrito em
+> `marketdash-frontend/src/features/landing/pages/PrivacyPolicy.tsx` (bullet
+> "De quem entra ou sai dos seus grupos" + três bullets novos), e passou a
+> dizer:
+> - **o que guardamos**: o identificador da pessoa no WhatsApp — telefone
+>   quando o WhatsApp informa, ou um id interno dele quando a pessoa oculta o
+>   número — mais o código irreversível, que é o que mede permanência;
+> - **para quê**: a afiliada exportar os contatos dos próprios grupos. O
+>   MarketDash não usa, não repassa e não cruza entre contas;
+> - **quem é o controlador**: a afiliada. Nós tratamos por conta e ordem dela;
+> - **retenção**: os registros ficam enquanto a conta existir (arquivar campanha
+>   ou tirar o grupo dela **não** apaga — os eventos pendem do grupo, e grupo
+>   não é deletado, só desativado). Excluir a conta apaga tudo; apagar o contato
+>   de uma pessoa específica é **manual, via suporte**.
 >
-> O hash continua existindo ao lado, para casar entrada com saída.
+> ⚠️ **Duas conferências antes do merge:**
+> 1. `updatedAt` da página está em "setembro de 2026" — confira se ainda faz
+>    sentido na data real da promoção;
+> 2. **a exclusão individual é manual e não tem ferramenta.** Se o volume
+>    crescer, isso vira dívida: hoje não existe endpoint nem tela para apagar o
+>    contato de uma pessoa que pediu.
 
 - **Política de privacidade**: a seção 7 já cobre o módulo, inclusive o
   monitoramento. Ela afirma que, por padrão, não recebemos conteúdo de mensagem
@@ -398,8 +419,12 @@ da Meta.
 1. **Medir** produção com o SQL da seção 1 — não confie nesta tabela
 2. **Listar** `git log --oneline main..develop` nos dois repos e decidir item a item
    (49 e 33 commits em 31/08 — ver seção 2 e 8.5)
-3. **Aplicar** `058→059→060→062→063→065→066→067→068→070` em produção
-   (**sem** `061`/`064`/`069`, que são de pg_cron)
+3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079`
+   em produção — a lista fechada é a **§8.1**, e é ela que manda, não este
+   resumo (**sem** `061`/`064`/`069`, que são de pg_cron e vão no passo 10).
+   ⚠️ A `079` só entra **depois** da política de privacidade publicada (§3.8);
+   a `077` derruba tabelas com dado real de aluna — exporte antes se quiser o
+   histórico.
 4. **Conferir** RLS e policies com o SQL da seção 1
 5. **Definir** as variáveis do Coolify (3.2) e subir o WAHA de produção (3.3)
 6. **Merge do backend** `develop→main` → deploy → **`/health` 200**
@@ -453,7 +478,7 @@ da Meta.
 Esta seção é a **lista fechada**. Se algo não está aqui, não sobe. Nada abaixo
 foi executado em produção.
 
-### 8.1 Migrations — 13 arquivos, nenhum em produção
+### 8.1 Migrations — 15 arquivos, nenhum em produção
 
 Ordem obrigatória. As três de `pg_cron` (`061`, `064`, `069`) ficam **fora do
 lote inicial** e vão só no passo 10 da seção 5, junto com o desagendamento em
@@ -474,9 +499,21 @@ homologação.
 | 11 | `074_whatsapp_grupo_ativado.sql` | `whatsapp_grupos.ativado` + backfill (campanha **e** monitoramento) | **PENDENTE** | OK (03/09) |
 | 12 | `075_facebook_ad_accounts_names.sql` | `facebook_integrations.ad_accounts_names_json` | **PENDENTE** | OK (03/09) |
 | 13 | `076_subscription_pending_tier.sql` | `subscriptions.pending_*` (4 colunas) | **PENDENTE** | OK (03/09) |
+| 14 | `077_remove_resumo_blacklist.sql` | remove o Resumo diário e a Blacklist; **desagenda o pg_cron `whatsapp-resumo-9am-brt`** | **PENDENTE** | OK (03/09) |
+| 15 | `079_campanha_numeros_limite_identificador.sql` | `campanha_numeros` + backfill · `campanhas.limite_participantes` · `grupo_eventos.identificador`/`identificador_tipo` | **PENDENTE** | OK (04/09) |
 | — | `061_cron_roteiros.sql` | `roteiros-tick-5min` (a cada 5 min) | ausente | **agendado** |
 | — | `064_cron_grupos_snapshot.sql` | `grupos-snapshot-3am-brt` (diário) | ausente | **agendado** |
 | — | `069_cron_proxy_health.sql` | `proxy-health-horario` (horário) | ausente | **agendado** |
+
+> ⚠️ **A `077` é a única desta lista que morde mesmo sem o módulo de grupos.**
+> Ela desagenda o `pg_cron` `whatsapp-resumo-9am-brt`, que continua **ativo em
+> produção** chamando um endpoint que já não existe — 404 todo dia, para
+> sempre, até ela rodar. E ela **dropa** `whatsapp_optins`, `whatsapp_envios` e
+> `blacklist_numeros`, que em produção têm dado real de aluna: exporte antes se
+> alguém quiser o histórico.
+>
+> ⚠️ **A `079` traz o bloqueio jurídico da §3.8** — não a aplique antes de a
+> política de privacidade estar publicada com o texto novo.
 | — | `077_remove_resumo_blacklist.sql` | **desagenda** `whatsapp-resumo-9am-brt` + DROP de 3 tabelas | **PENDENTE** | OK (03/09) |
 | — | `078_shopee_sync_por_usuario.sql` | função `trigger_shopee_sync_user` (só a função — agendamento é manual e diverge) | **PENDENTE** | **PENDENTE** |
 

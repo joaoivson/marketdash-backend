@@ -56,6 +56,36 @@ não herdam nada.
 O **service client** do Supabase contorna RLS. Use só para Storage; nunca
 para ler dado de usuário.
 
+### A tabela nasce antes da migration
+
+O boot roda `create_all`: **toda tabela nova aparece no banco no deploy que
+importa o model — sem RLS, sem os índices e sem o backfill da migration.** E
+`create_all` **não** adiciona coluna em tabela que já existe. Daí três regras:
+
+1. **Aplique a migration ANTES do deploy** que importa os models — é o
+   protocolo escrito no cabeçalho da 058/074/079. O boot-ALTER em
+   `app/db/base.py` é rede extra, não garantia.
+2. **"A migration não foi aplicada" ≠ "a tabela não existe".** Cheque o
+   objeto — coluna, índice, policy — não a tabela.
+3. **Confira RLS depois**, sempre:
+   ```sql
+   SELECT c.relname, c.relrowsecurity,
+          (SELECT count(*) FROM pg_policies p WHERE p.tablename = c.relname) AS policies
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname IN (...);
+   ```
+   Tabela sem `user_id` (junção) fica **RLS ligada e zero policy** — nega Data
+   API/anon, e o backend acessa por ownership. É o padrão da 059/065/079.
+
+⚠️ **Homologação tem um event trigger `ensure_rls`** que liga RLS em toda
+tabela nova — foi ele que salvou `campanha_numeros`, criada pelo `create_all`
+antes de a 079 chegar. **Isso NÃO foi medido em produção.** Enquanto ninguém
+confirmar, não conte com ele:
+
+```sql
+SELECT evtname, evtenabled FROM pg_event_trigger WHERE evtname = 'ensure_rls';
+```
+
 ## pg_cron + pg_net
 
 O agendamento vive **no banco**, não no Celery Beat. As migrations de cron

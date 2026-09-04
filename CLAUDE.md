@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 python -m uvicorn app.main:app --reload --port 8081   # Dev server
-pytest tests/ -v                                       # All tests
-pytest tests/unit/test_jobs.py -v                      # Single test file
-pytest tests/ -k "test_name" -v                        # By test name
+# Testes — SEMPRE pelo .venv312 (ver a seção Testes)
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q               # A suíte
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit/test_jobs.py -q  # Um arquivo
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -k "nome" -q     # Por nome
 celery -A app.tasks.celery_app worker --loglevel=info  # Celery worker
 docker-compose up                                      # All services (db, redis, app, worker)
 ```
@@ -130,15 +131,22 @@ KPIs are calculated from `DatasetRow.raw_data` JSONB (original CSV fields):
 ## Testes
 
 ```bash
-pytest tests/ -v                         # Todos os testes
-pytest tests/unit/ -v                    # Apenas unitários
-pytest tests/ -k "test_name" -v         # Por nome
-pytest tests/ --tb=short                 # Traceback curto
-pytest tests/ -x                         # Para no primeiro erro
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q          # A suíte
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -k "nome"   # Por nome
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit --tb=short  # Traceback curto
+PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -x          # Para no 1º erro
 ```
 
+⚠️ **`pytest tests/ -v` não funciona**: o `.venv` default é 3.9 e quebra na
+coleção — e a falha *parece* problema do código que se acabou de escrever.
+`tests/` também inclui `load/` e `performance/`, que não são da suíte.
+
+⚠️ **Boa parte da suíte usa o Postgres local (`localhost:5434`)** do
+`docker-compose`, não SQLite. Sem ele no ar, esses arquivos **pulam em verde** —
+o que parece "tudo passou". Suba com `docker compose up db`.
+
 Padrões:
-- Testes em `tests/unit/` e `tests/integration/`
+- Testes em `tests/unit/`
 - Fixtures de DB em `conftest.py`
 - Mock de Supabase Auth nos testes unitários — testes de integração usam DB real
 - Nomear: `test_{ação}_{cenário}_{resultado_esperado}`

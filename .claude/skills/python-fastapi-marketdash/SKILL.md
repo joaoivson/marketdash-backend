@@ -76,6 +76,18 @@ PYTHONPATH=$PWD .venv312/bin/python -m pytest tests/unit -q
   repo existem exatamente para segurar achado de rodada anterior
   (`test_churn_denominador_renovando`, `test_charges_por_order_ref`,
   `test_campaign_active_count_orcamento_esgotado`)
+- **Mexeu em schema Pydantic? Teste a ROTA, não só o service.** A suíte é quase
+  toda no nível de service, e isso dá uma sensação de cobertura que a camada de
+  rota não tem. Em 04/09, tirar um campo de `CampanhaCriar` deixou a rota lendo
+  `payload.descricao`: o Pydantic v2 **não guarda campo que não declarou**,
+  então é `AttributeError` — que não é `ValueError` nem exceção de domínio,
+  nenhum `except` da rota pega, e o handler global devolve **500**. Criar
+  campanha ficou inoperante com **1081 testes verdes**. Chamar a função da rota
+  direto no teste (passando `current_user` e `db`) já teria pego.
+- **Postgres local (`:5434`) ausente = arquivo inteiro PULA, em verde.** Vários
+  arquivos têm `pytest.mark.skipif` no topo. "Tudo passou" sem o
+  `docker compose up db` pode significar "quase nada rodou" — confira a
+  contagem, não só a cor.
 
 ## Estilo
 
