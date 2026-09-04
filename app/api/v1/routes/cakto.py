@@ -349,7 +349,10 @@ async def cakto_webhook(request: Request, db: Session = Depends(get_db)):
 
         # Buscar ou criar usuário (usando helper compartilhado)
         try:
-            user, user_created, user_has_password = find_or_create_user(email, customer_data, db)
+            # Mesma regra do Kiwify: só ativação renomeia a conta pelo CPF.
+            user, user_created, user_has_password = find_or_create_user(
+                email, customer_data, db, allow_email_update=(action == "activate")
+            )
             if user_created:
                 logger.info(f"Usuário {email} criado com ID {user.id}")
         except Exception as reg_err:
