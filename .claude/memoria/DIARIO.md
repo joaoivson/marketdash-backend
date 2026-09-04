@@ -60,6 +60,45 @@ definida antes do primeiro evento em produção.
 
 ---
 
+## 2026-09-04 — Primeira promoção para produção por cherry-pick, e o que ela ensinou
+
+O que mudou: a performance do dashboard entrou em produção (`8ffb6f9` backend,
+`8e4092f` frontend) **sem merge da develop**. O procedimento virou a seção 9 do
+`docs/PROMOCAO_PARA_PRODUCAO.md` e a seção "Branches e deploy" do `CLAUDE.md`
+da raiz, que não tinha nada sobre deploy.
+
+**Por que não foi merge.** `git log origin/main..origin/develop` deu **83
+commits** no backend e **50** no frontend: módulo de Grupos inteiro, automação
+em story, isolamento das filas, duas rodadas de Configurações. Com as migrations
+não aplicadas, o merge faria o `create_all` do boot criar as ~20 tabelas do
+módulo **sem RLS** em produção — a seção 0 deste runbook descreve exatamente
+isso. O pedido era subir um fix, não o backlog.
+
+**Worktree, não `checkout`.** A cópia de trabalho da develop tem 28 arquivos
+modificados que não são meus (Campanhas/Grupos em andamento). `git worktree add`
+isola o cherry-pick sem tocar neles.
+
+**A armadilha do teste no worktree.** 25 erros de coleção + 18 falhas assustam,
+e não são do commit: o worktree não tem `.env` (gitignored) e o `.env` da
+develop tem 15 chaves que o `Settings` da main rejeita (`extra_forbidden`). O
+que decide é o **controle**: `HEAD~1` deu `18 failed, 369 passed, 25 errors` e
+o fix deu `18 failed, 373 passed, 25 errors` — mesma falha dos dois lados, +4
+testes novos.
+
+**Confirmação de deploy pelo estado real.** O job verde só diz que o webhook do
+Coolify foi aceito. O que vale é `status: finished` **com o SHA empurrado** na
+API de deployments (o token está no `.env`, ao contrário do que a memória antiga
+dizia) e o hash do bundle do frontend mudando. Medido em produção depois:
+`/datasets/all/rows` com o período pedindo **1,84 MB em 2,6 s** (era ~30 MB sem
+filtro), KPIs na tela em 3,7 s, cache de 1.782 KB **gravado** — antes nunca
+persistia. Números conferidos contra SQL: R$ 8.840,60 e 3.306 pedidos na tela e
+no banco.
+
+Pendente: o SHA em `main` é outro, então o merge futuro da develop reconflita em
+`datasetStore.ts`, `clicksStore.ts`, `Dashboard.tsx`, `Reports.tsx`,
+`ShopeeIntegrationSettings.tsx` e `dataset_row_repository.py` — manter o lado da
+develop.
+
 ## 2026-09-04 — `list_by_user` consulta colunas, porque o dashboard pedia 67 mil linhas
 
 O que mudou: `DatasetRowRepository.list_by_user` passou a consultar as 19

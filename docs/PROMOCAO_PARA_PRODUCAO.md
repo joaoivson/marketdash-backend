@@ -2,7 +2,9 @@
 
 > **Nada deste documento foi executado.** Por decisão do João (25/08/2026,
 > reafirmada em 31/08/2026), tudo vive em `develop`/homologação até ser
-> homologado. Estado do banco **medido em 26/08/2026** (linhas `058`–`067`) e em
+> homologado. Isso vale para a promoção **do módulo**; correções pontuais já
+> subiram para produção por **cherry-pick**, sem merge — o procedimento está na
+> **seção 9**, e é o caminho normal para qualquer fix isolado. Estado do banco **medido em 26/08/2026** (linhas `058`–`067`) e em
 > **31/08/2026** (`068`–`070`), não lembrado — a seção 1 traz o script para
 > remedir, porque nota sobre estado de banco apodrece.
 >
@@ -624,3 +626,92 @@ Card por número na aba Dispositivos, **renomear** e **pausar o envio**:
 - **Gating:** nenhum ponto novo — vive dentro da aba Números, já coberta pelos
   5 arquivos de 3.5.
 
+---
+
+## 9. Promoção pontual por cherry-pick (o caminho normal para um fix isolado)
+
+Executado em **04/09/2026** com a correção de performance do dashboard: backend
+`4acc1cc` → `8ffb6f9`, frontend `a5aee68` → `8e4092f`. Este é o caminho para
+**qualquer correção que não dependa de feature não promovida**; o merge das
+seções 3–8 fica para a promoção do módulo.
+
+### Quando cabe
+
+| Cabe | Não cabe |
+|---|---|
+| Correção de bug ou performance | Feature nova do módulo de Grupos/Instagram |
+| **Sem migration** | Qualquer coisa com migration — aí é a ordem migration → deploy da seção 0 |
+| Sem model novo (nada para o `create_all` criar em produção) | Model novo: ver seção 0 |
+| Não depende de código só existente na develop | Depende |
+
+### Procedimento
+
+**1. Meça o que o merge levaria — antes de decidir.**
+
+```bash
+git log --oneline origin/main..origin/develop | wc -l   # 04/09: 83 backend, 50 frontend
+```
+
+Se o número for maior que o punhado de commits que você quer promover, é
+cherry-pick. Não existe "merge rápido só desse fix".
+
+**2. Cherry-pick em worktree, nunca com `checkout` na cópia de trabalho.**
+
+A árvore de trabalho da develop costuma estar suja (feature em andamento). Trocar
+de branch nela mistura o que não é seu no commit — e o `git add` de diretório já
+arrastou arquivo alheio aqui antes.
+
+```bash
+git worktree add /tmp/wt-main origin/main -b prod-<assunto>-<ddmm>
+cd /tmp/wt-main && git cherry-pick <sha>
+```
+
+Conflito no cherry-pick = sinal de que o fix depende de algo que só existe na
+develop. Pare e reavalie; não resolva "no braço" para empurrar.
+
+**3. Rode o teste na linhagem da `main`, com controle.**
+
+O worktree não tem `.env` (é gitignored) e o `.env` da develop tem chaves que o
+`Settings` da main não aceita — os dois casos derrubam a coleção do pytest e
+**parecem** falha do seu commit. Compare sempre contra o commit anterior:
+
+```bash
+git checkout HEAD~1 && pytest tests/unit -q --continue-on-collection-errors   # controle
+git checkout -      && pytest tests/unit -q --continue-on-collection-errors   # com o fix
+```
+
+Em 04/09: controle `18 failed, 369 passed, 25 errors`; com o fix `18 failed,
+373 passed, 25 errors` — mesma falha dos dois lados, +4 testes novos. É isso que
+autoriza empurrar. No frontend, `tsc -p tsconfig.app.json --noEmit` (o
+`tsc --noEmit` da raiz **não valida nada**: `files: []`) + `npm run build`.
+
+**4. Empurre direto para `main`.**
+
+```bash
+git push origin prod-<assunto>-<ddmm>:main
+```
+
+**5. Confirme o deploy pelo estado real, não pelo CI.**
+
+```bash
+TOKEN=$(grep '^COOLIFY_TOKEN=' .env | cut -d= -f2-)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://31.97.22.173:8000/api/v1/deployments/<deployment_uuid>"   # status + commit
+```
+
+O `deployment_uuid` sai do log do job (`gh run view <id> --log`). Espere
+`finished` **com o SHA que você empurrou** — `queued`/`in_progress` não é deploy
+feito, e o job verde só diz que o webhook foi aceito. No frontend o marcador é o
+hash do bundle: `curl -s https://marketdash.com.br/ | grep -o 'assets/index-[^"]*\.js'`
+tem que mudar.
+
+**6. Valide na tela, em produção.** Login com a conta admin, screenshot, e os
+números conferidos contra SQL. Em 04/09 o dashboard mostrou R$ 8.840,60 e 3.306
+pedidos, idêntico ao banco aplicando as regras do KPI.
+
+**7. Registre o par de SHAs.** O commit em `main` tem SHA diferente do da
+develop: o merge futuro **vai** reconflitar nesses arquivos. Anote na 8.5 e no
+`CHANGELOG.md` qual lado manter (o da develop, que é a mesma mudança e mais
+recente).
+
+**8. Limpe.** `git worktree remove --force /tmp/wt-main && git branch -D prod-<assunto>-<ddmm>`.

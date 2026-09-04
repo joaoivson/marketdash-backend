@@ -177,7 +177,15 @@ cache nunca persistia justamente na conta grande, e toda carga era carga fria.
 - Testes: `tests/unit/test_dataset_rows_por_periodo.py` (recorte por data,
   isolamento por usuário, serialização campo a campo).
 
-### Medido depois, em homologação (52.372 linhas, conta `relacionamento@`)
+### Medido em PRODUÇÃO depois do deploy (conta com 67.139 linhas)
+`/datasets/all/rows?start_date=…&end_date=…` devolve **1,84 MB em 2,6 s** (era
+~30 MB sem filtro nenhum); os KPIs aparecem **3,7 s** depois do dashboard abrir;
+e o cache do período foi **gravado** (1.782 KB) — antes o `setItem` estourava a
+cota e toda carga era fria. Números conferidos contra o banco: a tela mostra
+**R$ 8.840,60** de comissão e **3.306** pedidos em 28/08–03/09, idêntico ao SQL
+aplicando as regras do KPI (fora UNPAID e cancelados).
+
+### Medido antes, em homologação (52.372 linhas, conta `relacionamento@`)
 Janela de 19 dias: **2,75 MB em 2,3 s**. Sem período: **8,7 s** só na request,
 ~15 s até a tela. Os números conferem com o SQL: 01/08–19/08 dá **R$ 13.457,00
 de comissão e 4.916 pedidos** na tela e no banco (descontando UNPAID e
