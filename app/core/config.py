@@ -222,6 +222,58 @@ class Settings(BaseSettings):
         """Path do arquivo de log de debug (env/config ou default em cwd)."""
         return self.DEBUG_LOG_PATH or os.environ.get("DEBUG_LOG_PATH") or os.path.join(os.getcwd(), ".cursor", "debug.log")
 
+    #: Base do frontend por ambiente. `ENVIRONMENT` vem do Coolify e é o valor
+    #: em que já se confia para tudo (fila do Celery, CORS, gate de produção).
+    _FRONTEND_POR_AMBIENTE = {
+        "production": "https://marketdash.com.br",
+        "homologation": "https://hml.marketdash.com.br",
+        "development": "http://localhost:8080",
+    }
+
+    @property
+    def frontend_url(self) -> str:
+        """
+        Base pública do frontend, SEMPRE com um valor coerente.
+
+        Ordem: `FRONTEND_URL` explícita > o padrão do `ENVIRONMENT` > produção.
+
+        Existe porque o default fixo em produção falhava do pior jeito
+        possível: em homologação a afiliada copiava um link para
+        `marketdash.com.br/g/{slug}`, onde a rota não existe, e o sintoma
+        chegava como "a página do grupo não funciona" — sem nada, em lugar
+        nenhum, apontando para uma variável de ambiente.
+        """
+        explicito = (self.FRONTEND_URL or "").strip().rstrip("/")
+        if explicito:
+            return explicito
+        return self._FRONTEND_POR_AMBIENTE.get(
+            (self.ENVIRONMENT or "").lower(),
+            self._FRONTEND_POR_AMBIENTE["production"],
+        )
+
+    @model_validator(mode='after')
+    def avisar_frontend_url_incoerente(self) -> 'Settings':
+        """
+        Grita quando `FRONTEND_URL` explícita não bate com o `ENVIRONMENT`.
+
+        Env explícita continua vencendo — é ela que permite domínio próprio.
+        Mas apontar homologação para o domínio de produção é sempre erro, e
+        antes ele era **silencioso**: nada quebrava, o link só levava a lugar
+        nenhum. Um WARNING no boot é onde alguém olha quando o link falha.
+        """
+        explicito = (self.FRONTEND_URL or "").strip().rstrip("/")
+        esperado = self._FRONTEND_POR_AMBIENTE.get((self.ENVIRONMENT or "").lower())
+        if explicito and esperado and explicito != esperado:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "FRONTEND_URL=%s não bate com ENVIRONMENT=%s (esperado %s). "
+                "O link de entrada dos grupos vai apontar para %s — confira a "
+                "variável no Coolify.",
+                explicito, self.ENVIRONMENT, esperado, explicito,
+            )
+        return self
+
     @model_validator(mode='after')
     def assemble_redis_url(self) -> 'Settings':
         if self.REDIS_PASSWORD and self.REDIS_URL:
@@ -315,7 +367,13 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM_EMAIL: Optional[str] = None
     SMTP_FROM_NAME: str = "MarketDash"
-    FRONTEND_URL: str = "https://marketdash.com.br"
+    # Base pública do frontend — é dela que sai o link de entrada dos grupos
+    # (`{FRONTEND_URL}/g/{slug}`). Sem valor explícito, DERIVA DO AMBIENTE:
+    # ver `_frontend_url_do_ambiente`. Fixar produção como default fazia a
+    # afiliada em homologação copiar um link apontando para
+    # `marketdash.com.br`, onde a rota não existe — e o sintoma chegava como
+    # "a página do grupo não funciona", sem nada apontando para a env.
+    FRONTEND_URL: Optional[str] = None
     # Email que recebe feedback do formulário (API de feedback)
     FEEDBACK_EMAIL: str = "relacionamento@marketdash.com.br"
     

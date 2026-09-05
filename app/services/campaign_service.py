@@ -369,8 +369,17 @@ class CampaignService:
         kpis = self._compute_kpis(responses, budget_now, active_count_now, de_grupo)
         return CampaignListResponse(kpis=kpis, campaigns=responses, has_tax=has_tax)
 
+    #: Janela do modal de vínculo. Ver `sub_id_sales_summary`: a query varria o
+    #: histórico inteiro e o tempo crescia com a conta — quem vende mais
+    #: esperava mais, justamente quem mais usa a tela.
+    DIAS_DO_MODAL_DE_SUBID = 30
+
     def sub_id_options(self, user_id: int, campaign_id: int) -> SubIdOptionsResponse:
         """Sub IDs para o modal de vínculo: com venda (Shopee) ∪ só cliques (upload).
+
+        Pedidos e comissão são dos **últimos 30 dias**, não do histórico — é o
+        que a afiliada precisa para escolher, e é o que mantém o modal rápido
+        numa conta com muita venda.
 
         Ordena: com venda (sugeridos + pedidos desc); depois sem venda. Sub IDs
         já vinculados a OUTRA campanha vêm marcados (o frontend bloqueia).
@@ -380,7 +389,7 @@ class CampaignService:
         if not campaign:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada.")
 
-        sales = self.repo.sub_id_sales_summary(user_id)
+        sales = self.repo.sub_id_sales_summary(user_id, dias=self.DIAS_DO_MODAL_DE_SUBID)
         clicks = self.repo.sub_ids_from_clicks(user_id)
         linked = self.repo.linked_sub_ids(user_id)
         options = merge_sub_id_option_rows(

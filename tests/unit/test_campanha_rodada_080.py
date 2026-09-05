@@ -280,12 +280,14 @@ def test_excluir_nao_leva_os_grupos_nem_o_sub_id(db):
     """Os grupos continuam nos Números e a comissão atribuída permanece — nada
     disso pende da campanha."""
     user, campanha, numeros, grupos = _cenario(db)
-    sub_ids = [g.sub_id for g in grupos]
+    # Mapa, não lista: `query().all()` sem ORDER BY não garante ordem no
+    # Postgres, e comparar listas fazia o teste falhar por sorte do plano.
+    sub_ids = {g.id: g.sub_id for g in grupos}
     CampanhaGruposService(db).excluir(campanha)
 
     vivos = db.query(WhatsappGrupo).filter(WhatsappGrupo.user_id == user.id).all()
-    assert {g.id for g in vivos} == {g.id for g in grupos}
-    assert [g.sub_id for g in vivos] == sub_ids
+    assert {g.id for g in vivos} == set(sub_ids)
+    assert {g.id: g.sub_id for g in vivos} == sub_ids
 
 
 # --- duplicar ---------------------------------------------------------------
@@ -490,3 +492,98 @@ def test_gasto_de_campanha_de_grupo_sai_do_lucro_e_do_roas_mas_fica_no_gasto(db)
     # Só os R$100 da campanha comum entram no prejuízo.
     assert r.kpis.total_profit == pytest.approx(-100.0)
     assert r.kpis.avg_roas == 0.0
+
+
+# --- FRONTEND_URL: o link tem que apontar para o ambiente certo --------------
+
+
+def test_frontend_url_deriva_do_ambiente_quando_nao_ha_env_explicita():
+    """
+    O default fixo em produção falhava do pior jeito: em homologação a afiliada
+    copiava um link para `marketdash.com.br/g/{slug}`, onde a rota não existe, e
+    o sintoma chegava como "a página do grupo não funciona" — sem nada, em lugar
+    nenhum, apontando para uma variável de ambiente.
+    """
+    from app.core.config import Settings
+
+    assert Settings(ENVIRONMENT="homologation", FRONTEND_URL=None).frontend_url == (
+        "https://hml.marketdash.com.br"
+    )
+    assert Settings(ENVIRONMENT="production", FRONTEND_URL=None).frontend_url == (
+        "https://marketdash.com.br"
+    )
+    # Ambiente desconhecido cai em produção: é o menos errado dos dois lados —
+    # link de produção num ambiente novo é visível, o contrário vaza hml.
+    assert Settings(ENVIRONMENT="qualquer-coisa", FRONTEND_URL=None).frontend_url == (
+        "https://marketdash.com.br"
+    )
+
+
+def test_frontend_url_explicita_vence_e_avisa_quando_nao_bate(caplog):
+    """A env explícita continua mandando — é ela que permite domínio próprio.
+    Mas apontar hml para o domínio de produção é sempre erro, e antes era
+    SILENCIOSO: nada quebrava, o link só levava a lugar nenhum."""
+    import logging
+
+    from app.core.config import Settings
+
+    with caplog.at_level(logging.WARNING):
+        s = Settings(ENVIRONMENT="homologation",
+                     FRONTEND_URL="https://marketdash.com.br")
+    assert s.frontend_url == "https://marketdash.com.br"
+    assert any("FRONTEND_URL" in r.message for r in caplog.records), (
+        "incoerência entre FRONTEND_URL e ENVIRONMENT precisa gritar no boot"
+    )
+
+
+def test_frontend_url_coerente_nao_avisa(caplog):
+    import logging
+
+    from app.core.config import Settings
+
+    with caplog.at_level(logging.WARNING):
+        Settings(ENVIRONMENT="homologation",
+                 FRONTEND_URL="https://hml.marketdash.com.br")
+    assert not any("FRONTEND_URL" in r.message for r in caplog.records)
+
+
+# --- busca de Sub ID: janela de 30 dias -------------------------------------
+
+
+def test_busca_de_sub_id_so_conta_os_ultimos_30_dias(db):
+    """
+    A query varria o histórico inteiro de `dataset_rows_v2` a cada abertura do
+    modal, e o tempo crescia com a conta: quem vende mais esperava mais —
+    justamente quem mais usa a tela.
+    """
+    from datetime import date as _date, timedelta
+
+    from app.models.dataset import Dataset
+    from app.models.dataset_row import DatasetRow
+    from app.repositories.campaign_repository import CampaignRepository
+
+    user, campanha, numeros, grupos = _cenario(db)
+    ds = Dataset(user_id=user.id, filename="x.csv", status="completed")
+    db.add(ds); db.flush()
+
+    def _venda(sub_id, quando, order_id):
+        db.add(DatasetRow(dataset_id=ds.id, user_id=user.id, sub_id1=sub_id,
+                          order_id=order_id, commission=10.0, revenue=100.0,
+                          product="Produto", status="completed", date=quando))
+
+    hoje = _date.today()
+    _venda("recente", hoje, "P1")
+    _venda("antigo", hoje - timedelta(days=120), "P2")
+    db.commit()
+
+    por_sub = {
+        r["sub_id"]: r
+        for r in CampaignRepository(db).sub_id_sales_summary(user.id, dias=30)
+    }
+    assert "recente" in por_sub
+    assert "antigo" not in por_sub, "venda de 120 dias atrás entrou na janela de 30"
+
+    # `dias=0` continua devolvendo o histórico — o modal de grupos usa período
+    # próprio e precisa desse caminho.
+    todos = {r["sub_id"] for r in CampaignRepository(db).sub_id_sales_summary(user.id, dias=0)}
+    assert {"recente", "antigo"} <= todos

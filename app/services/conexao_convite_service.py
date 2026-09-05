@@ -124,5 +124,5 @@ class ConexaoConviteService:
         o `url_for` gera `http`, toma 301 e o link chega quebrado para quem
         precisa escanear.
         """
-        raiz = (base or settings.FRONTEND_URL or "").rstrip("/")
+        raiz = (base or "").rstrip("/") or settings.frontend_url
         return f"{raiz}/conectar/{token}"

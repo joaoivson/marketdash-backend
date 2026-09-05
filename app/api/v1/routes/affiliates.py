@@ -73,7 +73,7 @@ def get_my_affiliate_summary(
         for u in db.query(User).filter(User.id.in_(referred_user_ids)).all()
     } if referred_user_ids else {}
 
-    base_url = (settings.FRONTEND_URL or "https://marketdash.com.br").rstrip("/")
+    base_url = settings.frontend_url
     ref_link = f"{base_url}/?ref={current_user.id}"
 
     return AffiliateSummaryResponse(

@@ -23,7 +23,7 @@ class EmailService:
         self.smtp_password = settings.SMTP_PASSWORD
         self.from_email = settings.SMTP_FROM_EMAIL or settings.SMTP_USER
         self.from_name = settings.SMTP_FROM_NAME
-        self.frontend_url = settings.FRONTEND_URL
+        self.frontend_url = settings.frontend_url
         
     def _get_template_path(self, template_name: str) -> Path:
         """Retorna o caminho do template."""

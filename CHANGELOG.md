@@ -11,6 +11,48 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-05 (O link de entrada apontava para produção, e a busca de Sub ID varria o histórico)
+
+Três itens reportados depois do deploy da rodada anterior.
+
+### O link de entrada da campanha apontava para o domínio de PRODUÇÃO
+
+O sintoma chegou como "a página do grupo continua não funcionando", com um 404 no
+celular. Não era a rota: em homologação a tela mostrava
+`https://marketdash.com.br/g/8496c6c7` — domínio de **produção**, onde o módulo
+não existe.
+
+`FRONTEND_URL` tinha default fixo em produção, e estava setada explicitamente
+como produção nos dois recursos de homologação do Coolify (API e worker). O
+`.env` do backend ainda tinha a variável **duplicada**, com a de produção na
+última linha — `python-dotenv` monta um dict, então era ela que vencia.
+
+Agora `FRONTEND_URL` é opcional e a base **deriva do `ENVIRONMENT`**
+(`settings.frontend_url`). Env explícita continua vencendo — é ela que permite
+domínio próprio — mas quando não bate com o ambiente o boot emite um WARNING
+nomeando o valor esperado. Antes a incoerência era silenciosa: nada quebrava, o
+link só levava a lugar nenhum.
+
+Corrigido também nas envs de homologação; produção conferida e intocada.
+
+### A busca de Sub ID varria o histórico inteiro
+
+`sub_id_sales_summary` agregava `dataset_rows_v2` **sem recorte de período** a
+cada abertura do modal de vínculo. O tempo crescia com a conta: quem vende mais
+esperava mais, justamente quem mais usa a tela.
+
+Janela de **30 dias**. O modal serve para escolher um sub_id, e sub_id que não
+vende há um mês não é o que se está procurando. `dias=0` mantém o histórico para
+quem precisar. O rótulo na tela diz o escopo — sem isso a afiliada vê a comissão
+cair e acha que perdeu venda.
+
+### Correção de teste
+
+`test_excluir_nao_leva_os_grupos_nem_o_sub_id` comparava LISTAS de um
+`query().all()` sem `ORDER BY`. O Postgres não garante ordem, e o teste falhava
+conforme o plano de execução — flaky escrito por mim na rodada anterior. Passou a
+comparar mapa.
+
 ## [Não versionado] - 2026-09-04b (Campanhas de grupos e Anúncios: segunda rodada do documento delta)
 
 Segundo documento delta, depois de testar a rodada anterior na tela. Cross-stack,

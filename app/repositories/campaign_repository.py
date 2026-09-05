@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 from sqlalchemy import case, distinct, func
@@ -409,24 +409,37 @@ class CampaignRepository:
             for r in rows
         }
 
-    def sub_id_sales_summary(self, user_id: int) -> List[dict]:
-        """Todos os sub_ids do usuário que JÁ tiveram venda (histórico, sem recorte de período).
+    def sub_id_sales_summary(self, user_id: int, dias: int = 30) -> List[dict]:
+        """Sub_ids com venda nos últimos `dias` — pedidos e comissão do período.
 
-        Retorna [{sub_id, orders, commission}] — usado pelo modal de vínculo.
+        **A janela existe por desempenho.** Sem ela a query varria o histórico
+        inteiro de `dataset_rows_v2` a cada abertura do modal, e o tempo crescia
+        com a conta: quem vende mais espera mais, justamente quem mais usa a
+        tela. O modal serve para ESCOLHER um sub_id, e sub_id que não vende há
+        um mês não é o que a afiliada está procurando.
+
+        `dias=0` volta ao histórico completo — o modal de grupos usa período
+        próprio e passa o dele.
         """
         norm = _norm_sub_id()
+        filtros = [
+            DatasetRow.user_id == user_id,
+            DatasetRow.sub_id1.isnot(None),
+            norm != "",
+            _status_do_kpi_filtro(),
+        ]
+        if dias:
+            # `DatasetRow.date` é DATE (dia da venda), não timestamp — o corte
+            # é por dia civil e não precisa do cuidado de fuso das colunas
+            # `timestamptz`.
+            filtros.append(DatasetRow.date >= date.today() - timedelta(days=dias - 1))
         rows = (
             self.db.query(
                 norm.label("sub_id"),
                 func.coalesce(func.sum(DatasetRow.commission), 0.0).label("commission"),
                 func.count(distinct(DatasetRow.order_id)).label("orders"),
             )
-            .filter(
-                DatasetRow.user_id == user_id,
-                DatasetRow.sub_id1.isnot(None),
-                norm != "",
-                _status_do_kpi_filtro(),
-            )
+            .filter(*filtros)
             .group_by(norm)
             .all()
         )

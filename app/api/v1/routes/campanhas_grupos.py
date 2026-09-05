@@ -492,7 +492,10 @@ def obter_link(campanha=Depends(campanha_da_usuaria), db: Session = Depends(get_
     from app.core.config import settings
 
     link = CampanhaLinkService(db).obter_ou_criar(campanha)
-    base = (settings.FRONTEND_URL or "https://marketdash.com.br").rstrip("/")
+    # `settings.frontend_url` e não a env crua: sem valor explícito ele
+    # deriva do ENVIRONMENT. O default fixo em produção fazia homologação
+    # gerar link para `marketdash.com.br/g/{slug}`, onde a rota não existe.
+    base = settings.frontend_url
     return {
         "id": link.id,
         "slug": link.slug,
