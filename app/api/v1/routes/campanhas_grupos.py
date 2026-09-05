@@ -228,8 +228,7 @@ def resumo_consolidado(
         "investimento": round(gasto_bruto, 2),
         "investimento_com_imposto": investimento_com_imposto,
         "leads": leads_total,
-        "custo_por_entrada": (round(investimento_com_imposto / totais["entradas"], 2)
-                              if totais["entradas"] else None),
+        "custo_por_entrada": _custo_por(investimento_com_imposto, totais["entradas"]),
         "por_campanha": por_campanha,
     }
 
@@ -839,14 +838,28 @@ def resultados(
             # CPL é None tanto sem pixel quanto com 0 lead — nos dois casos a
             # divisão não existe. Quem distingue os dois na tela é `leads`
             # acima (None = "configure o pixel"; 0 = "ninguém virou lead").
-            "cpl": (round(gasto_com_imposto / anuncios["leads"], 2)
-                    if anuncios["leads"] else None),
-            "custo_por_entrada": (round(gasto_com_imposto / entradas, 2)
-                                  if entradas else None),
-            "custo_por_permanencia": (round(gasto_com_imposto / ficaram, 2)
-                                      if ficaram else None),
+            "cpl": _custo_por(gasto_com_imposto, anuncios["leads"]),
+            "custo_por_entrada": _custo_por(gasto_com_imposto, entradas),
+            "custo_por_permanencia": _custo_por(gasto_com_imposto, ficaram),
         },
     }
+
+
+def _custo_por(gasto: float | None, quantidade: int | None) -> float | None:
+    """
+    Custo unitário, ou `None` quando ele não existe.
+
+    Exige **numerador e denominador**. Guardar só o denominador devolvia
+    R$0,00 com nenhum anúncio vinculado, e a tela afirmava "cada entrada custou
+    zero" — a mesma classe do "Lucro −R$1.305,73" sem Sub ID: um número que
+    ninguém mediu, com cara de medido. Sem investimento não existe custo.
+
+    Quem distingue "não tem anúncio" de "não teve entrada" na tela é a nota,
+    que olha os dois campos separadamente — não este quociente.
+    """
+    if not gasto or not quantidade:
+        return None
+    return round(gasto / quantidade, 2)
 
 
 def _seguro_para_planilha(valor: str) -> str:

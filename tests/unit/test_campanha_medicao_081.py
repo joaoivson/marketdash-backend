@@ -282,3 +282,30 @@ def test_sub_id_vinculado_a_mao_conta_como_medicao_mesmo_sem_venda(db):
     hoje = _date.today()
     r = CampanhaResultadoService(db).por_grupo(user.id, c, hoje, hoje)
     assert r["totais"]["sub_ids_vinculados"] == 1
+
+
+# --- custo unitário ---------------------------------------------------------
+
+
+def test_custo_sem_investimento_e_None_e_nao_zero():
+    """
+    "Custo por entrada R$ 0,00 · 141 entradas" com nenhum anúncio vinculado.
+
+    O guard antigo olhava só o DENOMINADOR: com 141 entradas e gasto zero a
+    divisão dava 0,0 e a tela afirmava que cada entrada saiu de graça. É a
+    mesma classe do "Lucro −R$1.305,73" sem Sub ID que esta rodada corrigiu —
+    número que ninguém mediu, com cara de medido.
+
+    Visto na tela de homologação DEPOIS do deploy desta rodada: quatro cards
+    corrigidos e dois ainda mentindo, ao lado uns dos outros.
+    """
+    from app.api.v1.routes.campanhas_grupos import _custo_por
+
+    # o caso da tela: 141 entradas, nenhum anúncio vinculado
+    assert _custo_por(0.0, 141) is None
+    assert _custo_por(None, 141) is None
+    # sem denominador continua None (comportamento que já existia)
+    assert _custo_por(1305.73, 0) is None
+    assert _custo_por(1305.73, None) is None
+    # com os dois, calcula normalmente
+    assert _custo_por(1305.73, 40) == 32.64
