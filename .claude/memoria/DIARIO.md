@@ -11,6 +11,107 @@
 
 ---
 
+## 2026-09-05b — Medição de grupos: o que o documento supunha e o que os dados disseram
+
+Terceiro documento delta do módulo, sobre a cadeia de medição: entrada, saída,
+evasão, leads, CPL, custo por entrada e por permanência. Migration 081.
+
+**O método mudou depois do erro de ontem.** Ontem eu declarei um bug fechado por
+inferência e a medição do dia seguinte me desmentiu. Hoje comecei medindo, e
+isso derrubou **três** diagnósticos do documento antes de qualquer linha de
+código:
+
+1. *"No #2 faltam 87 pessoas — leitura parcial ou paginação truncada."* Não é.
+   É **defasagem**: a lista vem do último sync e o contador anda pelo webhook. A
+   aritmética fecha exatamente — `lista + entradas − saídas após o sync =
+   contador − 1`, e o −1 é o nosso próprio número, excluído da lista de
+   propósito. Se eu tivesse "corrigido" a paginação, teria mexido em código
+   correto e o número continuaria divergindo.
+2. *"A captura funciona, a agregação não."* A agregação está certa: 7 dias do #2
+   = 181 entradas / 68 saídas. O #1 mostra 1 entrada porque **está cheio** — a
+   rotação manda todo mundo para o #2. O sintoma era o efeito pretendido.
+3. *"`custom_link` gravado como URL absoluta."* `campanha_links` sempre guardou
+   só o slug. O domínio errado era a `FRONTEND_URL`, corrigida de manhã.
+
+O que sobrou de bug real era outra coisa em cada caso.
+
+### O override de "cheio" — e uma decisão minha revogada em 24h
+
+O relato do Luiz: dois grupos marcados "Cheio = Sim" à mão voltaram para "Não"
+depois de um sync. Fui procurar no sync e não achei — porque o sync nunca tocou
+em `cheio_override`.
+
+**Quem apagava era a decisão que eu tomei ontem.** Eu tinha feito o override
+"limpar sozinho quando a escolha bate com o automático", para o campo não ficar
+pegajoso. O efeito colateral: marcar "Sim" num grupo **já cheio pela ocupação**
+gravava `null` — nada era persistido, a assinatura não mudava, "Salvar ordem"
+nem acendia, nenhum PUT saía. Depois o sync baixava a contagem e o grupo voltava
+para "Não". Da tela, é indistinguível de "o sync apagou".
+
+A correção não é desfazer a de ontem: o problema que ela resolvia (grupo que
+esvazia e nunca volta à rotação) é real. A saída é o **terceiro estado
+explícito** — Automático / Sim / Não. Agora nada limpa o override sozinho, e
+"Automático" é a porta de volta. O Select passa a mostrar a **intenção**; o
+resultado continua na coluna Ocupação, onde sempre esteve.
+
+### "Vagas esgotadas" era CPC jogado fora
+
+Com todos os grupos cheios, o clique caía numa página que não convertia — e o
+anúncio continua rodando e cobrando. Agora o link manda para o primeiro grupo da
+ordem, sem tela intermediária: sempre há gente saindo.
+
+Duas escolhas do fallback que não são óbvias:
+
+- Ele ignora `aberto`, `cheio` e o limite da campanha, mas **respeita a
+  `capacidade` do WhatsApp** — acima dela o convite falha do lado deles, e
+  mandar para lá seria trocar uma página inútil por um erro.
+- Ele **não usa `FOR UPDATE SKIP LOCKED`**, que a rotação normal usa. Ali o lock
+  distribui vagas; no fallback não há vaga a distribuir — todos vão para o mesmo
+  destino. Com o lock, dois cliques simultâneos fariam o segundo cair em "vagas
+  esgotadas" sem motivo, justamente o que o fallback existe para evitar.
+
+E o clique **conta**, marcado `resultado='fallback_lotado'`. Sem marcar, o gasto
+existiria no Meta e o clique não existiria aqui — a taxa de entrada melhoraria
+artificialmente justo quando a operação está pior.
+
+### Pausar não pausava nada
+
+`status='pausada'` era um select sem efeito: `rotear()` só bloqueava `arquivada`
+e o motor de roteiros nem lia o status. O documento pedia para **promover** esse
+controle a toggle no cabeçalho — o que teria dado destaque a um interruptor que
+não desliga. Fiz na ordem inversa: primeiro o efeito (link responde "campanha
+pausada", roteiro para), depois o destaque.
+
+### Evasão de 900%
+
+Saídas ÷ entradas do período: 9 ÷ 1. A base virou `participantes + saídas` —
+todo mundo que esteve dentro em algum momento da janela. É o único denominador
+que garante saídas ≤ base, e portanto evasão ≤ 100%. Aplicado também na Visão
+geral: bases diferentes fariam a mesma campanha mostrar duas evasões na mesma
+sessão.
+
+### "Leads" era clique
+
+1.348 leads ao lado de 53 entradas, CPL de R$0,97 ao lado de R$24,64 de custo
+por entrada, nada dizendo que não eram a mesma coisa. O pixel dispara no
+carregamento do `/g/`, antes do redirect — é clique qualificado. Renomeado.
+
+O critério de "sem medição" foi o que mais errei: comecei por "o grupo tem
+`sub_id`?", e todo grupo tem — ele nasce na ativação. Só conta como medição
+vínculo manual de Sub ID ou sub_id de grupo que **trouxe pedido de verdade**.
+
+### Pendências
+
+- **Migration 081 pendente em produção**, junto com 074–080. Ela é `ALTER TABLE`
+  pura e sem bloqueio jurídico, mas sem ela `campanha_link_eventos.resultado`
+  não existe e **todo** clique quebra, não só o fallback
+- O telefone continua dependendo de **número conectado + sync** em hml — o Luiz
+  precisa reconectar para a coluna sair preenchida
+- Os Sub IDs antigos (`wgea`) convivem com os novos (`grupobeatriz2k7f`)
+  permanentemente, por decisão
+
+---
+
 ## 2026-09-05 — O telefone NÃO estava no payload; e o link de hml apontava para produção
 
 Retifica a entrada de ontem no título e na conclusão. O que mudou hoje: janela de

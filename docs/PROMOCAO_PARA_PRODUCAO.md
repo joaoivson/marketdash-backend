@@ -419,7 +419,7 @@ da Meta.
 1. **Medir** produção com o SQL da seção 1 — não confie nesta tabela
 2. **Listar** `git log --oneline main..develop` nos dois repos e decidir item a item
    (49 e 33 commits em 31/08 — ver seção 2 e 8.5)
-3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080`
+3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080→081`
    em produção — a lista fechada é a **§8.1**, e é ela que manda, não este
    resumo (**sem** `061`/`064`/`069`, que são de pg_cron e vão no passo 10).
    ⚠️ A `079` **e a `080`** só entram **depois** da política de privacidade
@@ -547,9 +547,22 @@ homologação.
 > exportação lê) e que preenche os eventos antigos casando pelo hash. Uma
 > produção com o módulo no ar e nenhum número conectado exporta a coluna vazia
 > — e isso não é defeito, é a ordem das coisas. Ver `docs/whatsapp-waha.md`.
+>
+> ⚠️ **A `081` é `ALTER TABLE` pura e NÃO tem bloqueio jurídico** — mas tem a
+> armadilha da `070`: `create_all` não adiciona coluna em tabela que já existe.
+> Sem ela aplicada, `campanha_link_eventos.resultado` não existe e **todo
+> clique no link de entrada quebra**, não só o caso de fallback: o INSERT passa
+> a citar uma coluna ausente. O boot-ALTER em `db/base.py` cobre, mas é rede,
+> não garantia — aplique antes do deploy.
+>
+> O `ALTER COLUMN sub_id TYPE VARCHAR(64)` é alargamento (era 32): não trunca
+> nada e não invalida o índice único. Os Sub IDs antigos (`wgea`, `wgec`)
+> continuam como estão — a `081` **não migra nenhum**, de propósito: rederivar
+> quebraria a atribuição de toda comissão já registrada com o código velho.
 | — | `077_remove_resumo_blacklist.sql` | **desagenda** `whatsapp-resumo-9am-brt` + DROP de 3 tabelas | **PENDENTE** | OK (03/09) |
 | — | `078_shopee_sync_por_usuario.sql` | função `trigger_shopee_sync_user` (só a função — agendamento é manual e diverge) | **PENDENTE** | **PENDENTE** |
 | 16 | `080_grupos_participantes_cheio_subids.sql` | `campanha_grupos.cheio_override` · `grupo_participantes` (lista de membros) · `campanha_sub_ids` | **PENDENTE** | OK (04/09) |
+| 17 | `081_fallback_lotado_e_subid_legivel.sql` | `campanha_link_eventos.resultado` + índice parcial · `whatsapp_grupos.sub_id` para `VARCHAR(64)` | **PENDENTE** | OK (05/09) |
 
 > ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
 > **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,

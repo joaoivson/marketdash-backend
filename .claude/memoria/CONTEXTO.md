@@ -196,6 +196,45 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
     contador da Visão geral. Duplicá-la faz a tela dizer "há vaga" num grupo que
     o roteador já não escolhe.
 
+- **Terceira rodada (05/09b): migration 081 aplicada em hml.**
+  `campanha_link_eventos.resultado` (+ índice parcial) e
+  `whatsapp_grupos.sub_id` alargado para `VARCHAR(64)`.
+
+  **`ALTER TABLE` pura, sem bloqueio jurídico — mas obrigatória antes do
+  deploy.** Sem a coluna `resultado`, o INSERT de clique cita coluna
+  inexistente e **todo** clique no link de entrada quebra, não só o de
+  fallback. O boot-ALTER de `db/base.py` cobre, mas é rede, não garantia.
+
+  ⚠️ **A rotação agora tem DUAS regras, e a diferença é uma linha.**
+  `TETO_SQL` (limite da campanha, acima) governa o caminho normal;
+  `CAPACIDADE_SQL` (só a `capacidade` do WhatsApp) governa o **fallback de
+  lotado**, quando nenhum grupo tem vaga e o link manda para o primeiro da
+  ordem em vez de mostrar "vagas esgotadas". O fallback também é o único
+  caminho **sem `FOR UPDATE SKIP LOCKED`**: ali não há vaga a distribuir, e o
+  lock faria o segundo clique simultâneo cair na tela que o fallback existe
+  para evitar. Mexer numa das duas sem olhar a outra é como o teto vira
+  inconsistente.
+
+  ⚠️ **`cheio_override` tem TRÊS estados** (`NULL` = automático). O
+  comportamento de 04/09b — limpar o override quando a escolha coincidia com o
+  automático — foi **revogado**: ele causava o bug relatado como "o sync apaga
+  minha marcação". Marcar "Sim" num grupo já cheio pela ocupação gravava
+  `null`, nada era persistido, e o sync seguinte baixava a contagem. Nada mais
+  limpa o override sozinho; "Automático" é a porta de volta.
+
+  ⚠️ **`sub_id` de grupo: dois formatos, para sempre.** Grupo novo nasce
+  `grupo`+nome sanitizado+sufixo (`grupobeatriz2k7f`); os antigos (`wgea`)
+  ficam. A geração é **uma vez, na ativação, nunca rederivada** — renomear o
+  grupo não muda o Sub ID, e migrar os antigos seria perda de atribuição
+  permanente.
+
+  **Medido antes de codar, e três diagnósticos do documento caíram:** a
+  divergência export × tela é defasagem (a lista é do último sync, o contador
+  anda pelo webhook — a aritmética fecha, com o −1 sendo nosso próprio número);
+  a agregação de Resultados está correta (o grupo #1 mostra 1 entrada porque
+  está cheio e a rotação manda tudo para o #2); e `campanha_links` sempre
+  guardou só o slug — o domínio errado era a `FRONTEND_URL`.
+
 - **Proxy por sessão (27/08)**: implementado, **flag ligada** e **pool vazio** —
   ou seja, ainda sem efeito prático: cada sessão continua saindo pelo IP do
   servidor, agora com WARNING no log. O que falta, em ordem:
@@ -244,8 +283,8 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   Meta para as DMs serem entregues. `GET /me/stories` confirmado na nossa variante (200 com o
   story real). Ver CHANGELOG 2026-09-02.
 - **Migrations**: 058 (grupos WhatsApp) APLICADA em hml em 25/08; **074**
-  (`whatsapp_grupos.ativado`) e **079** (campanhas de grupos, ver acima)
-  aplicadas em hml — nenhuma das duas em produção; **070**
+  (`whatsapp_grupos.ativado`), **079**, **080** e **081** (campanhas de grupos,
+  ver acima) aplicadas em hml — nenhuma delas em produção; **070**
   (`whatsapp_instancias.envio_pausado`/`pausado_em`) aplicada e conferida em
   hml em 31/08 — ⚠️ é `ALTER TABLE`, a armadilha *inversa* do `create_all`:
   subir o model antes dela quebra `GET /instancias` com `UndefinedColumn`; **052–056 (Instagram) APLICADAS em produção em 02/09** (a feature
