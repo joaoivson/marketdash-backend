@@ -27,11 +27,18 @@ como produção nos dois recursos de homologação do Coolify (API e worker). O
 `.env` do backend ainda tinha a variável **duplicada**, com a de produção na
 última linha — `python-dotenv` monta um dict, então era ela que vencia.
 
-Agora `FRONTEND_URL` é opcional e a base **deriva do `ENVIRONMENT`**
-(`settings.frontend_url`). Env explícita continua vencendo — é ela que permite
-domínio próprio — mas quando não bate com o ambiente o boot emite um WARNING
-nomeando o valor esperado. Antes a incoerência era silenciosa: nada quebrava, o
-link só levava a lugar nenhum.
+Agora `FRONTEND_URL` é opcional e a base **deriva da ref do projeto Supabase no
+`DATABASE_URL`** (`settings.frontend_url`), não de `ENVIRONMENT`: medido na API
+de homologação, ela reporta `"development"` — os dois ambientes reportam isso, a
+mesma armadilha que fez a fila do Celery ser derivada do banco. Chavear por
+`ENVIRONMENT` teria mandado **produção para localhost** no dia em que a env
+explícita saísse. Sem banco reconhecido, o fallback é produção, e não localhost:
+errar para o domínio público é visível na hora.
+
+Env explícita continua vencendo — é ela que permite domínio próprio — mas quando
+não bate com o banco em uso o boot emite um WARNING nomeando o valor esperado.
+Antes a incoerência era silenciosa: nada quebrava, o link só levava a lugar
+nenhum.
 
 Corrigido também nas envs de homologação; produção conferida e intocada.
 

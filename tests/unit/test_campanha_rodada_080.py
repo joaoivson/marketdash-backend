@@ -497,26 +497,37 @@ def test_gasto_de_campanha_de_grupo_sai_do_lucro_e_do_roas_mas_fica_no_gasto(db)
 # --- FRONTEND_URL: o link tem que apontar para o ambiente certo --------------
 
 
-def test_frontend_url_deriva_do_ambiente_quando_nao_ha_env_explicita():
+def test_frontend_url_deriva_do_BANCO_nunca_do_environment():
     """
     O default fixo em produção falhava do pior jeito: em homologação a afiliada
     copiava um link para `marketdash.com.br/g/{slug}`, onde a rota não existe, e
-    o sintoma chegava como "a página do grupo não funciona" — sem nada, em lugar
-    nenhum, apontando para uma variável de ambiente.
+    o sintoma chegava como "a página do grupo não funciona".
+
+    E a derivação NÃO pode ser por `ENVIRONMENT`: medido na API de hml em
+    05/09, ela reporta `"development"` — os dois ambientes reportam isso, a
+    mesma armadilha que fez a fila do Celery ser derivada do banco. Chavear por
+    `ENVIRONMENT` mandaria produção para localhost no dia em que a env saísse.
     """
+    from app.core.ambiente import REF_HOMOLOGACAO, REF_PRODUCAO
     from app.core.config import Settings
 
-    assert Settings(ENVIRONMENT="homologation", FRONTEND_URL=None).frontend_url == (
-        "https://hml.marketdash.com.br"
-    )
-    assert Settings(ENVIRONMENT="production", FRONTEND_URL=None).frontend_url == (
-        "https://marketdash.com.br"
-    )
-    # Ambiente desconhecido cai em produção: é o menos errado dos dois lados —
-    # link de produção num ambiente novo é visível, o contrário vaza hml.
-    assert Settings(ENVIRONMENT="qualquer-coisa", FRONTEND_URL=None).frontend_url == (
-        "https://marketdash.com.br"
-    )
+    def _url(ref):
+        return f"postgresql://u:p@db.{ref}.supabase.co:5432/postgres"
+
+    # ENVIRONMENT propositalmente MENTINDO nos dois casos, como em produção.
+    hml = Settings(ENVIRONMENT="development", FRONTEND_URL=None,
+                   DATABASE_URL=_url(REF_HOMOLOGACAO))
+    prod = Settings(ENVIRONMENT="development", FRONTEND_URL=None,
+                    DATABASE_URL=_url(REF_PRODUCAO))
+    assert hml.frontend_url == "https://hml.marketdash.com.br"
+    assert prod.frontend_url == "https://marketdash.com.br"
+
+    # Banco que não é nenhum dos dois (Postgres local) cai em PRODUÇÃO, não em
+    # localhost: errar para o domínio público é visível na hora; errar para
+    # localhost quebraria todo e-mail e link de produção se a env sumisse.
+    local = Settings(ENVIRONMENT="development", FRONTEND_URL=None,
+                     DATABASE_URL="postgresql://u:p@localhost:5434/dashads_db")
+    assert local.frontend_url == "https://marketdash.com.br"
 
 
 def test_frontend_url_explicita_vence_e_avisa_quando_nao_bate(caplog):
@@ -525,25 +536,27 @@ def test_frontend_url_explicita_vence_e_avisa_quando_nao_bate(caplog):
     SILENCIOSO: nada quebrava, o link só levava a lugar nenhum."""
     import logging
 
+    from app.core.ambiente import REF_HOMOLOGACAO
     from app.core.config import Settings
 
+    url = f"postgresql://u:p@db.{REF_HOMOLOGACAO}.supabase.co:5432/postgres"
     with caplog.at_level(logging.WARNING):
-        s = Settings(ENVIRONMENT="homologation",
-                     FRONTEND_URL="https://marketdash.com.br")
+        s = Settings(FRONTEND_URL="https://marketdash.com.br", DATABASE_URL=url)
     assert s.frontend_url == "https://marketdash.com.br"
     assert any("FRONTEND_URL" in r.message for r in caplog.records), (
-        "incoerência entre FRONTEND_URL e ENVIRONMENT precisa gritar no boot"
+        "incoerência entre FRONTEND_URL e o banco precisa gritar no boot"
     )
 
 
 def test_frontend_url_coerente_nao_avisa(caplog):
     import logging
 
+    from app.core.ambiente import REF_HOMOLOGACAO
     from app.core.config import Settings
 
+    url = f"postgresql://u:p@db.{REF_HOMOLOGACAO}.supabase.co:5432/postgres"
     with caplog.at_level(logging.WARNING):
-        Settings(ENVIRONMENT="homologation",
-                 FRONTEND_URL="https://hml.marketdash.com.br")
+        Settings(FRONTEND_URL="https://hml.marketdash.com.br", DATABASE_URL=url)
     assert not any("FRONTEND_URL" in r.message for r in caplog.records)
 
 

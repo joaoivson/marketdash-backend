@@ -222,39 +222,55 @@ class Settings(BaseSettings):
         """Path do arquivo de log de debug (env/config ou default em cwd)."""
         return self.DEBUG_LOG_PATH or os.environ.get("DEBUG_LOG_PATH") or os.path.join(os.getcwd(), ".cursor", "debug.log")
 
-    #: Base do frontend por ambiente. `ENVIRONMENT` vem do Coolify e é o valor
-    #: em que já se confia para tudo (fila do Celery, CORS, gate de produção).
-    _FRONTEND_POR_AMBIENTE = {
-        "production": "https://marketdash.com.br",
-        "homologation": "https://hml.marketdash.com.br",
-        "development": "http://localhost:8080",
+    #: Base do frontend por ambiente, chaveada pela **ref do projeto Supabase**.
+    #:
+    #: NÃO por `ENVIRONMENT`: os dois ambientes reportam `"development"` — a
+    #: mesma armadilha que fez a fila do Celery ser derivada do banco (ver
+    #: `app/core/ambiente.py` e `app/tasks/celery_app.py`). Chavear por
+    #: `ENVIRONMENT` aqui mandaria produção para `localhost` no dia em que a
+    #: env explícita saísse.
+    _FRONTEND_POR_BANCO = {
+        "iprdyorxqdiivthtcvxf": "https://marketdash.com.br",     # produção
+        "ytjpdvjuxtvxacredekk": "https://hml.marketdash.com.br",  # homologação
     }
+
+    def _frontend_do_banco(self) -> Optional[str]:
+        """Base esperada para o banco atual, ou None se não for prod nem hml."""
+        # Import tardio: `app.core.ambiente` importa `settings` deste módulo.
+        from app.core.ambiente import identidade_do_banco
+
+        # `self.DATABASE_URL` explícito: sem argumento a função lê o singleton
+        # global `settings`, e não a instância em construção — o que faria
+        # qualquer Settings criada à mão (teste, script) responder pelo
+        # ambiente errado.
+        return self._FRONTEND_POR_BANCO.get(identidade_do_banco(self.DATABASE_URL))
 
     @property
     def frontend_url(self) -> str:
         """
         Base pública do frontend, SEMPRE com um valor coerente.
 
-        Ordem: `FRONTEND_URL` explícita > o padrão do `ENVIRONMENT` > produção.
+        Ordem: `FRONTEND_URL` explícita > o domínio do BANCO em uso > produção.
 
         Existe porque o default fixo em produção falhava do pior jeito
         possível: em homologação a afiliada copiava um link para
         `marketdash.com.br/g/{slug}`, onde a rota não existe, e o sintoma
         chegava como "a página do grupo não funciona" — sem nada, em lugar
         nenhum, apontando para uma variável de ambiente.
+
+        O fallback final é produção, e não localhost, porque errar para o
+        domínio público é visível na hora; errar para localhost quebraria todo
+        e-mail e link de produção se a env sumisse.
         """
         explicito = (self.FRONTEND_URL or "").strip().rstrip("/")
         if explicito:
             return explicito
-        return self._FRONTEND_POR_AMBIENTE.get(
-            (self.ENVIRONMENT or "").lower(),
-            self._FRONTEND_POR_AMBIENTE["production"],
-        )
+        return self._frontend_do_banco() or "https://marketdash.com.br"
 
     @model_validator(mode='after')
     def avisar_frontend_url_incoerente(self) -> 'Settings':
         """
-        Grita quando `FRONTEND_URL` explícita não bate com o `ENVIRONMENT`.
+        Grita quando `FRONTEND_URL` explícita não bate com o banco em uso.
 
         Env explícita continua vencendo — é ela que permite domínio próprio.
         Mas apontar homologação para o domínio de produção é sempre erro, e
@@ -262,15 +278,20 @@ class Settings(BaseSettings):
         nenhum. Um WARNING no boot é onde alguém olha quando o link falha.
         """
         explicito = (self.FRONTEND_URL or "").strip().rstrip("/")
-        esperado = self._FRONTEND_POR_AMBIENTE.get((self.ENVIRONMENT or "").lower())
-        if explicito and esperado and explicito != esperado:
+        if not explicito:
+            return self
+        try:
+            esperado = self._frontend_do_banco()
+        except Exception:
+            return self   # config incompleta no boot não pode derrubar o app
+        if esperado and explicito != esperado:
             import logging
 
             logging.getLogger(__name__).warning(
-                "FRONTEND_URL=%s não bate com ENVIRONMENT=%s (esperado %s). "
+                "FRONTEND_URL=%s não bate com o banco em uso (esperado %s). "
                 "O link de entrada dos grupos vai apontar para %s — confira a "
                 "variável no Coolify.",
-                explicito, self.ENVIRONMENT, esperado, explicito,
+                explicito, esperado, explicito,
             )
         return self
 
