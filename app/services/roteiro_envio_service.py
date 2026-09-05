@@ -257,6 +257,12 @@ class RoteiroEnvioService:
         )
         return status == CAMPANHA_PAUSADA
 
+    #: Reavaliação de execução parqueada por campanha pausada. Longo de
+    #: propósito: o caminho normal de volta é o reagendamento do `atualizar()`
+    #: ao despausar, não este relógio — que existe só para o caso de a campanha
+    #: ser despausada por fora (SQL direto, import) e ninguém reagendar.
+    PARQUEIO_CAMPANHA_PAUSADA_S = 3600
+
     def processar_fatia(self, execucao_id: int,
                         orcamento_s: Optional[int] = None) -> Dict:
         r = ResultadoDaFatia()
@@ -269,8 +275,30 @@ class RoteiroEnvioService:
         # que não desligava nada: a entrada continuava e o roteiro também.
         # O guard fica AQUI, no mesmo lugar do estado da execução, para valer
         # também na fatia seguinte — pausar no meio de um lote para o resto.
+        #
+        # PARQUEIA, não devolve seco. A primeira versão só marcava o motivo e
+        # retornava, deixando a linha em `enviando` com o `iniciado_em` antigo
+        # — e essa é exatamente a assinatura que `enviando_estagnadas()` (o
+        # tick de 5 em 5 minutos) procura para "resgatar" execução cujo worker
+        # morreu. A execução era re-enfileirada a cada tick, gravava um
+        # `sync_runs` bem-sucedido, batia no guard de novo, e não convergia
+        # enquanto a campanha ficasse pausada. Era o único caminho de parada da
+        # fatia que não movia a execução de estado.
+        #
+        # `EXEC_AGENDADA` + `proxima_execucao_em`, não `EXEC_PAUSADA`: pausada
+        # exige `POST /retomar` manual, uma por uma. Quem pausou a campanha
+        # espera que despausar volte tudo — e volta: `atualizar()` reagenda
+        # para agora ao sair de `pausada`, e este parqueamento é só a rede
+        # para o caso de ninguém despausar.
         if self._campanha_pausada(execucao):
+            execucao.status = EXEC_AGENDADA
+            execucao.proxima_execucao_em = (
+                datetime.now(timezone.utc)
+                + timedelta(seconds=self.PARQUEIO_CAMPANHA_PAUSADA_S)
+            )
+            self.db.commit()
             r.motivo_parada = "campanha_pausada"
+            logger.info("Execução %s parqueada: campanha pausada", execucao.id)
             return r.to_dict()
 
         inicio_fatia = time_mod.monotonic()

@@ -8,6 +8,7 @@ Regras que moram aqui:
   * arquivar em vez de deletar: a campanha carrega histórico de atribuição.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -143,6 +144,7 @@ class CampanhaGruposService:
         if "descricao" in mudancas:
             campanha.descricao = (str(mudancas["descricao"] or "").strip()) or None
         novo_status = mudancas.get("status")
+        despausando = False
         if novo_status in STATUS_VALIDOS:
             desarquivando = (
                 campanha.status == CAMPANHA_ARQUIVADA and novo_status != CAMPANHA_ARQUIVADA
@@ -152,6 +154,9 @@ class CampanhaGruposService:
                     raise LimiteDeCampanhas(
                         f"Limite de {self.plan_limit_campanhas} campanhas atingido"
                     )
+            despausando = (
+                campanha.status == CAMPANHA_PAUSADA and novo_status != CAMPANHA_PAUSADA
+            )
             campanha.status = novo_status
         if mudancas.get("estrategia_entrada") in ESTRATEGIAS_VALIDAS:
             campanha.estrategia_entrada = mudancas["estrategia_entrada"]
@@ -170,6 +175,33 @@ class CampanhaGruposService:
             campanha.limite_participantes = int(bruto) if bruto else None
         self.repo.marcar_tocada(campanha)
         self.db.commit()
+        # Despausar tem que devolver o roteiro ao ar. `processar_fatia`
+        # parqueia a execução uma hora à frente quando a campanha está pausada;
+        # sem este empurrão, ela ficaria olhando um roteiro parado com a
+        # campanha já ativa e nada na tela explicando a espera.
+        #
+        # DEPOIS do commit, e sem derrubar o PATCH se falhar: o status já foi
+        # gravado, e a alternativa (500 na resposta) faria a tela dizer que a
+        # campanha continua pausada quando ela não está mais. O relógio de uma
+        # hora do parqueamento é a rede.
+        if despausando:
+            try:
+                from app.repositories.roteiro_repository import RoteiroRepository
+
+                n = RoteiroRepository(self.db).reagendar_parqueadas_da_campanha(
+                    campanha.id, datetime.now(timezone.utc)
+                )
+                if n:
+                    logger.info(
+                        "Campanha %s despausada: %s execução(ões) reagendada(s)",
+                        campanha.id, n,
+                    )
+            except Exception:
+                logger.exception(
+                    "Campanha %s despausada, mas o reagendamento dos roteiros "
+                    "falhou — o parqueamento de 1h ainda as retoma",
+                    campanha.id,
+                )
         return campanha
 
     def definir_grupos(self, campanha: Campanha, itens: List[Tuple]) -> None:

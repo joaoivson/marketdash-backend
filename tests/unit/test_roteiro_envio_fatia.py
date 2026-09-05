@@ -806,3 +806,95 @@ def test_sem_proxy_a_rede_continua_no_disjuntor_antigo(db):
     db.expire_all()
     db.refresh(inst)
     assert inst.status == "desconectada"
+
+
+def _com_campanha(db, execucao, status="pausada"):
+    """Liga o roteiro da execução a uma campanha com o status pedido."""
+    from app.models.campanha_grupos import Campanha
+
+    roteiro = db.query(Roteiro).get(execucao.roteiro_id)
+    campanha = Campanha(user_id=execucao.user_id, nome=f"c-{uuid.uuid4().hex[:6]}",
+                        status=status)
+    db.add(campanha); db.flush()
+    roteiro.campanha_id = campanha.id
+    db.add(roteiro); db.commit()
+    return campanha
+
+
+def test_campanha_pausada_PARQUEIA_a_execucao_em_vez_de_deixar_presa(db):
+    """
+    A primeira versão do guard só marcava o motivo e devolvia — deixando a
+    linha em `enviando` com o `iniciado_em` antigo.
+
+    Essa é exatamente a assinatura que `enviando_estagnadas()` procura para
+    "resgatar" execução cujo worker morreu: o tick de 5 em 5 minutos a
+    re-enfileirava, gravava um `sync_runs` bem-sucedido, batia no guard de
+    novo, e não convergia enquanto a campanha ficasse pausada. Era o único
+    caminho de parada da fatia que não movia a execução de estado.
+    """
+    from app.models.roteiro import EXEC_AGENDADA
+    from app.repositories.roteiro_repository import RoteiroRepository
+
+    user, instancias, grupos, execucao = _cenario(db)
+    _com_campanha(db, execucao, status="pausada")
+    # `iniciado_em` velho: é o que faz a linha casar com `enviando_estagnadas`.
+    execucao.iniciado_em = datetime.now(timezone.utc) - timedelta(hours=3)
+    db.add(execucao); db.commit()
+
+    r = _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+    assert r["motivo_parada"] == "campanha_pausada"
+    assert r["enviadas"] == 0
+
+    db.refresh(execucao)
+    assert execucao.status == EXEC_AGENDADA
+    assert execucao.proxima_execucao_em > datetime.now(timezone.utc)
+
+    # E o tick não a trata mais como órfã de worker morto.
+    agora = datetime.now(timezone.utc)
+    assert execucao.id not in RoteiroRepository(db).enviando_estagnadas(agora)
+
+
+def test_despausar_a_campanha_traz_a_execucao_parqueada_de_volta(db):
+    """
+    Sem isto, despausar não teria efeito visível: a fatia parqueia uma hora à
+    frente, e ela ficaria olhando um roteiro parado com a campanha já ativa.
+    """
+    from app.models.roteiro import EXEC_AGENDADA, EXEC_PAUSADA
+    from app.repositories.roteiro_repository import RoteiroRepository
+
+    user, instancias, grupos, execucao = _cenario(db)
+    campanha = _com_campanha(db, execucao, status="pausada")
+    _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+    db.refresh(execucao)
+    assert execucao.status == EXEC_AGENDADA
+
+    agora = datetime.now(timezone.utc)
+    n = RoteiroRepository(db).reagendar_parqueadas_da_campanha(campanha.id, agora)
+    assert n == 1
+    db.refresh(execucao)
+    assert execucao.proxima_execucao_em <= agora   # o tick pega no próximo ciclo
+
+    # Execução PAUSADA à mão não é ressuscitada: pausar aquela execução é
+    # decisão dela sobre aquela execução, e despausar a campanha não a desfaz.
+    execucao.status = EXEC_PAUSADA
+    execucao.proxima_execucao_em = agora + timedelta(hours=2)
+    db.add(execucao); db.commit()
+    assert RoteiroRepository(db).reagendar_parqueadas_da_campanha(
+        campanha.id, datetime.now(timezone.utc)) == 0
+
+
+def test_despausar_pelo_service_reagenda_sem_precisar_do_repo(db):
+    """O caminho real: o PATCH de status do toggle do cabeçalho."""
+    from app.models.roteiro import EXEC_AGENDADA
+    from app.services.campanha_grupos_service import CampanhaGruposService
+
+    user, instancias, grupos, execucao = _cenario(db)
+    campanha = _com_campanha(db, execucao, status="pausada")
+    _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+    db.refresh(execucao)
+    assert execucao.proxima_execucao_em > datetime.now(timezone.utc)
+
+    CampanhaGruposService(db, user.id).atualizar(campanha, {"status": "ativa"})
+    db.refresh(execucao)
+    assert execucao.status == EXEC_AGENDADA
+    assert execucao.proxima_execucao_em <= datetime.now(timezone.utc)

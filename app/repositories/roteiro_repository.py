@@ -95,6 +95,34 @@ class RoteiroRepository:
         self.db.commit()
         return [r[0] for r in linhas]
 
+    def reagendar_parqueadas_da_campanha(self, campanha_id: int, agora: datetime) -> int:
+        """Traz para AGORA as execuções agendadas dos roteiros de uma campanha.
+
+        Chamada quando a campanha sai de `pausada`. A fatia parqueia a execução
+        com `proxima_execucao_em` uma hora à frente, e sem isto despausar não
+        teria efeito visível — a afiliada ficaria olhando um roteiro parado com
+        a campanha ativa, sem nada na tela explicando a espera.
+
+        Só toca `agendada` com data FUTURA: execução já due não precisa de
+        empurrão, e `pausada` é decisão dela sobre aquela execução específica —
+        despausar a campanha não pode desfazer um `POST /pausar` manual.
+        """
+        linhas = self.db.execute(
+            text("""
+                UPDATE roteiro_execucoes e
+                   SET proxima_execucao_em = :agora
+                  FROM roteiros r
+                 WHERE e.roteiro_id = r.id
+                   AND r.campanha_id = :campanha_id
+                   AND e.status = :agendada
+                   AND e.proxima_execucao_em > :agora
+             RETURNING e.id
+            """),
+            {"campanha_id": campanha_id, "agendada": EXEC_AGENDADA, "agora": agora},
+        ).fetchall()
+        self.db.commit()
+        return len(linhas)
+
     def enviando_estagnadas(self, agora: datetime, limite_s: int = 1800) -> List[int]:
         """Execuções em `enviando` sem atividade há 2× o orçamento da fatia:
         worker morreu depois do flip ou o apply_async falhou. Re-enfileirar é
