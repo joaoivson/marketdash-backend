@@ -127,6 +127,24 @@ por **comissão** — ela procura o que vendeu, não a letra A. Configurações 
 dois blocos com título, o Salvar só acende quando algo mudou, e a descrição da
 estratégia "Aleatória" parou de prometer uma comparação que a tela não entrega.
 
+### Dois achados da validação na tela, depois do deploy
+
+**"Custo por entrada R$ 0,00 · 141 entradas"**, com nenhum anúncio vinculado.
+O guard olhava só o denominador: com gasto zero a divisão dava 0,0 e a tela
+afirmava que cada entrada saiu de graça — a mesma classe do "Lucro
+−R$1.305,73" que esta rodada corrigiu. Quatro cards consertados e dois ainda
+mentindo, lado a lado. Agora exige numerador **e** denominador.
+
+**Os dois filtros da Atividade apareciam iguais** — "Promos da Beatriz …" e
+"Promos da Beatriz …". O `truncate` corta o fim, e o fim é o que separa os
+grupos (`#1`/`#2`). Passa a encurtar pelo meio, preservando o sufixo.
+
+E entrou o **aviso ao tirar o último grupo da rotação**, que tinha ficado de
+fora: marcar o último como cheio, ou fechar o último aberto, avisa antes e
+deixa continuar. Bloquear seria pior — fechar tudo é decisão legítima. Mas a
+consequência deixou de ser óbvia nesta mesma rodada: o link não mostra mais
+"vagas esgotadas", ele manda para o primeiro da ordem, que já está no limite.
+
 ### O que o documento supunha e os dados contradisseram
 
 | Documento | Medido no banco |

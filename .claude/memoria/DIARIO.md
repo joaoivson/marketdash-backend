@@ -100,6 +100,27 @@ O critério de "sem medição" foi o que mais errei: comecei por "o grupo tem
 `sub_id`?", e todo grupo tem — ele nasce na ativação. Só conta como medição
 vínculo manual de Sub ID ou sub_id de grupo que **trouxe pedido de verdade**.
 
+### A validação na tela pegou o que a suíte não pegava
+
+Depois do deploy, os screenshots em homologação mostraram dois defeitos que
+nenhum teste apanharia:
+
+- **"Custo por entrada R$ 0,00 · 141 entradas"** com nenhum anúncio vinculado.
+  Eu tinha corrigido comissão/lucro/ROAS para "—" e deixado os custos com o
+  guard antigo, que olhava só o denominador. O resultado é o pior formato
+  possível: quatro cards honestos e dois mentindo, um do lado do outro, o que
+  faz os corrigidos parecerem os errados.
+- **Os dois chips de filtro da Atividade eram idênticos** — "Promos da Beatriz
+  …" duas vezes. O `truncate` corta o fim, e o fim (`#1`/`#2`) é justamente o
+  discriminador. Eu tinha *acabado* de mexer nessa linha por causa do
+  vazamento dos chips, e olhei se eles cabiam, não se davam para ler.
+
+E revisando o documento contra o que foi feito, achei um item 🟢 que ficou de
+fora: o **aviso ao tirar o último grupo da rotação**. Ele só passou a importar
+por causa desta mesma rodada — antes, fechar tudo levava a "vagas esgotadas",
+que é autoexplicativo; agora manda para o primeiro da ordem em silêncio, e sem
+o aviso ela fecharia tudo achando que parou a entrada.
+
 ### Pendências
 
 - **Migration 081 pendente em produção**, junto com 074–080. Ela é `ALTER TABLE`
