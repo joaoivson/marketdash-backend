@@ -145,6 +145,23 @@ deixa continuar. Bloquear seria pior — fechar tudo é decisão legítima. Mas 
 consequência deixou de ser óbvia nesta mesma rodada: o link não mostra mais
 "vagas esgotadas", ele manda para o primeiro da ordem, que já está no limite.
 
+### O item que dois resumos deram por feito
+
+Auditando o documento linha a linha no fim da rodada, apareceu uma
+sub-cláusula que eu tinha pulado: o parágrafo do texto da Atividade termina com
+**"Some depois de 30 dias."**, e eu implementei só a primeira metade — trocar
+"a partir de agora" pela data real.
+
+A frase existe para explicar por que o feed começa onde começa: quem abre uma
+campanha de duas semanas precisa saber que o silêncio antes daquela data é
+falta de registro, não falta de movimento. Passados 30 dias essa dúvida não
+existe mais, e a linha vira ruído fixo no topo de uma tela aberta todo dia.
+
+Daí a regra nova em `.claude/rules/entrega-de-rodada.md` nos dois repos:
+**rodada fecha com tabela item a item — OK, pendente ou não implementado —
+verificada no código, não de memória.** Este item sobreviveu a dois resumos em
+prosa que o davam por completo.
+
 ### Cinco regressões que a própria rodada introduziu
 
 Revisão adversarial do diff (6 lentes independentes, cada achado passando por

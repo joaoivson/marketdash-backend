@@ -150,6 +150,22 @@ Nenhum dos cinco apareceria em `tsc`, lint, pytest ou screenshot: quatro
 exigem uma falha de rede ou uma sequência de cliques específica, e o quinto só
 se manifesta 30 minutos depois, no cron.
 
+### E um item que eu tinha dado por feito duas vezes
+
+No fecho, o João perguntou se todos os pontos foram aplicados e pediu uma
+**tabela** — não um resumo. Auditando linha a linha contra o documento,
+apareceu uma sub-cláusula pulada: o parágrafo do texto da Atividade termina com
+"Some depois de 30 dias.", e eu implementei só a metade da frente.
+
+Vale menos pelo tamanho do item e mais pelo modo de falha: **eu tinha escrito
+dois resumos afirmando que a Atividade estava completa**, e os dois estavam
+errados no mesmo ponto. Prosa bem escrita soa completa; a tabela obriga a olhar
+cada linha do documento e dizer o estado dela.
+
+Virou `.claude/rules/entrega-de-rodada.md` nos dois repos, com a regra de
+verificar **no código** — auditar de memória é exatamente como o item se
+perdeu.
+
 ### Pendências
 
 - **Migration 081 pendente em produção**, junto com 074–080. Ela é `ALTER TABLE`
