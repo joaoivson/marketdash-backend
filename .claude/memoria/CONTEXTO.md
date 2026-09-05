@@ -140,6 +140,19 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   **manual, via suporte** — não existe endpoint nem tela. É o que a política
   promete hoje; se o volume crescer, vira ferramenta.
 
+- **`FRONTEND_URL` corrigida em hml (05/09).** A tela de homologação mostrava o
+  link de entrada com o domínio de **produção** (`marketdash.com.br/g/{slug}`),
+  onde o módulo não existe — daí o "a página do grupo não funciona". A env
+  estava setada como produção nos dois recursos de hml no Coolify (API
+  `r448swsggoock0wg80csws0k` e worker `jos0k8so0gw4c8okkgg8kskg`), e o `.env`
+  tinha a chave **duplicada** (a última vence no `python-dotenv`). Corrigida nos
+  dois; produção conferida e intocada.
+
+  A base agora deriva de `app/core/ambiente.identidade_do_banco`, **não** de
+  `ENVIRONMENT` — a API de hml reporta `"environment":"development"`, a mesma
+  armadilha da fila do Celery, e chavear por ela mandaria produção para
+  `localhost` se a env sumisse.
+
 - **Segunda rodada (04/09b): migration 080 aplicada em hml.**
   `campanha_grupos.cheio_override`, `grupo_participantes` e `campanha_sub_ids`.
 
@@ -149,6 +162,14 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   Medido: 49 de 49 eventos pós-deploy nasceram `identificador_tipo='lid'`.
   Corrigido lendo os dois como campos separados; a identidade manteve a
   precedência de antes porque é ela que vira `identificador_hash`.
+
+  ⚠️ **O telefone só existe com número CONECTADO (05/09).** O webhook do WAHA
+  **não manda `PhoneNumber`** — provado com 191 eventos gravados depois da
+  correção que passou a ler o campo, todos ainda `lid`. Quem tem o número é o
+  payload REST de `/groups`, então o telefone (na lista de participantes E nos
+  eventos antigos, preenchidos pelo hash) depende de o sync rodar. Em hml os
+  números estão desconectados: reconectar e sincronizar é o que falta para
+  validar de ponta a ponta.
 
   ⚠️ **A 080 herda o bloqueio jurídico da 079, e mais forte.**
   `grupo_participantes` guarda a **lista de membros** — não só a contagem, como

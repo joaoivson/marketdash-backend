@@ -419,14 +419,23 @@ da Meta.
 1. **Medir** produção com o SQL da seção 1 — não confie nesta tabela
 2. **Listar** `git log --oneline main..develop` nos dois repos e decidir item a item
    (49 e 33 commits em 31/08 — ver seção 2 e 8.5)
-3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079`
+3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080`
    em produção — a lista fechada é a **§8.1**, e é ela que manda, não este
    resumo (**sem** `061`/`064`/`069`, que são de pg_cron e vão no passo 10).
-   ⚠️ A `079` só entra **depois** da política de privacidade publicada (§3.8);
-   a `077` derruba tabelas com dado real de aluna — exporte antes se quiser o
-   histórico.
+   ⚠️ A `079` **e a `080`** só entram **depois** da política de privacidade
+   publicada (§3.8); a `077` derruba tabelas com dado real de aluna — exporte
+   antes se quiser o histórico.
 4. **Conferir** RLS e policies com o SQL da seção 1
 5. **Definir** as variáveis do Coolify (3.2) e subir o WAHA de produção (3.3)
+   ⚠️ **Conferir `FRONTEND_URL` na API E no worker.** É dela que sai o link de
+   entrada dos grupos (`{FRONTEND_URL}/g/{slug}`). Em homologação ela estava
+   apontando para **produção** nos dois recursos, e o sintoma chegou como "a
+   página do grupo não funciona" — o link levava a um domínio onde a rota não
+   existe. Desde 05/09 a base deriva do BANCO quando a env está vazia
+   (`app/core/ambiente.identidade_do_banco`, nunca `ENVIRONMENT`, que reporta
+   `"development"` nos dois ambientes), e uma env incoerente com o banco emite
+   WARNING no boot. Confira também **duplicata no `.env`**: o `python-dotenv`
+   monta um dict e a ÚLTIMA linha vence.
 6. **Merge do backend** `develop→main` → deploy → **`/health` 200**
 7. **Confirmar que o deploy do worker Celery foi junto** — já ficou semanas com
    código velho porque o CI só deployava a API e um `|| echo` mascarava a falha
@@ -527,10 +536,17 @@ homologação.
 > apenas tem no WhatsApp e nunca ligou continua sendo contagem e nada mais. O
 > texto novo já está em `PrivacyPolicy.tsx` — publique antes de aplicar.
 >
-> A `080` também é a que corrige o **telefone vazio na exportação**: as colunas
-> de `grupo_eventos` já existiam desde a 079, mas o webhook lia `JID` (que em
-> grupo com endereçamento LID **é** o `@lid`) antes de `PhoneNumber`. Em
-> homologação, 49 de 49 eventos nasceram `identificador_tipo='lid'`.
+> A `080` também é a que sustenta o **telefone na exportação** — mas a correção
+> do webhook, sozinha, NÃO resolveu, e isso foi medido: depois dela, **191
+> eventos novos continuaram todos `identificador_tipo='lid'`**. O evento
+> `group.v2.participants` do WAHA **não manda `PhoneNumber`**; quem tem o número
+> é o payload REST de `/groups`.
+>
+> Consequência para a promoção: **o telefone só existe com número conectado e
+> sync rodando.** É o sync que popula `grupo_participantes` (de onde a
+> exportação lê) e que preenche os eventos antigos casando pelo hash. Uma
+> produção com o módulo no ar e nenhum número conectado exporta a coluna vazia
+> — e isso não é defeito, é a ordem das coisas. Ver `docs/whatsapp-waha.md`.
 | — | `077_remove_resumo_blacklist.sql` | **desagenda** `whatsapp-resumo-9am-brt` + DROP de 3 tabelas | **PENDENTE** | OK (03/09) |
 | — | `078_shopee_sync_por_usuario.sql` | função `trigger_shopee_sync_user` (só a função — agendamento é manual e diverge) | **PENDENTE** | **PENDENTE** |
 | 16 | `080_grupos_participantes_cheio_subids.sql` | `campanha_grupos.cheio_override` · `grupo_participantes` (lista de membros) · `campanha_sub_ids` | **PENDENTE** | OK (04/09) |

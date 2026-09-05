@@ -11,6 +11,67 @@
 
 ---
 
+## 2026-09-05 — O telefone NÃO estava no payload; e o link de hml apontava para produção
+
+Retifica a entrada de ontem no título e na conclusão. O que mudou hoje: janela de
+30 dias na busca de Sub ID, `frontend_url` derivado do BANCO, e o telefone
+resolvido pelo REST do WAHA em vez do webhook.
+
+**A entrada de ontem estava errada onde importa.** Ela dizia "o telefone estava
+no payload o tempo todo, no campo ao lado" — a leitura do webhook realmente
+estava errada e a correção era necessária, mas ela **não** era suficiente, e eu
+declarei vitória sem medir depois do deploy. A medida chegou hoje: dos eventos
+gravados em homologação **depois** daquele deploy, **191 continuaram todos
+`identificador_tipo='lid'`**. Zero telefone.
+
+Ou seja: o evento `group.v2.participants` do WAHA **não manda `PhoneNumber`**. O
+recon tinha marcado isso explicitamente como "NÃO ESTÁ PROVADO que o payload
+carrega o telefone — a prova que existe é do payload REST de `/groups`, não do
+webhook", e eu tratei a inferência como fato porque ela explicava o sintoma bem
+demais. Explicar o sintoma não é o mesmo que ser a causa.
+
+A leitura no webhook **fica**, com comentário dizendo por quê: ela cobre o dia em
+que o WAHA passar a mandar o campo, e apagá-la por parecer inútil faria o
+telefone ser descartado de novo. Quem resolve hoje é o payload REST, que
+sabidamente traz `PhoneNumber` — é o que `_identidades` já lia para descobrir se
+somos admin. O sync passou a preencher os eventos que só tinham o LID, casando
+pelo `identificador_hash`, que é estável por construção; o hash não muda, só a
+coluna exportável. É idempotente e depende de **número conectado**: sem sync não
+há payload REST, e sem ele não há telefone.
+
+**O link do grupo: quase repeti o erro que o repo já documenta.** O sintoma
+chegou como "a página do grupo continua não funcionando", com 404 no celular. Não
+era a rota: a tela de homologação mostrava `https://marketdash.com.br/g/8496c6c7`
+— domínio de **produção**, onde o módulo não existe. `FRONTEND_URL` estava setada
+como produção nos dois recursos de hml no Coolify, e o `.env` ainda tinha a
+variável **duplicada**, com produção na última linha (o `python-dotenv` monta um
+dict e a última vence).
+
+A primeira correção que escrevi derivava a base de `ENVIRONMENT`. Só descobri o
+problema ao medir a API depois do deploy: `/health` reporta
+`"environment":"development"` em **homologação**. É a mesma armadilha que o
+`CLAUDE.md` e o `celery_app` documentam há tempo — os dois ambientes reportam
+`development` — e ela quase entrou de novo, agora com consequência pior: sem a
+env explícita, **produção** iria para `localhost:8080`. Refeito com
+`app/core/ambiente.identidade_do_banco`, a ref do projeto Supabase, que é a
+fonte que o projeto já usa para isso.
+
+Lição para a próxima: quando existir um helper de "que ambiente é este", usar
+ele. A tentação de ler `ENVIRONMENT` é grande porque o nome promete exatamente
+isso — e é justamente o que não cumpre aqui.
+
+**O que sobrou de menor.** A busca de Sub ID agregava `dataset_rows_v2` sem
+recorte de período a cada abertura do modal; o tempo crescia com a conta, então
+quem vende mais esperava mais — justamente quem mais usa a tela. Janela de 30
+dias, com o escopo dito na tela (sem isso a afiliada vê a comissão cair e acha
+que perdeu venda). E um teste que eu mesmo escrevi ontem era flaky: comparava
+LISTAS de um `query().all()` sem `ORDER BY`, e o Postgres não garante ordem.
+
+Pendente: reconectar um número em hml e rodar o sync — é o que faltava para o
+telefone existir de fato, na lista de participantes e nos eventos.
+
+---
+
 ## 2026-09-04b — O telefone estava no payload o tempo todo, no campo ao lado
 
 O que mudou: migration **080** (`campanha_grupos.cheio_override`,

@@ -101,6 +101,29 @@ memória `reference_coolify`). Fixe tudo por env desde o primeiro deploy.
 > ⚠️ **Desde 04/09 (migration 079) o evento de participantes grava o número
 > real** em `grupo_eventos.identificador`, com `identificador_tipo` separando
 > telefone de LID. O hash continua ao lado. Ver `PROMOCAO_PARA_PRODUCAO.md` §3.8.
+>
+> 🔴 **MAS o webhook NÃO manda o telefone — medido em 05/09/2026.** Depois da
+> correção que passou a ler `PhoneNumber` separado do `JID`, **191 eventos
+> novos continuaram todos `identificador_tipo='lid'`**. O campo não vem neste
+> evento; em grupo com endereçamento LID chega só o `…@lid`, que é id opaco e
+> não disca.
+>
+> **Onde o telefone existe:** no payload **REST** de `GET /api/{sessao}/groups`,
+> ao lado do `JID` de cada participante — é o que `_identidades`
+> (`whatsapp_grupo_sync_service.py`) já lia para descobrir se o número é admin.
+> Por isso o telefone é resolvido no **sync**, não no webhook:
+> `whatsapp_grupo_repository.preencher_telefone_dos_eventos` casa os dois pelo
+> `identificador_hash` e preenche os eventos que só tinham o LID.
+>
+> Consequência operacional: **sem número conectado não há telefone.** Nem na
+> lista de participantes (`grupo_participantes`, migration 080), nem nos
+> eventos. O webhook continua sendo a única fonte de *quando* alguém entrou e
+> saiu; o REST é a única fonte de *quem*.
+>
+> A leitura de `PhoneNumber` no webhook (`_participante`, em
+> `app/api/v1/routes/whatsapp.py`) **não é código morto**: ela cobre o dia em
+> que o WAHA passar a mandar o campo. Apagá-la por parecer inútil faria o
+> telefone ser descartado de novo.
 
 ## Migração da Evolution (operacional, uma vez por ambiente)
 
