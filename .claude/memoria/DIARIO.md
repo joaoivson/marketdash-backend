@@ -121,6 +121,35 @@ por causa desta mesma rodada — antes, fechar tudo levava a "vagas esgotadas",
 que é autoexplicativo; agora manda para o primeiro da ordem em silêncio, e sem
 o aviso ela fecharia tudo achando que parou a entrada.
 
+### A revisão adversarial pegou o que a tela não pegava
+
+Depois dos screenshots, rodei uma revisão do diff inteiro com 6 lentes
+independentes, cada achado passando por 3 refutadores com instrução de refutar
+na dúvida. 25 achados brutos → 10 sobreviveram → **5 defeitos distintos, todos
+em código que eu tinha escrito hoje**.
+
+O padrão dos cinco é o mesmo, e é o que vale guardar: **cada um nasceu de uma
+melhoria desta rodada, não de descuido isolado.**
+
+- O "Salvar só acende quando algo mudou" transformou uma falha inofensiva
+  (`GET /link` falha, o switch some) numa aba editável-e-não-salvável.
+- O toggle de status no cabeçalho — que só existe porque hoje `pausada` passou
+  a ter efeito — virou o primeiro controle FORA da aba capaz de trocar a
+  campanha com o formulário preenchido, e apagava as edições.
+- A guarda de resposta obsoleta que eu criei para o `carregar` não foi aplicada
+  ao `carregarMais` do mesmo componente.
+- O guard de campanha pausada no motor de roteiros era o único caminho de
+  parada da fatia que não movia a execução de estado — e a assinatura que ele
+  deixava (`enviando` + `iniciado_em` velho) é exatamente a que o tick procura
+  para resgatar worker morto. Cada 5 minutos, para sempre.
+- Os chips da Atividade vinham do rascunho não salvo. O `ExportarLeadsModal`
+  logo abaixo, no mesmo arquivo, já documentava a regra oposta com o motivo
+  escrito — e eu escrevi o inverso a 100 linhas de distância.
+
+Nenhum dos cinco apareceria em `tsc`, lint, pytest ou screenshot: quatro
+exigem uma falha de rede ou uma sequência de cliques específica, e o quinto só
+se manifesta 30 minutos depois, no cron.
+
 ### Pendências
 
 - **Migration 081 pendente em produção**, junto com 074–080. Ela é `ALTER TABLE`

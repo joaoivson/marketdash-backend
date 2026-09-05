@@ -145,6 +145,42 @@ deixa continuar. Bloquear seria pior — fechar tudo é decisão legítima. Mas 
 consequência deixou de ser óbvia nesta mesma rodada: o link não mostra mais
 "vagas esgotadas", ele manda para o primeiro da ordem, que já está no limite.
 
+### Cinco regressões que a própria rodada introduziu
+
+Revisão adversarial do diff (6 lentes independentes, cada achado passando por
+3 refutadores): 25 achados brutos, 10 sobreviveram, 5 defeitos distintos.
+**Todos em código escrito hoje** — nenhum era débito antigo.
+
+**O "Salvar" de Configurações travava para sempre se o `GET /link` falhasse.**
+A baseline que decide se há o que salvar só era escrita no caminho feliz; o
+`catch` a deixava `null`, e `sujo` exige baseline. A aba virava
+editável-e-não-salvável em silêncio: o botão não acendia, o aviso "Alterações
+não salvas" não aparecia, e ela sairia achando que gravou. Antes desta rodada o
+botão era sempre habilitado e a mesma falha era inofensiva — foi a habilitação
+condicional que a tornou grave.
+
+**Pausar pelo cabeçalho apagava as edições não salvas.** O toggle novo vive
+fora da aba e troca o objeto da campanha; os efeitos de Configurações dependiam
+da identidade dele e reescreviam o formulário. Antes o Status morava dentro do
+próprio formulário e não havia controle externo capaz disso.
+
+**"Carregar mais" ficou sem a guarda de resposta obsoleta** que a mesma rodada
+criou para o `carregar`. Trocar o chip com uma página em voo anexava o recorte
+antigo na lista filtrada — e gravava o cursor dele, que não carrega o filtro
+dentro, então as páginas seguintes continuavam no recorte errado.
+
+**Os chips da Atividade vinham do rascunho da aba Grupos**, então o chip de um
+grupo adicionado e ainda não salvo mandava um id que o backend recusa com 404 e
+a aba inteira trocava a lista pelo card de erro. O `ExportarLeadsModal` logo
+abaixo já documentava a regra certa; eu escrevi o inverso ao lado.
+
+**Campanha pausada deixava a execução do roteiro presa em `enviando`.** O guard
+novo era o único caminho de parada da fatia que não movia a execução de estado
+— e essa é exatamente a assinatura que o tick procura para resgatar execução
+cujo worker morreu. Re-enfileirava a cada 5 minutos, gravava um `sync_runs`
+bem-sucedido, batia no mesmo guard, e não convergia. Agora parqueia como
+`agendada`, e despausar a campanha reagenda para agora.
+
 ### O que o documento supunha e os dados contradisseram
 
 | Documento | Medido no banco |
