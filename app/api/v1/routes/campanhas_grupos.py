@@ -6,7 +6,8 @@ próxima rota da fase herda o guard em vez de lembrar de copiá-lo.
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import require_plan
@@ -71,6 +72,13 @@ def _grupos_out(servico: CampanhaGruposService, campanha) -> list[GrupoDaCampanh
     # Uma consulta para todos os grupos: `instancias_por_grupo` já devolve o
     # mapa inteiro, e pedir por grupo aqui seria N+1 numa tela de listagem.
     das_instancias = servico.repo_grupos.instancias_por_grupo(campanha.user_id)
+    # Quando a lista de participantes daquele grupo foi confirmada pela última
+    # vez. O contador (`participantes`) anda a cada evento do webhook; a LISTA
+    # só anda no sync — e é dela que sai a exportação. Sem esta data a tela diz
+    # 773 e o CSV traz 679, e ninguém sabe por quê.
+    sincronizado = servico.repo_grupos.ultimo_sync_de(
+        [g.id for _v, g in servico.grupos_da_campanha(campanha)]
+    )
     saida = []
     for v, g in servico.grupos_da_campanha(campanha):
         # Teto e "cheio" saem daqui prontos, e não do JavaScript: a regra é a
@@ -87,6 +95,7 @@ def _grupos_out(servico: CampanhaGruposService, campanha) -> list[GrupoDaCampanh
             nome=g.nome, participantes=g.participantes, capacidade=g.capacidade,
             permite_envio=g.permite_envio, ativo=g.ativo, sub_id=g.sub_id,
             instancia_ids=das_instancias.get(g.id, []),
+            participantes_sincronizados_em=sincronizado.get(g.id),
         ))
     return saida
 
@@ -156,10 +165,14 @@ def resumo_consolidado(
     # os participantes) uma vez por campanha: 1 grupo virava 200 participantes
     # e R$200 onde havia R$100. Aqui o recorte é por GRUPO, uma vez só.
     linhas_por_grupo = {}
+    # Quantos Sub IDs rastreiam venda no consolidado — mesma pergunta da aba:
+    # sem nenhum, comissão zero é ausência de medição, não prejuízo.
+    sub_ids_rastreados = 0
 
     for c in ativas:
         dados = servico.por_grupo(current_user.id, c, d_ini, d_fim)
         t = dados["totais"]
+        sub_ids_rastreados += t.get("sub_ids_vinculados", 0)
         for linha in dados["linhas"]:
             linhas_por_grupo.setdefault(linha["grupo_id"], linha)
         m = repo_anuncio.metricas(current_user.id, c.id, d_ini, d_fim)
@@ -200,6 +213,12 @@ def resumo_consolidado(
     # voltou zero, que é outra coisa.
     totais["roas"] = (round(totais["comissao_liquida"] / investimento_com_imposto, 2)
                       if investimento_com_imposto else None)
+    # Mesma base de evasão de Resultados (população exposta), senão o Dashboard
+    # e a aba mostram números diferentes para a mesma campanha.
+    base_evasao = totais["participantes"] + totais["saidas"]
+    totais["evasao_pct"] = (round(totais["saidas"] / base_evasao * 100, 2)
+                            if base_evasao else None)
+    totais["sub_ids_vinculados"] = sub_ids_rastreados
     por_campanha.sort(key=lambda l: l["lucro"], reverse=True)
     return {
         "periodo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat()},
@@ -340,19 +359,23 @@ def listar_sub_ids(
     # União: o que teve movimento no período + o que já está vinculado (mesmo
     # sem venda). Sem a segunda parte, desmarcar sem querer um Sub ID sem
     # pedidos no período o faria sumir da lista e ela não conseguiria voltar.
-    todos = sorted(set(metricas) | vinculados)
-    return {
-        "sub_ids": [
-            {
-                "sub_id": s,
-                "pedidos": metricas.get(s, {}).get("pedidos", 0),
-                "comissao_liquida": metricas.get(s, {}).get("comissao_liquida", 0.0),
-                "vinculado": s in vinculados,
-                "bloqueado_por": (None if s in vinculados else bloqueados.get(s)),
-            }
-            for s in todos
-        ]
-    }
+    itens = [
+        {
+            "sub_id": s,
+            "pedidos": metricas.get(s, {}).get("pedidos", 0),
+            "comissao_liquida": metricas.get(s, {}).get("comissao_liquida", 0.0),
+            "vinculado": s in vinculados,
+            "bloqueado_por": (None if s in vinculados else bloqueados.get(s)),
+        }
+        for s in (set(metricas) | vinculados)
+    ]
+    # Ordem: já vinculado primeiro, depois por COMISSÃO. Alfabética era o pior
+    # critério possível — ela procura o que vendeu, não a letra A. O `sub_id`
+    # entra como desempate estável, senão a ordem dos zerados muda entre
+    # requests e a lista "pula" ao reabrir.
+    itens.sort(key=lambda i: (not i["vinculado"], -i["comissao_liquida"],
+                              -i["pedidos"], i["sub_id"]))
+    return {"sub_ids": itens}
 
 
 @router.put("/{campanha_id}/sub-ids", response_model=SubIdsDaCampanhaOut)
@@ -524,29 +547,95 @@ def atualizar_link(
 
 @router.get("/{campanha_id}/atividade")
 def atividade(
-    limite: int = 50,
+    limite: int = Query(50, ge=1, le=200),
+    cursor: str | None = None,
+    tipo: str | None = None,
+    grupo_id: int | None = None,
     campanha=Depends(campanha_da_usuaria),
     db: Session = Depends(get_db),
 ):
-    """Feed de entradas e saídas dos grupos da campanha (sem dado pessoal)."""
+    """
+    Feed paginado de entradas e saídas dos grupos da campanha.
+
+    Paginação por **cursor**, não por página: `criado_em` empata em lote (uma
+    entrada de 30 pessoas grava 30 eventos no mesmo instante) e OFFSET sobre
+    ordem ambígua repete e pula linhas — o defeito só apareceria em campanha
+    que está funcionando.
+
+    O cursor é `"<iso>|<id>"` do último item da página. `proximo_cursor` vem
+    `null` quando acabou.
+    """
+    from datetime import datetime as _dt
+
+    from app.models.campanha_link import EVENTO_ENTRADA
     from app.repositories.campanha_link_repository import CampanhaLinkRepository
 
     servico = CampanhaGruposService(db)
     pares = servico.grupos_da_campanha(campanha)
     nomes = {g.id: g.nome for _v, g in pares}
-    eventos = CampanhaLinkRepository(db).atividade(list(nomes), min(int(limite or 50), 200))
+
+    if tipo is not None and tipo not in ("entrada", "saida"):
+        # 422 e não "ignora o filtro": filtro silenciosamente desprezado faz a
+        # tela afirmar um recorte que ela não aplicou.
+        raise HTTPException(status_code=422, detail="Tipo inválido.")
+    if grupo_id is not None and grupo_id not in nomes:
+        # Sem esta checagem o parâmetro vira leitura de evento de grupo de
+        # OUTRA usuária — o repositório filtra só por grupo_id.
+        raise HTTPException(status_code=404, detail="Grupo não encontrado nesta campanha.")
+
+    par = None
+    if cursor:
+        try:
+            quando, ident = cursor.rsplit("|", 1)
+            par = (_dt.fromisoformat(quando), int(ident))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="Cursor inválido.")
+
+    linhas = CampanhaLinkRepository(db).atividade(
+        list(nomes), limite=limite, cursor=par, tipo=tipo, grupo_id=grupo_id,
+    )
+    tem_mais = len(linhas) > limite
+    eventos = linhas[:limite]
+    ultimo = eventos[-1] if eventos else None
     return {
         "eventos": [
             {
+                "id": e.id,
                 "tipo": e.tipo,
-                "origem": e.origem,
+                # Saída não tem origem: origem é de onde a pessoa veio ao
+                # ENTRAR. "Saída · origem desconhecida" fazia parecer que o
+                # sistema perdeu informação que nunca existiu.
+                "origem": e.origem if e.tipo == EVENTO_ENTRADA else None,
                 "grupo_id": e.grupo_id,
                 "grupo": nomes.get(e.grupo_id),
                 "quando": e.criado_em.isoformat() if e.criado_em else None,
             }
             for e in eventos
-        ]
+        ],
+        "proximo_cursor": (
+            f"{ultimo.criado_em.isoformat()}|{ultimo.id}"
+            if tem_mais and ultimo and ultimo.criado_em else None
+        ),
+        # Data do evento mais antigo dos grupos DESTA campanha — é o que a tela
+        # usa para dizer "registradas desde X". Vem de `grupo_eventos`, não de
+        # `campanha_grupos.adicionado_em`: o grupo pode estar gravando eventos
+        # desde antes de entrar nesta campanha, e o feed não corta por data —
+        # a frase se contradiria com a lista logo abaixo.
+        "registrando_desde": _registrando_desde(db, list(nomes)),
     }
+
+
+def _registrando_desde(db: Session, grupo_ids: list[int]) -> str | None:
+    from app.models.campanha_link import GrupoEvento
+
+    if not grupo_ids:
+        return None
+    valor = (
+        db.query(func.min(GrupoEvento.criado_em))
+        .filter(GrupoEvento.grupo_id.in_(grupo_ids))
+        .scalar()
+    )
+    return valor.isoformat() if valor else None
 
 
 # --- Anúncios × Grupos e Resultados (F7) -------------------------------------
@@ -813,6 +902,7 @@ def exportar_leads(
     from app.models.campanha_link import EVENTO_ENTRADA, GrupoEvento
     from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
     from app.services.campanha_grupos_service import CampanhaGruposService
+    from app.services.waha_client import normalizar_celular_br
 
     pares = CampanhaGruposService(db).grupos_da_campanha(campanha)
     nomes = {g.id: (g.nome or f"Grupo {g.id}") for _v, g in pares}
@@ -876,7 +966,9 @@ def exportar_leads(
             if p.visto_em > primeiro_sync[p.grupo_id]:
                 quando = p.visto_em
         escritor.writerow([
-            _seguro_para_planilha(p.telefone or ""),
+            # Rede de segurança: o sync já grava normalizado, mas as linhas
+            # gravadas ANTES desta rodada só se curam no próximo sync.
+            _seguro_para_planilha(normalizar_celular_br(p.telefone or "")),
             _seguro_para_planilha(nomes.get(p.grupo_id, "")),
             quando.isoformat() if quando else "",
         ])

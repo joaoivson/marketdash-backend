@@ -171,7 +171,8 @@ def link_de_entrada(slug: str, request: Request, db: Session = Depends(get_db)):
     from html import escape
 
     from app.services.campanha_link_service import (
-        CampanhaEncerrada, CampanhaLinkService, LinkInvalido, SemVaga,
+        CampanhaEncerrada, CampanhaLinkService, CampanhaPausada, LinkInvalido,
+        SemVaga,
     )
 
     is_preview = request.url.path.startswith("/g/preview/")
@@ -187,9 +188,23 @@ def link_de_entrada(slug: str, request: Request, db: Session = Depends(get_db)):
             is_preview=is_preview,
         )
     except SemVaga:
+        # Desde 05/09 esta página é EXCEÇÃO, não o caminho normal do grupo
+        # cheio: o fallback manda para o primeiro da ordem. Ela só sobra para
+        # campanha sem grupo utilizável ou com todos na capacidade do WhatsApp,
+        # onde o convite falha do lado dele.
         return HTMLResponse(status_code=200, content=_pagina_simples(
-            "Vagas esgotadas",
-            "Todos os grupos estão cheios no momento. Tente de novo mais tarde.",
+            "Sem grupo disponível",
+            "Esta campanha não tem grupo com vaga no momento. Tente de novo "
+            "mais tarde.",
+        ))
+    except CampanhaPausada:
+        # 200 pelo mesmo motivo de CampanhaEncerrada: o anúncio continua
+        # veiculando enquanto ela decide, e 404 faria o Meta tratar o destino
+        # como quebrado.
+        return HTMLResponse(status_code=200, content=_pagina_simples(
+            "Campanha pausada",
+            "Esta campanha está pausada e não está recebendo participantes "
+            "agora.",
         ))
     except CampanhaEncerrada:
         # 200, não 404: o anúncio que aponta para cá continua veiculando por

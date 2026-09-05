@@ -81,7 +81,10 @@ class WhatsappGrupo(Base):
     # escreve aqui; quem escreve é o PATCH /grupos/{id}. Ativar é o ponto de
     # atribuição: garante sub_id + custom_link na hora.
     ativado = Column(Boolean, nullable=False, default=False, server_default="false")
-    sub_id = Column(String(24), nullable=True, unique=True)
+    # 64 desde a 081: o Sub ID legível ("grupobeatriz2k7f") não cabe em 24 sem
+    # cortar o nome. O Postgres NÃO trunca varchar — estoura, e a escrita
+    # acontece dentro da transação do toggle de ativação.
+    sub_id = Column(String(64), nullable=True, unique=True)
     custom_link_id = Column(Integer, ForeignKey("custom_links.id", ondelete="SET NULL"),
                             nullable=True)
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

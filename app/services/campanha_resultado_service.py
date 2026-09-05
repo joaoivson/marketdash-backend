@@ -42,6 +42,30 @@ def _duas_casas(v: float) -> float:
     return round(float(v or 0.0) + 0.0, 2)
 
 
+def _evasao(saidas: int, participantes: int) -> Optional[float]:
+    """
+    Saídas sobre a população EXPOSTA ao risco de sair no período.
+
+    A base é `participantes + saidas`, e a aritmética é o argumento:
+    `participantes_hoje = base_inicial + entradas − saidas`, logo
+    `participantes + saidas = base_inicial + entradas` — todo mundo que esteve
+    dentro do grupo em algum momento da janela. É o único denominador que
+    garante `saidas <= base`, ou seja, evasão nunca acima de 100%.
+
+    A fórmula anterior dividia pelas ENTRADAS do período e explodia no caso
+    mais comum de todos: grupo cheio, que quase não recebe e continua perdendo
+    gente. Um grupo com 1 entrada e 9 saídas dava **900%**.
+
+    `None`, nunca 0,0: sem ninguém exposto a métrica não existe, e 0,0
+    afirmaria "ninguém saiu" — o mesmo colapso null-vs-zero que o módulo evita
+    em `leads` e `cpl`.
+    """
+    base = (participantes or 0) + (saidas or 0)
+    if not base:
+        return None
+    return _duas_casas(saidas / base * 100)
+
+
 def _intervalo_brt(inicio: date, fim: date):
     """
     (inicio, fim_exclusivo) em UTC do intervalo de dias civis BRT.
@@ -107,9 +131,7 @@ class CampanhaResultadoService:
                 "entradas": ev.get("entradas", 0),
                 "saidas": ev.get("saidas", 0),
                 "ficaram": ev.get("ficaram", 0),
-                "evasao_pct": _duas_casas(
-                    (ev.get("saidas", 0) / ev["entradas"] * 100) if ev.get("entradas") else 0.0
-                ),
+                "evasao_pct": _evasao(ev.get("saidas", 0), g.participantes or 0),
                 "mensagens": mensagens.get(g.id, 0),
                 "cliques": cliques.get(g.id, 0),
                 "pedidos": dados_comissao.get("pedidos", 0),
@@ -130,9 +152,24 @@ class CampanhaResultadoService:
         gasto = CampanhaAnuncioRepository(self.db).gasto_com_imposto(
             user_id, campanha.id, inicio, fim
         )
+        # Há medição de comissão nesta campanha?
+        #
+        # NÃO basta o grupo ter `sub_id`: ele nasce na ativação, sempre, e só
+        # captura venda se as ofertas do grupo usarem os links do MarketDash.
+        # Contar a mera existência dele faria "Lucro −R$1.305,73" continuar
+        # aparecendo como prejuízo medido onde ninguém mediu nada.
+        #
+        # Conta como medição: vínculo manual (ela declarou o que rastrear) ou
+        # sub_id de grupo que EFETIVAMENTE trouxe pedido no período.
+        com_pedido = {
+            s for s in sub_ids_de_grupo
+            if comissao.get(s, {}).get("pedidos", 0) > 0
+        }
+        rastreados = len(manuais) + len(com_pedido)
         return {
             "linhas": linhas,
-            "totais": self._totais(linhas, comissao_manual, pedidos_manuais, gasto),
+            "totais": self._totais(linhas, comissao_manual, pedidos_manuais, gasto,
+                                   rastreados),
         }
 
     # --- fontes -------------------------------------------------------------
@@ -220,10 +257,14 @@ class CampanhaResultadoService:
         return {"participantes": 0, "entradas": 0, "saidas": 0, "ficaram": 0,
                 "mensagens": 0, "cliques": 0, "pedidos": 0,
                 "comissao_liquida": 0.0, "gasto_atribuido": 0.0, "lucro": 0.0,
-                "roas": None, "lucro_por_pessoa": None}
+                "roas": None, "lucro_por_pessoa": None, "evasao_pct": None,
+                # 0 = nenhum Sub ID rastreando. Comissão zero aí não é
+                # prejuízo, é ausência de medição — e a tela mostra "—".
+                "sub_ids_vinculados": 0}
 
     def _totais(self, linhas: List[Dict], comissao_manual: float = 0.0,
-                pedidos_manuais: int = 0, gasto: float = 0.0) -> Dict:
+                pedidos_manuais: int = 0, gasto: float = 0.0,
+                sub_ids_vinculados: int = 0) -> Dict:
         """
         Totais da CAMPANHA — o único nível em que gasto, lucro e ROAS existem.
 
@@ -238,6 +279,7 @@ class CampanhaResultadoService:
         têm linha de grupo e por isso só existem aqui.
         """
         t = self._totais_vazios()
+        t["sub_ids_vinculados"] = sub_ids_vinculados
         for l in linhas:
             for chave in ("participantes", "entradas", "saidas", "ficaram",
                           "mensagens", "cliques", "pedidos"):
@@ -257,6 +299,8 @@ class CampanhaResultadoService:
         t["lucro_por_pessoa"] = (
             _duas_casas(t["lucro"] / t["participantes"]) if t["participantes"] else None
         )
+        # Evasão do TOTAL não é a média das evasões: é o conjunto inteiro.
+        t["evasao_pct"] = _evasao(t["saidas"], t["participantes"])
         return t
 
     # --- Sub IDs vinculáveis (080) -------------------------------------------

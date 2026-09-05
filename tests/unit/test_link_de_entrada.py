@@ -121,13 +121,87 @@ def test_abertura_automatica_abre_o_proximo_quando_o_atual_lota(db):
     assert vinculo.aberto is True
 
 
-def test_sem_abertura_automatica_e_tudo_cheio_da_vagas_esgotadas(db):
-    user, campanha, grupos, link = _cenario(db, capacidade=5, abertura_automatica=False,
-                                            abertos={0})
+def test_tudo_cheio_manda_para_o_primeiro_da_ordem_em_vez_de_vagas_esgotadas(db):
+    """
+    "Vagas esgotadas" saiu do fluxo normal (05/09).
+
+    Enquanto o anúncio roda, todo clique que caía naquela página era CPC gasto
+    que não virava lead. Sempre há gente saindo — o convite tenta, e na maioria
+    das vezes entra. O destino é o PRIMEIRO grupo da ordem que ainda cabe
+    alguém pela capacidade do WhatsApp; `aberto` e `cheio` são ignorados, senão
+    o fallback cairia na mesma página que ele existe para evitar.
+    """
+    from app.models.campanha_link import RESULTADO_FALLBACK_LOTADO
+
+    # Grupo 0 aberto e na capacidade; grupo 1 FECHADO, mas com vaga.
+    user, campanha, grupos, link = _cenario(db, capacidade=5,
+                                            abertura_automatica=False, abertos={0})
     grupos[0].participantes = 5
     db.add(grupos[0]); db.commit()
+
+    _l, convite = _rotear(db, link.slug)
+    assert convite == grupos[1].link_convite
+
+    # E o clique CONTA, com o desfecho marcado: sem isso o gasto existe no Meta
+    # e o clique não existe aqui, e a taxa de entrada melhora artificialmente
+    # justo quando a operação está pior.
+    evento = (db.query(CampanhaLinkEvento)
+              .filter(CampanhaLinkEvento.link_id == link.id)
+              .order_by(CampanhaLinkEvento.id.desc()).first())
+    assert evento is not None
+    assert evento.resultado == RESULTADO_FALLBACK_LOTADO
+    assert evento.grupo_id == grupos[1].id
+
+
+def test_o_fallback_ignora_o_limite_da_campanha_mas_respeita_a_capacidade(db):
+    """O limite da campanha governa a rotação NORMAL; a capacidade é o limite
+    duro, onde o convite falha do lado do WhatsApp."""
+    user, campanha, grupos, link = _cenario(db, capacidade=100)
+    campanha.limite_participantes = 10
+    for g in grupos:
+        g.participantes = 10          # acima do limite, longe da capacidade
+        db.add(g)
+    db.commit()
+
+    # A rotação normal não acha ninguém, mas o fallback manda para o primeiro.
+    _l, convite = _rotear(db, link.slug)
+    assert convite == grupos[0].link_convite
+
+
+def test_vagas_esgotadas_so_quando_todos_estao_na_capacidade(db):
+    """A página sobra para o caso em que não há o que tentar: acima da
+    capacidade o convite falha do lado do WhatsApp."""
+    user, campanha, grupos, link = _cenario(db, capacidade=5)
+    for g in grupos:
+        g.participantes = 5
+        db.add(g)
+    db.commit()
     with pytest.raises(SemVaga):
         _rotear(db, link.slug)
+
+
+def test_campanha_pausada_nao_recebe_entrada(db):
+    """Pausar passou a ter efeito real (05/09): antes era um select que não
+    desligava nada — a entrada continuava e o roteiro também."""
+    from app.services.campanha_link_service import CampanhaPausada
+
+    user, campanha, grupos, link = _cenario(db)
+    campanha.status = "pausada"
+    db.add(campanha); db.commit()
+
+    with pytest.raises(CampanhaPausada):
+        _rotear(db, link.slug)
+
+
+def test_roteamento_normal_marca_o_resultado_como_roteado(db):
+    from app.models.campanha_link import RESULTADO_ROTEADO
+
+    user, campanha, grupos, link = _cenario(db)
+    _rotear(db, link.slug)
+    evento = (db.query(CampanhaLinkEvento)
+              .filter(CampanhaLinkEvento.link_id == link.id)
+              .order_by(CampanhaLinkEvento.id.desc()).first())
+    assert evento.resultado == RESULTADO_ROTEADO
 
 
 def test_aleatoria_distribui_entre_os_abertos(db):

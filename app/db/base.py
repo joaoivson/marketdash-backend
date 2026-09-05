@@ -59,6 +59,12 @@ def _apply_safe_migrations(engine, logger):
         # `campanha_sub_ids` são NOVAS: essas o create_all cria — e é por isso
         # que a 080 precisa chegar antes, para nascerem com RLS.
         "ALTER TABLE campanha_grupos ADD COLUMN IF NOT EXISTS cheio_override BOOLEAN",
+        # 081 (fallback lotado + Sub ID legível): as duas tabelas já existem em
+        # todo ambiente. `create_all` não adiciona coluna NEM altera tipo — sem
+        # isto, gravar um clique quebra e ativar grupo com nome comprido
+        # estoura `value too long` no meio da transação do toggle.
+        "ALTER TABLE campanha_link_eventos ADD COLUMN IF NOT EXISTS resultado VARCHAR(24)",
+        "ALTER TABLE whatsapp_grupos ALTER COLUMN sub_id TYPE VARCHAR(64)",
     ]
     from sqlalchemy import text
     try:

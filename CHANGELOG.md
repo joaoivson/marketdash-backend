@@ -11,6 +11,133 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-05b (Campanhas de grupos: medição, rotação e leads)
+
+Terceiro documento delta, sobre a cadeia de medição. **Migration 081.** Três
+itens do documento não se confirmaram e estão registrados no fim.
+
+### "Vagas esgotadas" sai do fluxo normal
+
+Enquanto o anúncio roda, todo clique que caía naquela página era CPC gasto que
+não virava lead. Quando todos os grupos estão cheios, o link passa a mandar para
+o **primeiro grupo da ordem** — sem tela intermediária. Sempre há gente saindo;
+o convite tenta e na maioria das vezes entra.
+
+O fallback ignora `aberto`, `cheio` e o **limite da campanha**, respeitando só a
+`capacidade` do WhatsApp — acima dela o convite falha do lado deles, e aí não há
+o que tentar. Também não usa `SKIP LOCKED`: no fallback não há vaga a
+distribuir, todos vão para o mesmo destino, e a linha travada faria a segunda
+requisição simultânea cair em "vagas esgotadas" sem motivo.
+
+O clique **conta**, com `campanha_link_eventos.resultado = 'fallback_lotado'`.
+Sem marcar, o gasto existiria no Meta e o clique não existiria aqui — e a taxa
+de entrada melhoraria artificialmente justo quando a operação está pior.
+
+"Vagas esgotadas" sobrou para campanha sem grupo utilizável.
+
+### Pausar passou a ter efeito
+
+`pausada` era um select que não desligava nada: `rotear()` só bloqueava
+`arquivada` e o motor de roteiros não lia status. Agora o link responde
+"campanha pausada" (200, porque o anúncio continua veiculando) e o roteiro para.
+Só depois disso o status virou **toggle no cabeçalho** — promover a interruptor
+de destaque um controle que não desliga nada seria pior que o select escondido.
+
+### O override de "cheio" não sobrevivia ao sync — e a culpa era da tela
+
+O relato: dois grupos marcados "Cheio = Sim" à mão voltaram para "Não" depois de
+uma sincronização. O sync não toca em `cheio_override`; quem apagava era o
+próprio clique.
+
+`definirCheio` limpava o override quando o valor escolhido coincidia com o
+automático. Marcar "Sim" num grupo **já cheio pela ocupação** gravava `null` —
+nada era persistido, a assinatura não mudava, "Salvar ordem" nem acendia, e
+nenhum PUT saía. Depois o sync baixava a contagem e o grupo voltava para "Não".
+
+Agora grava sempre, e o Select tem **três estados** (Automático / Sim / Não). A
+terceira opção não é enfeite: nada mais limpa o override, e sem ela cada
+marcação manual viraria permanente e a "Reabertura automática" passaria a
+mentir. O Select exibe a INTENÇÃO; o resultado continua na coluna Ocupação.
+
+**Ocupação em laranja a partir de 90%** — antes a cor seguia `cheio`, então
+767/900 (85%) já aparecia alaranjado.
+
+### Evasão de 900%
+
+O grupo #1 tinha 1 entrada e 9 saídas, e a conta era 9 ÷ 1. A base passou a ser
+`participantes + saídas` — todo mundo que esteve dentro em algum momento da
+janela. É o único denominador que garante saídas ≤ base, ou seja, **evasão nunca
+acima de 100%**. Aplicado também na Visão geral: bases diferentes fariam a mesma
+campanha mostrar duas evasões na mesma sessão.
+
+### "Leads" era clique, não entrada
+
+1.348 leads conviviam com 53 entradas, e o CPL de R$0,97 ficava ao lado de
+R$24,64 de custo por entrada — dois nomes que pareciam a mesma coisa. O pixel
+dispara no carregamento da página do `/g/`, antes do redirect: "Lead" do Meta é
+**clique qualificado**. Os cards viraram "Cliques no link" e "Custo por clique".
+
+### Lucro negativo sem medição
+
+Comissão, Lucro e ROAS mostram "—" com o motivo quando não há venda rastreada. O
+critério **não** é o grupo ter `sub_id` — ele nasce na ativação, sempre, e só
+captura se as ofertas usarem os links do MarketDash. Conta como medição: vínculo
+manual de Sub ID, ou sub_id de grupo que trouxe pedido de verdade.
+
+### Denominadores explícitos
+
+"Custo por permanência R$32,64" vinha de 1.305,73 ÷ 40, e o 40 não aparecia em
+lugar nenhum. Entrou a coluna **Ficaram** na tabela e a nota com o denominador
+nos dois cards de custo.
+
+### Telefone com 13 dígitos
+
+1.752 de 2.499 números brasileiros vinham com 12 (sem o 9) — num disparador ou
+numa lista de público do Meta, esses falham. Normalizado **no sync** (o valor é
+copiado para `grupo_eventos.identificador`, então normalizar só no CSV deixaria
+duas representações no banco) e no export, como rede de segurança. Estrangeiros
+e telefone fixo passam intactos.
+
+### Sub ID legível
+
+`wgea` não diz nada, e ela vê esse código no relatório da própria Shopee. Grupo
+novo nasce `grupo` + nome sanitizado + sufixo — ex. `grupobeatriz2k7f`. Duas
+travas: **nunca rederivado** (renomear o grupo não muda o Sub ID) e **só para
+grupos novos** (migrar seria perda de atribuição permanente). Os dois formatos
+convivem por decisão.
+
+### Atividade
+
+Paginação por **keyset**, não OFFSET: `criado_em` empata em lote (uma entrada de
+30 pessoas grava 30 eventos no mesmo instante) e OFFSET repete e pula linhas —
+defeito que só apareceria em campanha funcionando. Página de 50 + "Carregar
+mais", filtros de tipo e grupo no servidor, erro em português.
+
+**"Saída · origem desconhecida" saiu**: origem é de onde a pessoa veio ao
+entrar; saída não tem origem, e o texto fazia parecer que o sistema perdeu
+informação que nunca existiu. E o topo passou a dizer a data real
+("registradas desde 26/08"), tirada do evento mais antigo — não de
+`campanha_grupos.adicionado_em`, porque o grupo pode estar gravando eventos
+desde antes de entrar na campanha e a frase se contradiria com a lista abaixo.
+
+### Modal de Sub ID e Configurações
+
+Retry no erro (tratava lentidão como falha terminal), busca por nome, e ordem
+por **comissão** — ela procura o que vendeu, não a letra A. Configurações virou
+dois blocos com título, o Salvar só acende quando algo mudou, e a descrição da
+estratégia "Aleatória" parou de prometer uma comparação que a tela não entrega.
+
+### O que o documento supunha e os dados contradisseram
+
+| Documento | Medido no banco |
+|---|---|
+| Export com 87 pessoas a menos = "leitura parcial ou paginação truncada" | **Defasagem**: a lista é do último sync, o contador anda pelo webhook. Fecha na aritmética: `lista + entradas − saídas após o sync = contador − 1` (o −1 é o nosso próprio número, excluído de propósito). O modal passou a dizer a data da lista |
+| "A captura funciona, a agregação não" | A agregação está **correta**: 7 dias do grupo #2 = 181 entradas / 68 saídas. O #1 tem 1 entrada porque está cheio — quem recebe é o #2 |
+| `custom_link` gravado como URL absoluta | `campanha_links` sempre guardou **só o slug**; a URL é montada na renderização. O domínio errado era a `FRONTEND_URL`, corrigida mais cedo em 05/09 |
+
+E `/g/{slug}` é servida pelo **backend** (`app/main.py`), não pelo React — as OG
+tags chegam ao crawler, que não executa JS.
+
 ## [Não versionado] - 2026-09-05 (O link de entrada apontava para produção, e a busca de Sub ID varria o histórico)
 
 Três itens reportados depois do deploy da rodada anterior.

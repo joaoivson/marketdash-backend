@@ -24,9 +24,12 @@ from typing import Dict, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.campanha_grupos import (
-    CAMPANHA_ARQUIVADA, CAMPANHA_ENCERRADA, ESTRATEGIA_ALEATORIA, Campanha,
+    CAMPANHA_ARQUIVADA, CAMPANHA_ENCERRADA, CAMPANHA_PAUSADA,
+    ESTRATEGIA_ALEATORIA, Campanha,
 )
-from app.models.campanha_link import CampanhaLink
+from app.models.campanha_link import (
+    RESULTADO_FALLBACK_LOTADO, RESULTADO_ROTEADO, CampanhaLink,
+)
 from app.repositories.campanha_link_repository import CampanhaLinkRepository
 from app.utils.bot_detection import is_bot
 from app.utils.tracking_dedup import should_count
@@ -42,6 +45,16 @@ class LinkInvalido(Exception):
 
 class SemVaga(Exception):
     """Todos os grupos lotados/fechados — a página diz "vagas esgotadas"."""
+
+
+class CampanhaPausada(Exception):
+    """A campanha está pausada — a página diz isso, com 200.
+
+    Pausar passou a ter efeito real em 05/09: era um select que não desligava
+    nada. Como o `CampanhaEncerrada`, NÃO é `LinkInvalido`: o anúncio continua
+    veiculando enquanto ela decide, e 404 faria o Meta tratar o destino como
+    quebrado.
+    """
 
 
 class CampanhaEncerrada(Exception):
@@ -111,6 +124,8 @@ class CampanhaLinkService:
         campanha = self.repo.campanha_do_link(link)
         if campanha is not None and campanha.status == CAMPANHA_ENCERRADA:
             raise CampanhaEncerrada()
+        if campanha is not None and campanha.status == CAMPANHA_PAUSADA:
+            raise CampanhaPausada()
         if not campanha or campanha.status == CAMPANHA_ARQUIVADA:
             raise LinkInvalido("Campanha indisponível.")
 
@@ -143,8 +158,31 @@ class CampanhaLinkService:
                 for vinculo in self.repo.lotados_abertos(campanha.id):
                     vinculo.cheio_override = True
                     self.db.add(vinculo)
-            self.db.commit()
-            raise SemVaga()
+
+            # FALLBACK: manda para o primeiro grupo da ORDEM que ainda cabe
+            # alguém pela capacidade do WhatsApp.
+            #
+            # "Vagas esgotadas" saiu do fluxo normal (05/09): enquanto o
+            # anúncio roda, todo clique que caía naquela página era CPC gasto
+            # que não virava lead. Sempre há gente saindo — o convite tenta, e
+            # na maioria das vezes entra.
+            #
+            # O limite da campanha NÃO vale aqui, só a capacidade: é o último
+            # recurso, e respeitar o limite dela cairia na mesma página que o
+            # fallback existe para evitar. O `cheio_override` manual também é
+            # ignorado pelo mesmo motivo.
+            escolha = self.repo.primeiro_por_capacidade(campanha.id)
+            if escolha is None:
+                # Aqui sim não há o que tentar: campanha sem grupo utilizável,
+                # ou todos na capacidade do WhatsApp, onde o convite falha do
+                # lado dele.
+                self.db.commit()
+                raise SemVaga()
+            resultado = RESULTADO_FALLBACK_LOTADO
+            logger.info("Campanha %s: fallback de lotação para o grupo %s",
+                        campanha.id, escolha[0])
+        else:
+            resultado = RESULTADO_ROTEADO
 
         grupo_id, _posicao = escolha
         grupo = self.repo.grupo(grupo_id)
@@ -157,9 +195,13 @@ class CampanhaLinkService:
             contar = should_count("gclk", link.id, ip or "", user_agent or "",
                                   DEDUP_SEGUNDOS)
         if contar or is_preview:
+            # O clique do fallback CONTA, com o desfecho marcado. Sem contar,
+            # o gasto existiria no Meta e o clique não existiria aqui — e a
+            # taxa de entrada melhoraria artificialmente justo quando a
+            # operação está pior.
             self.repo.registrar_clique(
                 link.id, grupo_id, _hash_ip(ip, user_agent), user_agent, referer,
-                is_teste=is_preview,
+                is_teste=is_preview, resultado=resultado,
             )
         self.db.commit()
         return link, grupo.link_convite

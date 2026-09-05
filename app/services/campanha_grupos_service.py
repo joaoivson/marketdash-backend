@@ -435,11 +435,17 @@ class CampanhaGruposService:
             bloqueados.setdefault(normalizar_sub_id(sub_id),
                                   f'vinculado ao anúncio "{nome}"')
 
-        # (c) Sub ID de OUTRA campanha de grupos.
-        for sub_id, cid in self.repo_sub_ids.campanha_por_sub_id(campanha.user_id).items():
-            if cid != campanha.id:
-                outra = self.repo.por_id(campanha.user_id, cid)
-                bloqueados.setdefault(
-                    sub_id, f'vinculado à campanha "{outra.nome if outra else cid}"'
-                )
+        # (c) Sub ID de OUTRA campanha de grupos. Os nomes vêm numa consulta
+        # só: `por_id` dentro do laço era um N+1 num modal que já é lento.
+        de_outras = self.repo_sub_ids.campanha_por_sub_id(campanha.user_id)
+        if de_outras:
+            nomes = {
+                c.id: c.nome
+                for c in self.repo.por_usuario(campanha.user_id, incluir_arquivadas=True)
+            }
+            for sub_id, cid in de_outras.items():
+                if cid != campanha.id:
+                    bloqueados.setdefault(
+                        sub_id, f'vinculado à campanha "{nomes.get(cid, cid)}"'
+                    )
         return bloqueados

@@ -236,3 +236,22 @@ class WhatsappGrupoRepository:
                AND (e.identificador_tipo IS DISTINCT FROM 'telefone')
         """), {"grupo_id": grupo_id})
         return int(resultado.rowcount or 0)
+
+    def ultimo_sync_de(self, grupo_ids: List[int]) -> Dict[int, datetime]:
+        """grupo_id → quando a lista de participantes foi confirmada.
+
+        Uma consulta agregada para todos os grupos: pedir por grupo aqui seria
+        N+1 numa tela que já monta a lista inteira.
+        """
+        if not grupo_ids:
+            return {}
+        from sqlalchemy import func
+
+        linhas = (
+            self.db.query(GrupoParticipante.grupo_id,
+                          func.max(GrupoParticipante.confirmado_em))
+            .filter(GrupoParticipante.grupo_id.in_(grupo_ids))
+            .group_by(GrupoParticipante.grupo_id)
+            .all()
+        )
+        return {gid: quando for gid, quando in linhas if quando}

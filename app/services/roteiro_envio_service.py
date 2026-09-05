@@ -233,12 +233,44 @@ class RoteiroEnvioService:
 
     # --- a fatia -------------------------------------------------------------
 
+    def _campanha_pausada(self, execucao) -> bool:
+        """A campanha de grupos desta execução está pausada?
+
+        Lê pelo roteiro: `roteiro_execucoes` não tem `campanha_id`, e é o
+        `Roteiro` que carrega o vínculo. Roteiro sem campanha (envio rápido
+        avulso) nunca está pausado — não há campanha para pausar.
+        """
+        from app.models.campanha_grupos import CAMPANHA_PAUSADA, Campanha
+        from app.models.roteiro import Roteiro
+
+        campanha_id = (
+            self.db.query(Roteiro.campanha_id)
+            .filter(Roteiro.id == execucao.roteiro_id)
+            .scalar()
+        )
+        if not campanha_id:
+            return False
+        status = (
+            self.db.query(Campanha.status)
+            .filter(Campanha.id == campanha_id)
+            .scalar()
+        )
+        return status == CAMPANHA_PAUSADA
+
     def processar_fatia(self, execucao_id: int,
                         orcamento_s: Optional[int] = None) -> Dict:
         r = ResultadoDaFatia()
         execucao = self.repo.execucao_por_id(execucao_id)
         if not execucao or execucao.status != EXEC_ENVIANDO:
             r.motivo_parada = "estado"
+            return r.to_dict()
+
+        # Campanha pausada não dispara (05/09). Antes, `pausada` era um select
+        # que não desligava nada: a entrada continuava e o roteiro também.
+        # O guard fica AQUI, no mesmo lugar do estado da execução, para valer
+        # também na fatia seguinte — pausar no meio de um lote para o resto.
+        if self._campanha_pausada(execucao):
+            r.motivo_parada = "campanha_pausada"
             return r.to_dict()
 
         inicio_fatia = time_mod.monotonic()

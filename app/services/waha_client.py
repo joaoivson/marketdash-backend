@@ -72,6 +72,38 @@ def normalizar_numero(bruto: str) -> str:
     return digitos
 
 
+def normalizar_celular_br(digitos: str) -> str:
+    """
+    Insere o nono dígito em celular brasileiro que veio sem ele.
+
+    O WhatsApp entrega o número no formato histórico para boa parte da base:
+    medido em homologação, **1.752 de 2.499 números brasileiros vieram com 12
+    dígitos** (55 + DDD + 8) contra 747 com 13. Num disparador ou numa lista de
+    público do Meta, os de 12 falham.
+
+    Contrato **oposto** ao de `normalizar_numero`, e de propósito: esta função é
+    pura, idempotente e **nunca levanta exceção** — ela roda num laço sobre
+    milhares de participantes, e um número estranho não pode derrubar o sync
+    nem a exportação. O que não reconhece, devolve intacto.
+
+    Regras, nesta ordem:
+
+    * não começa com "55" → intacto (os estrangeiros passam; medidos: 5)
+    * 13 dígitos → intacto (já está certo)
+    * 12 dígitos **e** o assinante começa em 6-9 → insere o 9 depois do DDD.
+      A checagem do 6-9 importa: 8 dígitos começando em 2-5 é telefone FIXO no
+      plano de numeração brasileiro, e inserir o 9 nele produziria um número
+      que não existe. (Na base medida não havia nenhum, mas a guarda é barata.)
+    * qualquer outro tamanho → intacto
+    """
+    d = "".join(c for c in (digitos or "") if c.isdigit())
+    if not d.startswith("55") or len(d) != 12:
+        return d
+    if d[4] not in "6789":
+        return d
+    return d[:4] + "9" + d[4:]
+
+
 def mascarar(numero: str) -> str:
     """Para mostrar na tela e no log sem expor o número inteiro."""
     if not numero or len(numero) < 6:

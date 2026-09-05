@@ -3,7 +3,7 @@ import hashlib
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func, text
+from sqlalchemy import func, text, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.campanha_grupos import Campanha, CampanhaGrupo
@@ -40,6 +40,17 @@ def teto_efetivo(grupo=WhatsappGrupo, campanha=Campanha):
 # "cheio" só existia derivado e o grupo lotado nunca era MARCADO — a linha
 # ficava amarela e ele continuava recebendo.
 CHEIO_SQL = f"COALESCE(cg.cheio_override, g.participantes >= {TETO_SQL})"
+
+
+# A CAPACIDADE do WhatsApp, sozinha — sem o limite da campanha por cima.
+#
+# Existe separada de propósito, e é a ÚNICA diferença entre a rotação normal e
+# o fallback de lotação. O limite da campanha (ex.: 900) governa a rotação
+# normal; a capacidade (1024) é o limite duro, onde o convite falha do lado do
+# WhatsApp. Quando todos os grupos estouraram o limite DELA, o fallback ainda
+# manda gente para o primeiro da ordem — porque sempre há alguém saindo, e um
+# clique que cai em "vagas esgotadas" é CPC gasto que não vira lead.
+CAPACIDADE_SQL = "g.participantes < g.capacidade"
 
 
 def cheio_efetivo(vinculo=CampanhaGrupo, grupo=WhatsappGrupo, campanha=Campanha):
@@ -103,6 +114,42 @@ class CampanhaLinkRepository:
         ).fetchone()
         return (linha[0], linha[1]) if linha else None
 
+    def primeiro_por_capacidade(self, campanha_id: int) -> Optional[Tuple[int, int]]:
+        """
+        Primeiro grupo da ORDEM que ainda cabe alguém pela capacidade do
+        WhatsApp — o destino do fallback quando tudo está cheio.
+
+        Três diferenças deliberadas em relação a `escolher_grupo`:
+
+        * **Ignora `aberto` e `cheio`.** É o último recurso: se respeitasse os
+          dois, cairia na mesma "vagas esgotadas" que ele existe para evitar.
+        * **Ignora o limite da campanha**, respeitando só `g.capacidade`. Acima
+          dela o convite falha do lado do WhatsApp — aí não há o que tentar.
+        * **Sem `FOR UPDATE SKIP LOCKED`.** No fallback não há vaga a
+          distribuir: todo mundo vai para o MESMO destino. O SKIP LOCKED faria
+          a segunda requisição concorrente pular o grupo e cair em "vagas
+          esgotadas" sem motivo — falha que só apareceria em produção, com dois
+          cliques no mesmo instante.
+
+        A ordem é sempre `posicao`, mesmo com estratégia aleatória: a decisão é
+        "o primeiro grupo da ordem", não "um qualquer".
+        """
+        linha = self.db.execute(
+            text(f"""
+                SELECT cg.grupo_id, cg.posicao
+                  FROM campanha_grupos cg
+                  JOIN whatsapp_grupos g ON g.id = cg.grupo_id
+                 WHERE cg.campanha_id = :campanha_id
+                   AND g.ativo
+                   AND g.link_convite IS NOT NULL
+                   AND {CAPACIDADE_SQL}
+                 ORDER BY cg.posicao, cg.grupo_id
+                 LIMIT 1
+            """),
+            {"campanha_id": campanha_id},
+        ).fetchone()
+        return (linha[0], linha[1]) if linha else None
+
     def proximo_fechado(self, campanha_id: int) -> Optional[CampanhaGrupo]:
         """Próximo grupo da fila que está fechado mas ainda tem vaga — é o que
         a abertura automática abre quando o atual lota."""
@@ -137,11 +184,13 @@ class CampanhaLinkRepository:
 
     def registrar_clique(self, link_id: int, grupo_id: Optional[int],
                          ip_hash: Optional[str], user_agent: Optional[str],
-                         referer: Optional[str], is_teste: bool) -> CampanhaLinkEvento:
+                         referer: Optional[str], is_teste: bool,
+                         resultado: Optional[str] = None) -> CampanhaLinkEvento:
         evento = CampanhaLinkEvento(
             link_id=link_id, grupo_id=grupo_id, ip_hash=ip_hash,
             user_agent=(user_agent or "")[:500] or None,
             referer=(referer or "")[:500] or None, is_teste=is_teste,
+            resultado=resultado,
         )
         self.db.add(evento)
         self.db.flush()
@@ -174,14 +223,36 @@ class CampanhaLinkRepository:
         self.db.flush()
         return evento
 
-    def atividade(self, grupo_ids: List[int], limite: int = 50) -> List[GrupoEvento]:
+    def atividade(self, grupo_ids: List[int], limite: int = 50,
+                  cursor: Optional[Tuple[datetime, int]] = None,
+                  tipo: Optional[str] = None,
+                  grupo_id: Optional[int] = None) -> List[GrupoEvento]:
+        """
+        Página do feed, do mais recente para o mais antigo.
+
+        **Keyset, não OFFSET.** `criado_em` empata em lote — uma entrada de 30
+        pessoas grava 30 eventos no mesmo instante — e OFFSET sobre ordem
+        ambígua repete e pula linhas entre páginas. O desempate é o `id`
+        (BigInteger, PK), e o cursor é o par `(criado_em, id)` do último item.
+
+        Pede `limite + 1` para quem chama saber se há próxima página sem uma
+        segunda consulta.
+        """
         if not grupo_ids:
             return []
+        q = self.db.query(GrupoEvento).filter(GrupoEvento.grupo_id.in_(grupo_ids))
+        if grupo_id is not None:
+            q = q.filter(GrupoEvento.grupo_id == grupo_id)
+        if tipo:
+            q = q.filter(GrupoEvento.tipo == tipo)
+        if cursor:
+            quando, ident = cursor
+            q = q.filter(
+                tuple_(GrupoEvento.criado_em, GrupoEvento.id) < tuple_(quando, ident)
+            )
         return (
-            self.db.query(GrupoEvento)
-            .filter(GrupoEvento.grupo_id.in_(grupo_ids))
-            .order_by(GrupoEvento.criado_em.desc())
-            .limit(limite)
+            q.order_by(GrupoEvento.criado_em.desc(), GrupoEvento.id.desc())
+            .limit(limite + 1)
             .all()
         )
 

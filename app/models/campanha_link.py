@@ -15,6 +15,17 @@ ORIGEM_LINK = "link"
 ORIGEM_ORGANICA = "organica"
 ORIGEM_DESCONHECIDA = "desconhecida"
 
+# Desfecho do roteamento do link (081).
+#
+# `fallback_lotado` existe porque "Vagas esgotadas" saiu do fluxo normal:
+# enquanto o anúncio roda, todo clique que caía naquela página era CPC gasto
+# que não virava lead. Agora o link manda para o primeiro grupo da ordem — e o
+# clique é CONTADO, com o desfecho marcado. Sem marcar, o gasto existiria no
+# Meta e o clique não existiria aqui, e a taxa de entrada melhoraria
+# artificialmente justo quando a operação está pior.
+RESULTADO_ROTEADO = "roteado"
+RESULTADO_FALLBACK_LOTADO = "fallback_lotado"
+
 
 class CampanhaLink(Base):
     __tablename__ = "campanha_links"
@@ -46,6 +57,9 @@ class CampanhaLinkEvento(Base):
     user_agent = Column(Text, nullable=True)
     referer = Column(Text, nullable=True)
     is_teste = Column(Boolean, nullable=False, default=False)
+    # Desfecho do roteamento (espelho da 081). NULL = roteamento normal, que é
+    # o que todas as linhas anteriores são. Ver RESULTADO_* acima.
+    resultado = Column(String(24), nullable=True)
     criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

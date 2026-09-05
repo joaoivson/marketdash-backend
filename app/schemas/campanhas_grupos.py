@@ -77,6 +77,10 @@ class GrupoDaCampanhaOut(BaseModel):
     # Por quais números este grupo é alcançável. A aba Grupos precisa disso
     # para não oferecer grupo de número que a campanha não usa (spec §2.3).
     instancia_ids: List[int] = []
+    # Quando a LISTA de participantes deste grupo foi confirmada pela última
+    # vez. `None` = nunca sincronizada (o CSV sai vazio para ele, e é esse o
+    # caso em que a mensagem mais importa).
+    participantes_sincronizados_em: Optional[datetime] = None
 
 
 class CampanhaDetalheOut(CampanhaOut):
@@ -195,7 +199,9 @@ class LinhaDeResultadoOut(BaseModel):
     entradas: int
     saidas: int
     ficaram: int
-    evasao_pct: float
+    # `None` quando não há ninguém exposto (nem participante, nem saída): a
+    # métrica não existe, e 0,0 afirmaria "ninguém saiu".
+    evasao_pct: Optional[float] = None
     mensagens: int
     cliques: int
     pedidos: int
@@ -216,6 +222,11 @@ class TotaisDeResultadoOut(BaseModel):
     mensagens: int
     cliques: int
     pedidos: int
+    # Evasão do conjunto — não a média das evasões por grupo.
+    evasao_pct: Optional[float] = None
+    # Quantos Sub IDs rastreiam venda para esta campanha. `0` = não há medição:
+    # comissão zero aí não é prejuízo, e a tela mostra "—" em vez de número.
+    sub_ids_vinculados: int = 0
     comissao_liquida: float
     # O investimento INTEIRO da campanha, uma vez — não a soma de um rateio.
     gasto_atribuido: float

@@ -71,6 +71,7 @@ class CampanhaVisaoGeralService:
         inicio = fim - timedelta(days=dias - 1)
         ini_utc, fim_utc = _intervalo_brt(inicio, fim)
 
+        participantes = self._participantes(grupo_ids)
         cliques = self._cliques(campanha.id, ini_utc, fim_utc)
         entradas, saidas, serie = self._eventos(grupo_ids, ini_utc, fim_utc,
                                                 inicio, fim, hoje)
@@ -86,8 +87,14 @@ class CampanhaVisaoGeralService:
             "entradas_do_link": entradas_do_link,
             "taxa_entrada": _taxa(entradas_do_link, cliques),
             "saidas": saidas,
-            "evasao": _taxa(saidas, entradas),
-            "participantes": self._participantes(grupo_ids),
+            # Base = população EXPOSTA ao risco de sair (participantes + saídas),
+            # não as entradas do período. Dividir por entradas explodia no caso
+            # mais comum: grupo cheio, que quase não recebe e continua perdendo
+            # gente — 1 entrada e 9 saídas dava 900%. Precisa ser a MESMA base
+            # de Resultados, senão a afiliada vê duas evasões para a mesma
+            # campanha na mesma sessão.
+            "evasao": _taxa(saidas, participantes + saidas),
+            "participantes": participantes,
             "grupos": self._estado_dos_grupos(campanha.id),
             "serie": serie,
         }

@@ -25,6 +25,7 @@ sempre traz. A política de privacidade precisa refletir isto.
 """
 import logging
 import random
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -34,7 +35,8 @@ from app.models.whatsapp_grupos import WhatsappGrupo, WhatsappInstancia
 from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
 from app.repositories.sync_run_repository import SyncRunRepository
 from app.services.waha_client import (
-    ErroWhatsapp, WahaClient, campo as _valor, numero_de_jid, tem_campo as _tem_campo,
+    ErroWhatsapp, WahaClient, campo as _valor, normalizar_celular_br,
+    numero_de_jid, tem_campo as _tem_campo,
 )
 from app.services.whatsapp_instancia_service import cliente_da_sessao
 
@@ -57,8 +59,75 @@ def base36(n: int) -> str:
 
 
 def sub_id_do_grupo(grupo_id: int) -> str:
-    """wg{base36(id)} — satisfaz ^[A-Za-z0-9]+$ da Shopee, estável para sempre."""
+    """
+    Formato ANTIGO: wg{base36(id)}, ex. `wgea`.
+
+    Continua existindo porque os grupos já ativados usam este formato e o
+    sub_id **nunca** é rederivado — o histórico de comissão está atribuído a
+    ele. Grupo NOVO nasce com `sub_id_legivel_do_grupo`.
+    """
     return f"wg{base36(grupo_id)}"
+
+
+# Comprimento do trecho do nome no Sub ID legível. A coluna aceita 64 (081);
+# 24 deixa folga para "grupo" (5) + sufixo (4) e ainda cabe um nome inteiro.
+NOME_NO_SUB_ID = 24
+_SUFIXO_ALFABETO = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+
+def _trecho_do_nome(nome: Optional[str], grupo_id: int) -> str:
+    """
+    Nome do grupo reduzido a [a-z0-9], sem acento nem emoji.
+
+    Sanitiza ANTES de truncar: cortar primeiro partiria caractere multibyte.
+    Nome que sanitiza para vazio (grupo só com emoji, ou sem nome) cai em
+    `base36(id)` — e não em string vazia, que faria todo grupo sem nome
+    utilizável nascer como "grupo"+sufixo, transformando colisão de exceção
+    em regra.
+    """
+    import unicodedata
+
+    sem_acento = unicodedata.normalize("NFKD", nome or "")
+    ascii_only = "".join(c for c in sem_acento if not unicodedata.combining(c))
+    limpo = re.sub(r"[^a-z0-9]", "", ascii_only.lower())
+    return limpo[:NOME_NO_SUB_ID] or base36(grupo_id)
+
+
+def sub_id_legivel_do_grupo(db, grupo: WhatsappGrupo) -> str:
+    """
+    `grupo` + trecho do nome + sufixo curto — ex. `grupobeatriz2k7f`.
+
+    Existe porque `wgea` não diz nada, e a afiliada vê esse código no relatório
+    da própria Shopee, fora do MarketDash, sem nome de grupo do lado.
+
+    **Duas travas, e as duas são de atribuição:**
+
+    * gerado UMA vez e NUNCA rederivado — quem chama é `garantir_atribuicao`,
+      atrás de `if not grupo.sub_id`. Renomear o grupo não muda o Sub ID:
+      rederivar quebraria a ligação com toda a comissão já atribuída.
+    * vale só para grupos NOVOS. Os que já têm `wg…` seguem com ele — migrar
+      é perda de atribuição permanente.
+
+    O sufixo aleatório existe porque o Sub ID deixou de ser bijetivo com o id:
+    dois grupos com o mesmo nome colidiriam, e o índice é UNIQUE **global**.
+    O laço de tentativa é o mesmo padrão do slug do custom link.
+    """
+    base = f"grupo{_trecho_do_nome(grupo.nome, grupo.id)}"
+    for _ in range(5):
+        candidato = base + "".join(random.choice(_SUFIXO_ALFABETO) for _ in range(4))
+        existe = (
+            db.query(WhatsappGrupo.id)
+            .filter(WhatsappGrupo.sub_id == candidato)
+            .first()
+        )
+        if not existe:
+            return candidato
+    # Azar improvável cinco vezes seguidas: cai no formato antigo, que é
+    # bijetivo com o id e portanto não colide. Melhor um Sub ID feio do que
+    # uma IntegrityError no meio da transação que ativa o grupo.
+    logger.warning("Sub ID legível colidiu 5x para o grupo %s; usando o formato antigo",
+                   grupo.id)
+    return sub_id_do_grupo(grupo.id)
 
 
 def _identidades(dados: Any) -> set:
@@ -177,7 +246,13 @@ def _participantes_do_payload(dados: Dict[str, Any], meus_ids: set) -> list:
         # Só dígitos na coluna de telefone: é o que a afiliada cola no
         # discador, e `@c.us`/`@s.whatsapp.net` no meio da planilha não serve
         # para nada. O identificador cru continua na coluna dele.
-        so_digitos = "".join(c for c in telefone.split("@")[0] if c.isdigit())
+        # Normalizado NA ESCRITA, não só na exportação: este valor é copiado
+        # para `grupo_eventos.identificador` por `preencher_telefone_dos_eventos`
+        # e vira o número real que a política de privacidade passou a guardar.
+        # Normalizar só no CSV deixaria o banco com duas representações do
+        # mesmo telefone — comparar/deduplicar 12 contra 13 dígitos é bug
+        # futuro garantido.
+        so_digitos = normalizar_celular_br(telefone.split("@")[0])
         admin = bool(_valor(p, "IsAdmin")) or bool(_valor(p, "IsSuperAdmin")) or (
             str(_valor(p, "role") or "") in ("admin", "superadmin")
         )

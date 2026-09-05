@@ -20,7 +20,7 @@ from app.models.whatsapp_grupos import (
 from app.services.whatsapp_grupo_service import (
     LimiteDeGruposAtivados, WhatsappGrupoService,
 )
-from app.services.whatsapp_grupo_sync_service import sub_id_do_grupo
+from app.services.whatsapp_grupo_sync_service import sub_id_do_grupo  # noqa: F401
 
 USUARIA = 1
 
@@ -55,7 +55,12 @@ def test_ativar_cria_sub_id_e_custom_link_na_mesma_transacao(db):
     grupo = _servico(db).definir_ativado(grupo, True)
 
     assert grupo.ativado is True
-    assert grupo.sub_id == sub_id_do_grupo(grupo.id)   # wg + base36, do id
+    # Formato legível desde 05/09 (`grupobeatriz2k7f`). Asserção de PROPRIEDADE,
+    # não de igualdade: o sufixo é aleatório de propósito, porque o Sub ID
+    # deixou de ser bijetivo com o id e o índice é UNIQUE global.
+    import re as _re
+    assert _re.fullmatch(r"grupo[a-z0-9]+", grupo.sub_id), grupo.sub_id
+    assert len(grupo.sub_id) <= 64
     link = db.query(CustomLink).one()
     assert grupo.custom_link_id == link.id
     assert link.tag == "whatsapp"    # fora de Meus Links pela FK, não pela tag

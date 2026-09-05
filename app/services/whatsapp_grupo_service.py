@@ -18,7 +18,7 @@ from app.models.custom_link import CustomLink
 from app.models.whatsapp_grupos import WhatsappGrupo
 from app.repositories.custom_link_repository import CustomLinkRepository
 from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
-from app.services.whatsapp_grupo_sync_service import sub_id_do_grupo
+from app.services.whatsapp_grupo_sync_service import sub_id_legivel_do_grupo
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,21 @@ def criar_custom_link_de_grupo(db: Session, user_id: int,
 
 
 def garantir_atribuicao(db: Session, grupo: WhatsappGrupo) -> None:
-    """Idempotente: sub_id (`wg`+base36 — NUNCA regenerar) e custom_link só
-    são criados se não existirem. Grupo antigo, que nasceu no sync com os
-    dois, passa ileso."""
+    """
+    Idempotente: sub_id e custom_link só são criados se não existirem.
+
+    O `if not grupo.sub_id` é a trava que importa — **NUNCA regenerar**. Grupo
+    antigo, que nasceu com `wg`+base36, passa ileso; renomear o grupo também
+    não muda nada. Rederivar quebraria a ligação com toda a comissão já
+    atribuída, e o erro seria silencioso: o Sub ID simplesmente pararia de
+    casar com o que a Shopee reporta.
+
+    Grupo NOVO nasce com o formato legível (`grupobeatriz2k7f`) desde 05/09 —
+    `wgea` não diz nada, e a afiliada vê esse código no relatório da própria
+    Shopee, sem nome de grupo do lado. Os dois formatos convivem de propósito.
+    """
     if not grupo.sub_id:
-        grupo.sub_id = sub_id_do_grupo(grupo.id)
+        grupo.sub_id = sub_id_legivel_do_grupo(db, grupo)
     if not grupo.custom_link_id:
         grupo.custom_link_id = criar_custom_link_de_grupo(db, grupo.user_id, grupo).id
 
