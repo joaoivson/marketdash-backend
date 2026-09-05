@@ -11,6 +11,117 @@
 
 ---
 
+## 2026-09-04b — O telefone estava no payload o tempo todo, no campo ao lado
+
+O que mudou: migration **080** (`campanha_grupos.cheio_override`,
+`grupo_participantes`, `campanha_sub_ids`), correção do webhook de participantes,
+fim do rateio de gasto por grupo, Leads/CPL na tela de Anúncios, soft-delete e
+duplicação de campanha. Aplicada em **hml**; produção continua sem o módulo.
+
+**O bug que a rodada anterior não fechou — e por quê.** A 079 criou
+`grupo_eventos.identificador`, o service passou a preenchê-lo, o repository a
+gravá-lo, e mesmo assim a exportação saiu com telefone vazio em 8 de 8 linhas. A
+tentação era procurar o defeito na cadeia nova. Ele estava numa linha que ninguém
+tocou, no webhook:
+
+```python
+campo(p, "id", "JID", "PhoneNumber", "LID")
+```
+
+`campo()` devolve o **primeiro** nome presente. E em grupo com endereçamento LID
+o `JID` não é uma alternativa ao telefone — ele **é** o `…@lid`, com o telefone
+num campo separado, ao lado. O próprio repo já documentava isso em
+`whatsapp_grupo_sync_service._identidades`, escrito para resolver exatamente essa
+confusão no sync. A informação existia; o webhook não a usava.
+
+Medido antes de mexer: dos 49 eventos gravados depois do deploy da 079,
+**49 eram `identificador_tipo='lid'` e zero eram `telefone`**. Não é "às vezes o
+WhatsApp não manda o número" — é 100%, que é assinatura de defeito, não de
+privacidade de usuário.
+
+**A lição de teste.** Havia três casos parametrizados para esse payload:
+`{id}`, `{JID}` e `{PhoneNumber}`. Os três assumiam formas **mutuamente
+exclusivas**, e o comentário de um deles dizia "endereçamento LID: sem `id`, só
+telefone" — a premissa errada, escrita com confiança. O caso real
+(`{JID: "…@lid", PhoneNumber: "…"}`, os dois juntos) não existia em teste nenhum.
+Cobertura que enumera variantes de um formato precisa incluir a combinação, não
+só as alternativas.
+
+**Por que a identidade NÃO mudou de precedência.** A correção mais curta seria
+inverter a ordem para `PhoneNumber` primeiro. Não serve: essa string vira
+`identificador_hash`, a chave que casa entrada com saída. Trocá-la invalidaria o
+pareamento de todos os eventos já gravados — "entraram e ficaram" quebraria em
+silêncio. Identidade e telefone passaram a ser **dois campos**, e só o segundo
+mudou de fonte.
+
+**A lista de participantes: a segunda inversão de LGPD em dois dias.** O
+documento pede "exporta quem está no grupo agora". Não havia fonte: o WAHA
+entrega a lista e o código a descartava de propósito (`listar_grupos` afirmava
+que os membros "nunca são persistidos"). Sem persistir, o único caminho seria
+derivar de `grupo_eventos` — e dos 946 membros do grupo 281, só 472 têm evento.
+CSV incompleto sem dizer que está incompleto é pior que CSV nenhum.
+
+O recorte é o mínimo que atende: **só grupo ativado**. Grupo que a afiliada
+apenas tem no WhatsApp e nunca ligou continua sendo contagem e nada mais. Isso
+mantém a promessa para o caso geral e a quebra só onde ela pediu a
+funcionalidade. `PrivacyPolicy.tsx` reescrita no mesmo commit.
+
+**"Cheio" não existia como estado — só como cor.** A rotação sempre respeitou o
+limite (`TETO_SQL`, com teste dedicado desde a 079). O que faltava era o grupo
+ser **marcado**: `aberto` só virava `false` no ramo em que a campanha inteira
+esgotava, e só com `reabertura_automatica=false`, cujo default é `true`.
+Resultado: 946/900 com a linha amarela e o toggle "Aberto" ligado para sempre. A
+usuária lê isso como "a regra não funciona" — e o diagnóstico dela vira "o limite
+não tira o grupo da rotação", que é falso e manda o próximo dev procurar o bug na
+query certa.
+
+A varredura de esgotamento passou a gravar `cheio_override` em vez de escrever
+`aberto=False`. Escrever `aberto` desfazia a escolha da usuária por baixo, o que
+é o mesmo tipo de erro: o sistema mexendo num eixo que é dela.
+
+**O rateio produzia a métrica de destaque a partir de nada.** `_gasto_atribuido`
+distribuía o gasto da campanha entre os grupos — proporcional às entradas do
+período e, quando **ninguém** entrava, em partes iguais. R$1.223,05 virou
+R$611,52 em dois grupos de tamanhos completamente diferentes, e daí saiu "Lucro
+por pessoa −R$0,65 / −R$0,92". Ela lê e conclui que os dois grupos dão prejuízo,
+quando não há informação para afirmar nada sobre nenhum dos dois. Gasto, lucro e
+ROAS passaram a existir só no nível da **campanha**, com o investimento inteiro
+entrando uma vez — o que `/resumo` já fazia desde 03/09.
+
+**A Visão geral zerada era a janela, não a escrita.** A suspeita registrada era
+"a série foi cortada na troca de número". Descartada estruturalmente
+(`grupo_eventos` e `grupo_snapshots` só têm `grupo_id`, nunca `instancia_id`) e
+depois nos dados: 100% dos eventos daquela campanha eram do próprio dia, e a
+janela fechava no último dia FECHADO em Brasília. O corte existia para não pôr um
+ponto pela metade na ponta do gráfico. O preço era maior: campanha nova aparecia
+inteira em zero com movimento acontecendo, e zero é uma afirmação — faz a
+afiliada concluir que o link não está funcionando. Hoje entra, marcado `parcial`.
+
+**Soft-delete porque o anúncio não para junto.** Hard-delete levaria
+`campanha_links` no CASCADE, o slug deixaria de existir e `/g/{slug}` só poderia
+responder 404 — enquanto o anúncio já veiculando continua mandando tráfego por
+dias. O Meta trata destino 404 como quebrado. Agora responde 200 com "campanha
+encerrada". O `excluir()` também cancela as execuções pendentes (não há revoke de
+Celery aqui: o cancelamento é por estado, e os dois guards do
+`RoteiroEnvioService` já leem isso) e desliga monitoramentos que apontavam para a
+campanha — o FK é `SET NULL` e eles continuariam capturando e replicando para
+lugar nenhum, em silêncio.
+
+**Cinco itens do documento não eram bugs.** Contador de grupos (cache do
+Zustand), bloqueio de remoção de número (implementado desde a 079 — faltava o
+frontend reverter após o 409), modal com radio (é Checkbox; o círculo é
+`--radius: 0.75rem` com `rounded-sm` numa caixa de 16px, e o defeito é global),
+prévia "card verde flutuante" (já era bolha, numa coluna sticky), e `/g/{slug}`
+com 404 (funciona em hml; produção não tem o módulo e devolve **200** servindo o
+SPA). Investigar antes de corrigir economizou cinco mudanças desnecessárias — e
+duas delas teriam introduzido regressão.
+
+Pendente: a **080 tem o mesmo bloqueio jurídico da 079**, e mais forte — publicar
+a política antes de aplicá-la em produção. E o checkbox redondo é global: o
+`CheckboxQuadrado` foi aplicado só ao módulo de grupos.
+
+---
+
 ## 2026-09-04 — Campanhas de grupos: o número do lead, os Números da campanha e o teto
 
 O que mudou: migration **079** (`campanha_numeros` + `campanhas.limite_participantes`

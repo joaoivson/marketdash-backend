@@ -86,7 +86,7 @@ vivos. "Orquestra IA" é a razão social da empresa.
 | **Instagram** | `instagram_*` (5 services), webhook próprio | Automação comentário → direct; exclusiva do **MAX**. Direct sai como **template com botão** (Rodada 2), com fallback de texto puro. API em **v25.0** |
 | **Kiwify** | `kiwify_service.py`, `charges.py`, `webhook_helpers.py` | Fonte de assinatura em produção. **A conta só é renomeada pelo CPF em evento que LIBERA acesso** (`allow_email_update=(action == "activate")`): estorno e cancelamento chegam com o e-mail do **pedido antigo** e podem chegar depois de uma recompra — renomear ali devolvia a conta paga para o e-mail errado e o login criava conta nova, sem assinatura (caso Anne, 03-04/09/2026) |
 | **Cakto** | `cakto_service.py` | Provider legado, rota mantida |
-| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Números/grupos das alunas (F1 do módulo de grupos); hml. **O Resumo diário saiu por inteiro em 03/09/2026** (rotas, services, models, job pg_cron — migration 077), junto com a Blacklist; a sessão global do resumo deixou de existir. `POST /whatsapp/webhook` e o tratamento de status/participantes **ficam** — são infra do módulo de grupos, não do resumo. ⚠️ Desde a 079 (04/09) o evento de participantes grava o **número real** além do hash — ver "Em voo" |
+| **WAHA (WhatsApp)** | `waha_client` + `whatsapp_*` services | Números/grupos das alunas (F1 do módulo de grupos); hml. **O Resumo diário saiu por inteiro em 03/09/2026** (rotas, services, models, job pg_cron — migration 077), junto com a Blacklist; a sessão global do resumo deixou de existir. `POST /whatsapp/webhook` e o tratamento de status/participantes **ficam** — são infra do módulo de grupos, não do resumo. ⚠️ Desde a 079 (04/09) o evento de participantes grava o **número real** além do hash, e desde a **080** (04/09b) a lista de membros de grupo ATIVADO é persistida em `grupo_participantes` — ver "Em voo" |
 | **Proxy por sessão** | `proxy_pool_service`, `proxy_tasks`, `admin_proxies` | Pool de IPs sticky com afinidade por usuária. **Flag LIGADA** (`whatsapp_proxy: true`, 27/08) mas o **pool está vazio** — na prática toda sessão ainda sai pelo IP do servidor, agora com WARNING. Migrations 068 **e 069** em hml (cron horário ativo); **no ar em hml** (API+worker+admin, verificado ponta a ponta em 31/08); produção intocada. Pendências: comprar/cadastrar os proxies e o spike "`stop`→`PUT`→`start` pede QR?" |
 
 ## Planos
@@ -139,6 +139,24 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   ⚠️ **Dívida conhecida**: apagar o contato de **uma** pessoa que peça é
   **manual, via suporte** — não existe endpoint nem tela. É o que a política
   promete hoje; se o volume crescer, vira ferramenta.
+
+- **Segunda rodada (04/09b): migration 080 aplicada em hml.**
+  `campanha_grupos.cheio_override`, `grupo_participantes` e `campanha_sub_ids`.
+
+  **O telefone da 079 nunca chegou a ser gravado** — não por defeito da cadeia
+  nova, que estava correta, mas porque o webhook lia `JID` antes de
+  `PhoneNumber`, e em grupo com endereçamento LID o `JID` **é** o `…@lid`.
+  Medido: 49 de 49 eventos pós-deploy nasceram `identificador_tipo='lid'`.
+  Corrigido lendo os dois como campos separados; a identidade manteve a
+  precedência de antes porque é ela que vira `identificador_hash`.
+
+  ⚠️ **A 080 herda o bloqueio jurídico da 079, e mais forte.**
+  `grupo_participantes` guarda a **lista de membros** — não só a contagem, como
+  era até 04/09. Segunda inversão de LGPD em dois dias, e sem alternativa:
+  "exportar quem está no grupo agora" não tem outra fonte, e derivar de
+  `grupo_eventos` cobriria 472 dos 946 membros de um grupo real. O recorte é o
+  mínimo que atende: **só grupo ativado**. A política já foi reescrita de novo
+  (`PrivacyPolicy.tsx`) e precisa estar publicada antes de a 080 ir a produção.
 
   ⚠️ **`WHATSAPP_HASH_SALT` é opcional, e esse é o perigo.** Sem ela,
   `_segredo_do_hash()` deriva de `SHOPEE_ENCRYPTION_KEY` (e, na falta,
