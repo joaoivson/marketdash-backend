@@ -104,7 +104,7 @@ def test_grupo_novo_nasce_sem_atribuicao_e_desativado(db):
     r = svc.sincronizar(inst)
 
     assert r == {"vistos": 1, "novos": 1, "atualizados": 0, "desativados": 0,
-                 "membros": 0,
+                 "membros": 0, "telefones": 0,
                  "ignorados": 0, "convites": 1}
     grupo = db.query(WhatsappGrupo).one()
     assert grupo.sub_id is None

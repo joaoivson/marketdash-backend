@@ -600,3 +600,73 @@ def test_busca_de_sub_id_so_conta_os_ultimos_30_dias(db):
     # próprio e precisa desse caminho.
     todos = {r["sub_id"] for r in CampaignRepository(db).sub_id_sales_summary(user.id, dias=0)}
     assert {"recente", "antigo"} <= todos
+
+
+def test_sync_preenche_o_telefone_dos_eventos_que_so_tinham_lid(db):
+    """
+    O webhook NÃO traz o telefone — medido em 05/09: 191 eventos gravados depois
+    da correção que passou a ler `PhoneNumber` separado do `JID` continuaram
+    todos `identificador_tipo='lid'`. O campo não vem nesse evento.
+
+    Quem tem o número é o payload REST de `/groups`, que o sync consome. O
+    `identificador_hash` casa os dois — é exatamente para isso que ele
+    continuou existindo quando a 079 passou a guardar o número.
+    """
+    from app.models.campanha_link import GrupoEvento
+    from app.models.whatsapp_grupos import GrupoParticipante
+    from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
+    from app.services.grupo_evento_service import GrupoEventoService, identificador
+
+    user, campanha, numeros, grupos = _cenario(db)
+    lid = "84729130@lid"
+
+    # Entrada como o webhook manda hoje: só o LID.
+    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join", [lid])
+    db.commit()
+    evento = (
+        db.query(GrupoEvento)
+        .filter(GrupoEvento.grupo_id == grupos[0].id)
+        .order_by(GrupoEvento.id.desc()).first()
+    )
+    assert evento.identificador_tipo == "lid"
+    assert evento.identificador == lid
+
+    # O sync vê a MESMA pessoa pelo REST, que traz o telefone.
+    db.add(GrupoParticipante(
+        grupo_id=grupos[0].id, identificador=lid, telefone="5511999998888",
+        identificador_hash=identificador(lid),
+    ))
+    db.flush()
+
+    n = WhatsappGrupoRepository(db).preencher_telefone_dos_eventos(grupos[0].id)
+    db.commit()
+    db.refresh(evento)
+
+    assert n == 1
+    assert evento.identificador == "5511999998888"
+    assert evento.identificador_tipo == "telefone"
+    # O hash NÃO muda — é ele que casa entrada com saída.
+    assert evento.identificador_hash == identificador(lid)
+
+
+def test_preencher_telefone_e_idempotente_e_nao_sobrescreve(db):
+    """Rodar de novo a cada sync não pode mexer em evento que já tem telefone."""
+    from app.models.campanha_link import GrupoEvento
+    from app.models.whatsapp_grupos import GrupoParticipante
+    from app.repositories.whatsapp_grupo_repository import WhatsappGrupoRepository
+    from app.services.grupo_evento_service import GrupoEventoService, identificador
+
+    user, campanha, numeros, grupos = _cenario(db)
+    lid = "84729131@lid"
+    GrupoEventoService(db).registrar(user.id, grupos[0].jid, "join", [lid])
+    db.add(GrupoParticipante(
+        grupo_id=grupos[0].id, identificador=lid, telefone="5511977776666",
+        identificador_hash=identificador(lid),
+    ))
+    db.commit()
+
+    repo = WhatsappGrupoRepository(db)
+    assert repo.preencher_telefone_dos_eventos(grupos[0].id) == 1
+    db.commit()
+    # Segunda passada não encontra mais nada para atualizar.
+    assert repo.preencher_telefone_dos_eventos(grupos[0].id) == 0

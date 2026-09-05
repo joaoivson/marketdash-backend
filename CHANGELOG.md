@@ -53,6 +53,27 @@ vende há um mês não é o que se está procurando. `dias=0` mantém o históri
 quem precisar. O rótulo na tela diz o escopo — sem isso a afiliada vê a comissão
 cair e acha que perdeu venda.
 
+### O telefone: o webhook do WAHA não manda `PhoneNumber` — está provado
+
+A correção de 04/09b passou a ler identidade e telefone como campos separados no
+webhook. **Não bastou**, e agora existe a medida que faltava: dos eventos
+gravados em homologação **depois** daquele deploy, 191 continuaram todos
+`identificador_tipo='lid'`. Zero telefone. O campo não vem nesse evento.
+
+A leitura no webhook **fica** — ela cobre o dia em que o WAHA passar a mandar o
+campo, e removê-la faria o telefone ser descartado de novo. Mas quem resolve
+hoje é o payload **REST** de `/groups`, que sabidamente traz `PhoneNumber` (é o
+que `_identidades` já lia para descobrir se somos admin). O sync agora, no mesmo
+passo em que grava `grupo_participantes`, preenche os eventos que só tinham o
+LID — casando pelo `identificador_hash`, que é estável por construção e é
+exatamente para isso que ele continuou existindo quando a 079 passou a guardar o
+número. O hash não muda; só a coluna exportável.
+
+Idempotente: só toca evento que ainda não tem telefone.
+
+⚠️ **Depende de um número conectado.** Sem sync não há payload REST, e sem ele
+não há telefone — nem para os eventos antigos nem para a lista de participantes.
+
 ### Correção de teste
 
 `test_excluir_nao_leva_os_grupos_nem_o_sub_id` comparava LISTAS de um

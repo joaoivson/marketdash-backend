@@ -202,3 +202,37 @@ class WhatsappGrupoRepository:
             .order_by(GrupoParticipante.grupo_id, GrupoParticipante.visto_em)
             .all()
         )
+
+    def preencher_telefone_dos_eventos(self, grupo_id: int) -> int:
+        """
+        Dá telefone aos eventos do grupo, casando pelo HMAC dos participantes.
+
+        **Por que precisa existir.** O webhook `group.v2.participants` NÃO manda
+        o telefone — medido em homologação: 191 eventos gravados depois da
+        correção que passou a ler `PhoneNumber` separado do `JID` continuaram
+        todos `identificador_tipo='lid'`. O campo simplesmente não vem nesse
+        evento. Quem tem o número é o payload REST de `/groups`, que o sync já
+        consome — e é de lá que `grupo_participantes` vem preenchido.
+
+        Então o caminho é este: o sync grava os participantes com telefone e,
+        no mesmo passo, preenche os eventos que só tinham o LID. O
+        `identificador_hash` é o que casa os dois, e ele é estável por
+        construção — é exatamente para isso que ele continuou existindo quando
+        a 079 passou a guardar o número.
+
+        Só toca evento que ainda NÃO tem telefone: rodar de novo é inofensivo.
+        """
+        from sqlalchemy import text
+
+        resultado = self.db.execute(text("""
+            UPDATE grupo_eventos e
+               SET identificador = p.telefone,
+                   identificador_tipo = 'telefone'
+              FROM grupo_participantes p
+             WHERE p.grupo_id = :grupo_id
+               AND e.grupo_id = :grupo_id
+               AND e.identificador_hash = p.identificador_hash
+               AND p.telefone IS NOT NULL
+               AND (e.identificador_tipo IS DISTINCT FROM 'telefone')
+        """), {"grupo_id": grupo_id})
+        return int(resultado.rowcount or 0)

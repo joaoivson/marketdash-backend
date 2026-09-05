@@ -227,7 +227,8 @@ class WhatsappGrupoSyncService:
             sync_repo.mark_failed(run, error_message=str(e)[:500])
             raise
         detalhes = {k: resultado[k] for k in ("novos", "atualizados", "desativados",
-                                              "ignorados", "convites", "membros")}
+                                              "ignorados", "convites", "membros",
+                                              "telefones")}
         if self._falha_convite:
             # Fica no run para ser auditável em /admin/sincronizacoes: "169
             # grupos de admin e zero convites" precisa de motivo, não de log.
@@ -252,7 +253,7 @@ class WhatsappGrupoSyncService:
         grupos_por_jid = self.repo.por_jids(instancia.user_id)
         vinculos = self.repo.vinculos_da_instancia(instancia.id)
 
-        vistos = novos = atualizados = ignorados = membros = 0
+        vistos = novos = atualizados = ignorados = membros = telefones = 0
         grupo_ids_vistos = []
         precisam_convite = []
         offset = 0
@@ -292,6 +293,12 @@ class WhatsappGrupoSyncService:
                         membros += self.repo.substituir_participantes(
                             grupo.id, _participantes_do_payload(dados, meus_ids),
                         )
+                        # O webhook de entrada NÃO traz o telefone — medido:
+                        # 191 eventos pós-correção continuaram todos como LID.
+                        # Quem tem o número é este payload REST, então é aqui
+                        # que os eventos antigos ganham telefone, casados pelo
+                        # HMAC. Ver `preencher_telefone_dos_eventos`.
+                        telefones += self.repo.preencher_telefone_dos_eventos(grupo.id)
                     except Exception:
                         # Nunca derruba o sync: grupo continua atualizado, só
                         # a lista de membros deste fica com a do sync anterior.
@@ -338,7 +345,7 @@ class WhatsappGrupoSyncService:
 
         return {"vistos": vistos, "novos": novos, "atualizados": atualizados,
                 "desativados": desativados, "ignorados": ignorados,
-                "convites": convites, "membros": membros}
+                "convites": convites, "membros": membros, "telefones": telefones}
 
     def _preencher_convites(self, cliente: WahaClient, grupos: list) -> int:
         """
