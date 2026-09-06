@@ -119,6 +119,28 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 
 ## Em voo / pendente de humano
 
+- **Roteiros: rodada de 06/09 EM HOMOLOGAÇÃO.** Migration **082** aplicada em
+  hml (`passo_blocos`, `offset_segundos`/`offset_unidade`,
+  `acao_descontinuada`, `blocos_enviados`, `tipo_conteudo` texto/midia →
+  `mensagem`, índice único `uq_roteiro_execucao_ativa`). Produção **PENDENTE**.
+
+  ⚠️ **O job `roteiros-tick-5min` NÃO EXISTE em produção** (medido em 06/09).
+  Sem ele nenhum roteiro dispara lá, e o sintoma é exatamente "agendei e não
+  saiu". Vem da migration **061**, que está na lista de pg_cron do runbook
+  (passo 10), não na §8.1 — conferir antes de liberar o módulo.
+
+  ⚠️ **A 082 cria TABELA** (`passo_blocos`), e blocos carregam o texto que a
+  afiliada escreve. Se a API subir antes da migration, `create_all` cria a
+  tabela **sem RLS**. Ela também **converte dado** (`tipo_conteudo`), então
+  rodar depois do deploy deixa passo antigo com um tipo que o código novo não
+  reconhece. Produção tem 0 linhas nas 6 tabelas de roteiros — a conversão é
+  no-op lá, mas a ordem continua importando pelo `create_all`.
+
+  **Dívida conhecida:** `marcar_todos` é aceito, gravado e **nunca usado** — o
+  `waha_client` não tem `mentions`. É a mesma família do bug que a rodada
+  corrigiu (entrada aceita e ignorada em silêncio), e ficou fora do escopo do
+  documento.
+
 - **Campanhas de grupos: rodada de correções (04/09) EM HOMOLOGAÇÃO.**
   Migration **079** aplicada em hml (`campanha_numeros` + backfill,
   `campanhas.limite_participantes`, `grupo_eventos.identificador` e

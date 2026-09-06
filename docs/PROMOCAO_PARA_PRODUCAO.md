@@ -419,7 +419,7 @@ da Meta.
 1. **Medir** produção com o SQL da seção 1 — não confie nesta tabela
 2. **Listar** `git log --oneline main..develop` nos dois repos e decidir item a item
    (49 e 33 commits em 31/08 — ver seção 2 e 8.5)
-3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080→081`
+3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080→081→082`
    em produção — a lista fechada é a **§8.1**, e é ela que manda, não este
    resumo (**sem** `061`/`064`/`069`, que são de pg_cron e vão no passo 10).
    ⚠️ A `079` **e a `080`** só entram **depois** da política de privacidade
@@ -563,6 +563,27 @@ homologação.
 | — | `078_shopee_sync_por_usuario.sql` | função `trigger_shopee_sync_user` (só a função — agendamento é manual e diverge) | **PENDENTE** | **PENDENTE** |
 | 16 | `080_grupos_participantes_cheio_subids.sql` | `campanha_grupos.cheio_override` · `grupo_participantes` (lista de membros) · `campanha_sub_ids` | **PENDENTE** | OK (04/09) |
 | 17 | `081_fallback_lotado_e_subid_legivel.sql` | `campanha_link_eventos.resultado` + índice parcial · `whatsapp_grupos.sub_id` para `VARCHAR(64)` | **PENDENTE** | OK (05/09) |
+| 18 | `082_roteiros_blocos_tempo_status.sql` | `roteiro_passos.offset_segundos`/`offset_unidade`/`acao_descontinuada` · **`passo_blocos`** (tabela) · `roteiro_mensagens.blocos_enviados` · backfill de `data_fixa` · `tipo_conteudo` texto/midia → `mensagem` · índice único `uq_roteiro_execucao_ativa` | **PENDENTE** | OK (06/09) |
+
+> ⚠️ **A `082` (06/09) é da rodada de Roteiros e tem DUAS armadilhas.**
+>
+> A primeira é a de sempre, e ela cria **tabela nova**: `passo_blocos`. Se a
+> API subir em produção antes da migration, `Base.metadata.create_all()` cria a
+> tabela **sem RLS** — e blocos carregam o texto que a afiliada escreve. A
+> migration tem `ENABLE ROW LEVEL SECURITY`; o `create_all` não.
+>
+> A segunda é que ela **converte dado**: `roteiro_passos.tipo_conteudo` sai de
+> `texto`/`midia` para `mensagem`, e cada passo antigo vira um `passo_blocos` de
+> um bloco só. Rodar a migration **depois** do deploy deixa passo antigo com
+> `tipo_conteudo` que o código novo não reconhece. Medido em 06/09: **produção
+> tem 0 linhas em todas as 6 tabelas de roteiros**, então a conversão é no-op lá
+> — mas a ordem continua importando pelo `create_all`.
+>
+> ⚠️ **E o `roteiros-tick-5min` NÃO EXISTE em produção** (medido em 06/09: hml
+> tem o jobid 102 ativo, produção não tem o job). Sem ele nenhum roteiro
+> dispara em produção, e o sintoma é exatamente "agendei e não saiu". O
+> agendamento vem da **`061`**, que está na lista do passo 10 (pg_cron), não na
+> §8.1 — confira que ela foi de fato executada lá.
 
 > ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
 > **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,

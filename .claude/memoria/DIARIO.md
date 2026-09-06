@@ -1249,3 +1249,118 @@ user 1 (relacionamento@) — alguém desconectou e reconectou pela outra conta, 
 o `disconnect` apaga conexão + automações junto. A automação atual é a
 "Esfoliante" do user 1. Quem for testar precisa saber em qual conta está a
 conexão.
+
+## 2026-09-06 — Roteiros: o `salvar` que apagava a fila
+
+O documento trazia dois 🔴 separados. Eram o mesmo minuto, e o banco de
+homologação reconstruiu ele inteiro:
+
+| hora (BRT) | fato |
+|---|---|
+| 11:47 | roteiro 9 "Teste Lançamento" criado |
+| 11:55 | execução 4 agendada |
+| **12:00:00** | tick → `enviando` → passo 1 sai ✅ |
+| 12:01:40 / 12:01:51 | execuções **5 e 6** — "Agendar" clicado mais duas vezes |
+| **12:04:39** | os 3 passos deletados e recriados (um `salvar`) |
+| 12:05:00 | as 3 execuções acham zero pendentes → `concluida`, `total = 0` |
+
+`PUT /passos` fazia `DELETE FROM roteiro_passos` + reinsert. A FK
+`roteiro_mensagens.passo_id` é `ON DELETE CASCADE`. O salvar apagou a mensagem
+do passo 2 **21 segundos antes** de ela sair.
+
+**A pista que fechou o caso foi `passo_criado`**: os três passos tinham o
+MESMO timestamp de criação (15:04:39 UTC), 17 minutos depois do roteiro. Não
+era "o passo 3 foi adicionado depois" — era "todos os passos são novos", que é
+outra história.
+
+**`total = 0` nas três execuções é a assinatura da tabela vazia.** Elas
+nasceram com total real e foram zeradas por `_atualizar_contadores` contando
+uma tabela que o CASCADE já tinha esvaziado. Execução `concluida` com
+`total = 0` é sempre isso.
+
+**Os dois bugs se alimentavam.** O chip dizia "Rascunho" e o botão "Agendar"
+continuava na linha — foi o que produziu as execuções 5 e 6. Se o salvar não
+tivesse apagado tudo no mesmo minuto, cada grupo teria recebido **em
+triplicado**. O bug de UI era o mais perigoso dos dois.
+
+**Diagnósticos que a medição derrubou:**
+
+- *"o tick do pg_cron está desligado"* — não: `roteiros-tick-5min` (jobid 102)
+  está `active=true` em hml, e foi ele que concluiu as três execuções às
+  12:05:00 e 12:05:01. Foi o que provou que a linha não existia mais.
+  **Mas em PRODUÇÃO esse job não existe** — achado colateral, e é bloqueante
+  para o módulo lá.
+- *"o cálculo do offset está errado"* — não: o horário 12:05 aparecia certo na
+  prévia e o passo 2 tinha `offset_minutos = 5` gravado. O cálculo nunca foi o
+  problema; a materialização também não. Foi a **destruição posterior**.
+
+**O que se aprendeu para além desta rodada:** `DELETE`-and-recreate num
+recurso que tem FK `CASCADE` apontando para ele é uma bomba com pavio de
+comprimento arbitrário — o dano só aparece quando existe linha filha viva, ou
+seja, só depois que a feature começa a ser usada de verdade. Trocar por diff
+por id foi a correção; a lição é procurar o padrão em outros `remover_*`
+seguidos de reinsert.
+
+**Achado de investigação:** o `.env` do frontend aponta para o Supabase de
+**produção** e o do backend para **homologação** — o gotcha já registrado em
+`reference_admin_login_playwright`. Para a validação visual usei um
+`.env.local` (gitignored por `*.local`), removido no fim; o `.env` do repo não
+foi tocado.
+
+### As 9 regressões que a própria rodada introduziu
+
+Auditoria adversarial da rodada contra o documento, item a item, com uma etapa
+de refutação para cada acusação. **Nove se confirmaram lendo o código** — três
+delas críticas, e uma delas mascarada pelos meus próprios testes:
+
+1. **A trava de passado congelava o roteiro em execução.**
+   `_validar_horarios_para_salvar` resolvia TODOS os passos e recusava o salvar
+   se qualquer um estivesse no passado. Só que o passo que já saiu está
+   legitimamente no passado. Resultado: às 12:00 o passo 1 dispara, e às 12:10
+   qualquer salvar era recusado apontando o passo que a própria regra não deixa
+   editar — ou seja, **a funcionalidade central da rodada (editar roteiro
+   agendado) ficava impossível na segunda hora do lançamento.**
+   Os testes não pegaram porque o helper agenda tudo para AMANHÃ.
+
+2. **O reenvio manual não funcionava depois que a execução terminava** — que é
+   exatamente quando ele é usado. A tela derivava a execução de
+   `execucao_ativa`, que é `null` numa execução concluída, e a lista de falhas
+   só aparece depois de rodar.
+
+3. **`BlocoOut(BlocoIn)` herdava o validator de escrita.** Bloco com `conteudo`
+   NULL (a 082 gera um, ao converter passo de texto sem texto) fazia
+   `GET /roteiros/{id}` responder **500**.
+
+4. **Passo novo perdido no erro do salvar.** `concluirPasso` fechava o editor
+   ANTES de saber se o PUT passou; no erro o `carregar()` devolvia a lista do
+   banco e o passo digitado sumia sem nada ligar uma coisa à outra.
+
+5. **O 422 do Pydantic virava JSON cru no toast.** Com corpo `list[PassoIn]`, o
+   `detail` é um ARRAY — nenhuma das mensagens em português escritas nos
+   validators chegava à tela.
+
+6. **Status terminal antes de rodar.** Linhas `pulado` nascem na
+   MATERIALIZAÇÃO (grupo desativado, sem admin), horas antes do disparo: o
+   passo aparecia "Falhou" no instante em que ela agendava.
+
+7. **Excluir passo apagava o histórico de execuções concluídas** — a trava só
+   olhava a execução ativa, e o CASCADE levava as `enviada` de lançamentos
+   passados.
+
+8. **`blocos_enviados` é posicional e a lista de blocos é recriada a cada
+   salvar** — uma linha parada no bloco 2 retomaria do "bloco 3" de uma lista
+   nova, que pode ser outro conteúdo.
+
+9. **`hover:bg-primary/80` do `Badge` do shadcn pintava o chip de status de
+   AZUL no hover**, por cima da cor do estado, nos três status. Achado
+   olhando a tela, não o código — e eu quase reportei como falso positivo, até
+   medir o `getComputedStyle` e ver que a cor em repouso estava certa.
+
+Mais três de menor gravidade (o `Checkbox` cru que sobrou no
+`EnvioRapidoModal`, o botão "Aplicar datas" ativo com payload vazio, e o N+1 de
+3 queries por linha na listagem).
+
+**O padrão que se repete:** a rodada anterior (05/09) também introduziu
+regressões, e "cada uma nasceu de uma melhoria dela". Aqui foi igual — as três
+críticas nasceram das três melhorias centrais (trava de passado, status por
+passo, blocos). Auditoria adversarial item a item pagou o custo dela sozinha.

@@ -11,6 +11,142 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-06 (Roteiros: modelo de tempo, blocos e edição do que já foi agendado)
+
+Documento delta sobre Roteiros. **Migration 082.** Os dois 🔴 do documento
+tinham a **mesma causa**, e a investigação no banco de homologação reconstruiu o
+minuto inteiro.
+
+### O passo 2 não sumiu: ele foi apagado por um `salvar`
+
+Roteiro "Teste Lançamento", 06/09. O passo 1 (hora fixa, 12:00) saiu no grupo. O
+passo 2 (`+5 min`, 12:05) não saiu.
+
+O que o banco mostrou:
+
+| hora (BRT) | o que aconteceu |
+|---|---|
+| 11:47 | roteiro criado |
+| 11:55 | execução 4 agendada |
+| **12:00** | tick → `enviando` → **passo 1 sai** ✅ |
+| 12:01:40 e 12:01:51 | execuções **5 e 6** — ela clicou "Agendar" mais duas vezes |
+| **12:04:39** | os três passos foram **deletados e recriados** ao salvar |
+| 12:05:00 | o tick achou **zero** pendentes nas três execuções → `concluida`, `total = 0` |
+
+`PUT /roteiros/{id}/passos` chamava `DELETE FROM roteiro_passos` e reinseria
+tudo. `roteiro_mensagens.passo_id` é `ON DELETE CASCADE`: o salvar levou junto a
+mensagem que sairia 21 segundos depois. As três execuções terminaram com
+`total = 0` — a assinatura da tabela vazia — e nada avisou ninguém.
+
+E os dois bugs se alimentavam: o chip continuava dizendo "Rascunho" e o botão
+"Agendar" continuava na linha, o que fez ela agendar três vezes. Se o salvar não
+tivesse apagado as mensagens no mesmo minuto, **cada grupo teria recebido tudo
+em triplicado**.
+
+**O que mudou.** `definir_passos` faz **diff por id**: passo que chega com `id`
+é atualizado no lugar, passo sem `id` é inserido, e só o que sumiu da lista é
+apagado. O id preservado é o que mantém a fila viva — e é também o que permite
+saber o que já saiu.
+
+### Editar roteiro agendado deixou de ser aceito-e-ignorado
+
+| Passo | Editar | Mover | Excluir |
+|---|---|---|---|
+| Enviado ou em envio | não | não | não |
+| Pendente | sim | sim | sim |
+
+Tentar mexer no que já saiu devolve **409** apontando **quais** passos. Qualquer
+alteração aceita **reagenda apenas as pendentes** — o que já saiu não é tocado,
+porque a cadeia é relativa: editar o passo 1 recalcula o passo 2, e o passo 1
+pode já ter ido.
+
+Cobre os três casos reais: acrescentar passo no fim, corrigir o texto de uma
+mensagem que ainda não saiu, e empurrar o resto do lançamento quando algo atrasa.
+
+E agendar duas vezes agora é **409**, com índice único parcial no banco por trás
+— a trava que não depende de quem chama.
+
+### A data-âncora global saiu
+
+Abertura de carrinho, virada de lote e fechamento são **data e hora absolutas**.
+Não existe offset que resolva, e derivar tudo de uma âncora única não atendia
+lançamento. Cada passo de hora fixa passa a carregar a própria data, e os dois
+campos são obrigatórios.
+
+O ganho de duplicar continua: em vez de reagendar 22 mensagens, ela ajusta as 4
+ou 5 datas fixas — agora numa **tela que lista todas juntas** — e o resto
+recalcula pelo offset.
+
+Junto: **offset com unidade** (`+X segundos · minutos · horas`), a linha do
+passo mostra o **horário resolvido** (`07/09, 12:10`) e não só `+5 min`, e
+**passo no passado bloqueia salvar e agendar**, em vermelho, apontando quais. É
+essa trava que sustenta a duplicação — sem ela, duplicar 22 passos e esquecer
+uma das datas agenda a mensagem para o lançamento passado.
+
+### Um passo, várias mensagens
+
+Um envio real é frequentemente 4 imagens + um texto saindo juntos. O passo virou
+**container de blocos** (`passo_blocos`): compartilham horário e grupos, são
+editados e pré-visualizados juntos, e movem juntos na ordem — diferente de criar
+5 passos com `+0s`.
+
+Entre blocos entra uma pausa **aleatória de 2 a 5 segundos**, automática: cinco
+mídias no mesmo segundo é padrão de robô. E o reenvio **retoma do bloco que
+falhou** em vez de repetir os anteriores no grupo.
+
+O editor do passo virou **tela cheia**, com os blocos à esquerda e uma prévia em
+bolha de WhatsApp à direita, atualizando enquanto digita. Isso resolve de quebra
+o modal que não rolava: o `DialogContent` do shadcn é `fixed` sem teto de
+altura, e nos tipos com mais campos o botão "Concluir" ficava fora da tela.
+(A correção de rolagem foi aplicada ao `ResponsiveModal` mesmo assim — ela vale
+para os outros 28 usos.)
+
+### Ações no grupo
+
+Entram **Alterar a descrição** e **Alterar a imagem**; saem **Abrir entrada** e
+**Fechar entrada**. O motivo de saírem é ambiguidade: fecha o quê — o grupo
+daquele passo, o toggle "Aberto" da aba Grupos, ou o link de entrada da
+campanha? Três controles de nome parecido governando coisas diferentes.
+
+Ação é **exclusiva**: uma por passo, sem blocos. E toda ação exige admin — antes
+só `renomear_grupo` era checado no agendamento.
+
+### Status na linha do passo
+
+**Concluído** (verde) · **Concluído com falhas** (laranja, expande e lista quais
+grupos falharam) · **Falhou** (vermelho). Antes de rodar, o passo não tem
+status. O motivo aparece em português ("Você não é admin deste grupo"), nunca
+erro cru.
+
+O status é da **última execução**, não do passo: o roteiro é template e o mesmo
+vai rodar no próximo lançamento. Duplicar gera cópia sem status; reagendar
+substitui os da execução anterior.
+
+Dentro do passo com falha ela seleciona os grupos e **reenvia** — sempre manual.
+Retry automático mandaria a mesma mensagem duas vezes no grupo.
+
+### Salvar sumiu do rodapé
+
+Salvar passa a ser implícito ao concluir o passo, ao mover e ao remover. No
+rodapé fica só **Agendar**. Sai o aviso laranja "Salve os passos para a prévia
+refletir o que vai ser agendado" — o caminho natural era clicar em Agendar antes
+de salvar.
+
+E a lista de grupos virou **checkbox quadrado**: o `rounded-sm` do tema resolve
+para 8px numa caixa de 16px, ou seja, um círculo — e círculo numa lista significa
+"escolha uma".
+
+### Registrado, sem ação
+
+Com data obrigatória em todo passo de hora fixa, **não existe forma de expressar
+"todo dia às 8h"**. Atende lançamento, que é o caso desta rodada; não atende a
+fila diária de ofertas. Quando o tipo `oferta` for definido, o roteiro vai
+precisar de um modo que repete e de um job que materializa a próxima execução.
+
+O tipo de conteúdo `oferta` **não foi tocado** — continua exatamente como está.
+
+---
+
 ## [Não versionado] - 2026-09-05b (Campanhas de grupos: medição, rotação e leads)
 
 Terceiro documento delta, sobre a cadeia de medição. **Migration 081.** Três
