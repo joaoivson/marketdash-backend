@@ -30,9 +30,11 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.plans import normalize_plan, plan_limit, is_unlimited
 from app.models.roteiro import (
-    CONTEUDO_ACAO, CONTEUDO_MIDIA, CONTEUDO_OFERTA, EXEC_AGENDADA, EXEC_CANCELADA,
-    EXEC_CONCLUIDA, EXEC_ENVIANDO, EXEC_PAUSADA, MSG_ENVIADA, MSG_FALHOU,
-    MSG_PENDENTE, MSG_PULADA, RoteiroMensagem,
+    ACAO_DESCRICAO, ACAO_IMAGEM, ACAO_RENOMEAR, ACOES_VALIDAS, BLOCO_IMAGEM,
+    BLOCO_TEXTO, CONTEUDO_ACAO, CONTEUDO_MENSAGEM, CONTEUDO_MIDIA,
+    CONTEUDO_OFERTA, EXEC_AGENDADA, EXEC_CANCELADA, EXEC_CONCLUIDA,
+    EXEC_ENVIANDO, EXEC_PAUSADA, MSG_ENVIADA, MSG_FALHOU, MSG_PENDENTE,
+    MSG_PULADA, RoteiroMensagem,
 )
 from app.models.whatsapp_grupos import INSTANCIA_CONECTADA, INSTANCIA_DESCONECTADA
 from app.repositories.roteiro_repository import RoteiroRepository
@@ -160,19 +162,120 @@ class RoteiroEnvioService:
             self._grupos_cache[mensagem.grupo_id] = self.db.query(WhatsappGrupo).get(mensagem.grupo_id)
         return self._grupos_cache[mensagem.grupo_id]
 
-    def _texto_final(self, execucao, mensagem: RoteiroMensagem) -> str:
-        passo = self._passo_de(mensagem)
-        prefixo = sufixo = None
+    def _blocos_de(self, passo) -> List:
+        if not hasattr(self, "_blocos_cache"):
+            self._blocos_cache = {}
+        if passo.id not in self._blocos_cache:
+            self._blocos_cache[passo.id] = self.repo.blocos(passo.id)
+        return self._blocos_cache[passo.id]
+
+    def _preparar_saida(self, execucao, mensagem: RoteiroMensagem, passo) -> List[Dict]:
+        """O que sai neste passo, em ordem, com tudo já resolvido.
+
+        Um envio real é 4 imagens + um texto. Prefixo e sufixo da campanha
+        entram UMA vez cada — prefixo no primeiro bloco com texto, sufixo no
+        último —, nunca em todos: repetir a assinatura em cinco mensagens
+        seguidas é exatamente o padrão que o WhatsApp pune.
+        """
+        prefixo, sufixo = self._prefixo_sufixo(passo)
+        blocos = self._blocos_de(passo) if passo.tipo_conteudo == CONTEUDO_MENSAGEM else []
+
+        if not blocos:
+            # Oferta, e passo pré-082 que a migration não alcançou: uma
+            # mensagem só, exatamente como antes.
+            return [{
+                "tipo": BLOCO_IMAGEM if (passo.tipo_conteudo == CONTEUDO_MIDIA
+                                         and passo.midia_url) else BLOCO_TEXTO,
+                "url": passo.midia_url,
+                "texto": self._texto_de(execucao, mensagem, passo.texto,
+                                        passo.template_id, prefixo, sufixo,
+                                        com_link=True),
+            }]
+
+        saida: List[Dict] = []
+        for bloco in blocos:
+            imagem = bloco.tipo == BLOCO_IMAGEM
+            saida.append({
+                "tipo": bloco.tipo,
+                "url": bloco.conteudo if imagem else None,
+                "texto": self._texto_de(execucao, mensagem,
+                                        bloco.legenda if imagem else bloco.conteudo,
+                                        bloco.template_id, None, None,
+                                        com_link=False),
+            })
+        # Índices de quem carrega texto: num passo que abre com imagem sem
+        # legenda, o prefixo vira a legenda dela em vez de sumir.
+        if prefixo:
+            saida[0]["texto"] = self._costurar(prefixo, saida[0]["texto"])
+        if sufixo:
+            saida[-1]["texto"] = self._costurar(saida[-1]["texto"], sufixo)
+        return saida
+
+    @staticmethod
+    def _costurar(*partes) -> str:
+        return "\n\n".join(p.strip() for p in partes if (p or "").strip())
+
+    @staticmethod
+    def _resumo_da_saida(saida: List[Dict]) -> str:
+        """O que fica gravado em `texto_final` — auditoria do que saiu, não
+        fonte de reenvio (o reenvio recompõe do passo)."""
+        partes = []
+        for b in saida:
+            if b["tipo"] == BLOCO_IMAGEM:
+                partes.append(f"[imagem] {b['url'] or ''}".strip())
+            if b["texto"]:
+                partes.append(b["texto"])
+        return "\n\n".join(partes)[:8000]
+
+    def _enviar_saida(self, cliente, mensagem: RoteiroMensagem, grupo,
+                      saida: List[Dict]) -> None:
+        """Envia os blocos em sequência, RETOMANDO de onde parou.
+
+        `blocos_enviados` é gravado a cada bloco: falhar no bloco 3 e reenviar
+        do zero mandaria os blocos 1 e 2 de novo no grupo — mensagem repetida é
+        o erro que a afiliada vê e que o WhatsApp pune.
+        """
+        ja_saiu = int(mensagem.blocos_enviados or 0)
+        for i, bloco in enumerate(saida, start=1):
+            if i <= ja_saiu:
+                continue
+            if i > 1:
+                # Cinco mídias no mesmo segundo é padrão de robô. Não é
+                # configurável por ela — é ritmo de sistema.
+                self.dormir(random.uniform(settings.WHATSAPP_BLOCO_PAUSA_MIN_S,
+                                           settings.WHATSAPP_BLOCO_PAUSA_MAX_S))
+            if bloco["tipo"] == BLOCO_IMAGEM:
+                if not bloco["url"]:
+                    raise ErroWhatsapp("acao", f"bloco {i} sem imagem")
+                cliente.enviar_imagem(grupo.jid, bloco["url"],
+                                      legenda=bloco["texto"] or "")
+            elif bloco["tipo"] == BLOCO_TEXTO:
+                cliente.enviar_texto(grupo.jid, bloco["texto"] or "")
+            else:
+                # `audio`/`video` existem no schema para a fila de ofertas; o
+                # cliente WAHA de hoje só tem sendText e sendImage. Falhar aqui
+                # com motivo próprio é melhor que enviar coisa errada.
+                raise ErroWhatsapp("bloco_nao_suportado", bloco["tipo"])
+            mensagem.blocos_enviados = i
+            self.db.add(mensagem)
+            self.db.commit()
+
+    def _prefixo_sufixo(self, passo):
+        """Prefixo e sufixo da campanha do roteiro — a assinatura da afiliada."""
         from app.models.roteiro import Roteiro
         roteiro = self.db.query(Roteiro).get(passo.roteiro_id)
-        if roteiro and roteiro.campanha_id:
-            from app.models.campanha_grupos import Campanha
-            campanha = self.db.query(Campanha).get(roteiro.campanha_id)
-            if campanha:
-                prefixo, sufixo = campanha.prefixo, campanha.sufixo
+        if not (roteiro and roteiro.campanha_id):
+            return None, None
+        from app.models.campanha_grupos import Campanha
+        campanha = self.db.query(Campanha).get(roteiro.campanha_id)
+        return (campanha.prefixo, campanha.sufixo) if campanha else (None, None)
 
-        corpo = passo.texto or ""
-        if passo.template_id:
+    def _texto_de(self, execucao, mensagem: RoteiroMensagem, corpo: Optional[str],
+                  template_id: Optional[int], prefixo: Optional[str],
+                  sufixo: Optional[str], com_link: bool) -> str:
+        """Resolve UM corpo: variação do template + placeholders + link."""
+        corpo = corpo or ""
+        if template_id:
             from app.models.roteiro import TemplateMensagem, TemplateVariacao
 
             # JOIN com o dono, não só `template_id`: o id vem do passo, que veio
@@ -181,15 +284,16 @@ class RoteiroEnvioService:
             variacoes = (self.db.query(TemplateVariacao)
                          .join(TemplateMensagem,
                                TemplateMensagem.id == TemplateVariacao.template_id)
-                         .filter(TemplateVariacao.template_id == passo.template_id,
+                         .filter(TemplateVariacao.template_id == template_id,
                                  TemplateMensagem.user_id == execucao.user_id).all())
             sorteada = sortear_variacao(variacoes)
             if sorteada:
                 corpo = sorteada.corpo
-        valores = {"link": mensagem.short_link or passo.oferta_url or ""}
-        texto = montar_texto(corpo, valores, prefixo, sufixo)
+
+        passo = self._passo_de(mensagem)
+        link = (mensagem.short_link or passo.oferta_url or "") if com_link else ""
+        texto = montar_texto(corpo, {"link": link}, prefixo, sufixo)
         # Oferta sem {link} no corpo: o link entra no fim — nunca some.
-        link = valores["link"]
         if link and link not in texto:
             texto = f"{texto}\n\n{link}" if texto else link
         return texto
@@ -425,17 +529,12 @@ class RoteiroEnvioService:
                 r.puladas += 1
                 continue
 
-            # Flip local (abrir/fechar entrada) não toca o WhatsApp: pagar
-            # pausa anti-ban por ele só desperdiça o orçamento da fatia.
-            passo_previa = self._passo_de(mensagem)
-            e_flip_local = (
-                passo_previa.tipo_conteudo == CONTEUDO_ACAO
-                and passo_previa.acao in ("abrir_entrada", "fechar_entrada")
-            )
             # Ritmo: jitter dentro da rodada; pausa longa entre rodadas.
-            if e_flip_local:
-                pass
-            elif na_rodada >= settings.WHATSAPP_RODADA_TAMANHO:
+            #
+            # Não há mais exceção de "flip local": desde a 082 TODA ação de
+            # grupo (renomear, descrição, imagem) é uma chamada real ao
+            # WhatsApp e paga o mesmo ritmo anti-ban que uma mensagem.
+            if na_rodada >= settings.WHATSAPP_RODADA_TAMANHO:
                 self.dormir(random.uniform(settings.WHATSAPP_GRUPO_PAUSA_MIN_S,
                                            settings.WHATSAPP_GRUPO_PAUSA_MAX_S))
                 na_rodada = 0
@@ -443,19 +542,20 @@ class RoteiroEnvioService:
                 self.dormir(random.uniform(settings.WHATSAPP_GRUPO_JITTER_MIN_S,
                                            settings.WHATSAPP_GRUPO_JITTER_MAX_S))
 
-            texto = self._texto_final(execucao, mensagem)
-            mensagem.texto_final = texto
-            mensagem.instancia_id = instancia.id
             passo = self._passo_de(mensagem)
+            # Congelado ANTES de sair: a variação de template é sorteada uma
+            # vez, e a retomada por bloco reenvia exatamente o que já estava
+            # decidido — nunca um sorteio novo no meio de uma mensagem.
+            saida = self._preparar_saida(execucao, mensagem, passo)
+            mensagem.texto_final = self._resumo_da_saida(saida)
+            mensagem.instancia_id = instancia.id
 
             try:
                 cliente = self._cliente(instancia.nome_instancia)
                 if passo.tipo_conteudo == CONTEUDO_ACAO:
                     self._executar_acao(cliente, passo, grupo)
-                elif passo.tipo_conteudo == CONTEUDO_MIDIA and passo.midia_url:
-                    cliente.enviar_imagem(grupo.jid, passo.midia_url, legenda=texto)
                 else:
-                    cliente.enviar_texto(grupo.jid, texto)
+                    self._enviar_saida(cliente, mensagem, grupo, saida)
             except ErroWhatsapp as e:
                 self._tratar_erro(execucao, mensagem, instancia, e, r, elegiveis)
                 continue
@@ -467,8 +567,7 @@ class RoteiroEnvioService:
             instancia.falhas_seguidas = 0
             self.repo.marcar(mensagem, MSG_ENVIADA)
             r.enviadas += 1
-            if not e_flip_local:
-                na_rodada += 1
+            na_rodada += 1
 
         self._atualizar_contadores(execucao)
         return r.to_dict()
@@ -476,41 +575,43 @@ class RoteiroEnvioService:
     # --- desfechos ----------------------------------------------------------
 
     def _executar_acao(self, cliente, passo, grupo) -> None:
-        """Ações do roteiro (spec §4.8): renomear o grupo faz parte da régua de
-        lançamento ("ABRE ÀS 20H" → "ABERTO"); abrir/fechar entrada é flip
-        local em campanha_grupos — não passa pelo WhatsApp."""
-        from app.models.campanha_grupos import CampanhaGrupo
-        from app.models.roteiro import Roteiro
+        """Ações do roteiro: renomear, alterar a descrição e alterar a imagem.
 
+        Todas fazem parte da régua de lançamento ("ABRE ÀS 20H" → "ABERTO") e
+        todas exigem admin no grupo.
+
+        `abrir_entrada`/`fechar_entrada` SAÍRAM (082). Eram ambíguas: fecha o
+        quê — o grupo daquele passo, o toggle "Aberto" da aba Grupos, ou o link
+        de entrada da campanha? Três controles de nome parecido governando
+        coisas diferentes. Passo antigo com essas ações não é executado: vira
+        `pulado` com motivo próprio, visível no relatório, em vez de mexer em
+        silêncio num estado que hoje tem dono na tela.
+        """
         acao = (passo.acao or "").strip()
-        if acao == "renomear_grupo":
-            novo = (passo.acao_parametro or "").strip()
-            if not novo:
-                raise ValueError("renomear_grupo sem nome")
-            cliente.renomear_grupo(grupo.jid, novo)
-            grupo.nome = novo[:255]
+        if passo.acao_descontinuada or acao not in ACOES_VALIDAS:
+            raise ErroWhatsapp("acao_descontinuada", acao or "sem ação")
+
+        parametro = (passo.acao_parametro or "").strip()
+        if not parametro:
+            raise ErroWhatsapp("acao", f"{acao} sem parâmetro")
+
+        if acao == ACAO_RENOMEAR:
+            cliente.renomear_grupo(grupo.jid, parametro)
+            grupo.nome = parametro[:255]
             self.db.add(grupo)
             return
-        if acao in ("abrir_entrada", "fechar_entrada"):
-            roteiro = self.db.query(Roteiro).get(passo.roteiro_id)
-            if not roteiro or not roteiro.campanha_id:
-                raise ValueError(f"{acao} exige roteiro vinculado a uma campanha")
-            vinculo = (
-                self.db.query(CampanhaGrupo)
-                .filter(CampanhaGrupo.campanha_id == roteiro.campanha_id,
-                        CampanhaGrupo.grupo_id == grupo.id)
-                .first()
-            )
-            if not vinculo:
-                raise ValueError("grupo fora da campanha do roteiro")
-            vinculo.aberto = acao == "abrir_entrada"
-            self.db.add(vinculo)
+        if acao == ACAO_DESCRICAO:
+            cliente.alterar_descricao(grupo.jid, parametro)
             return
-        raise ValueError(f"ação desconhecida: {acao!r}")
+        if acao == ACAO_IMAGEM:
+            cliente.alterar_imagem(grupo.jid, parametro)
+            return
+        raise ErroWhatsapp("acao", f"ação desconhecida: {acao!r}")
 
     # Motivos que são problema do GRUPO, não do número: pulam a linha e não
     # contam para o disjuntor (5 grupos sem admin não podem desconectar a sessão).
-    MOTIVOS_DO_GRUPO = {"grupo_invalido", "sem_permissao", "acao"}
+    MOTIVOS_DO_GRUPO = {"grupo_invalido", "sem_permissao", "acao",
+                        "acao_descontinuada", "bloco_nao_suportado"}
 
     # Erros de TRANSPORTE. Não são sinal de banimento: o WhatsApp não recusou
     # nada — a conversa não chegou lá. Tratá-los como banimento (contando para
@@ -555,7 +656,7 @@ class RoteiroEnvioService:
 
     def _tratar_erro(self, execucao, mensagem, instancia, e: ErroWhatsapp,
                      r: ResultadoDaFatia, elegiveis: List) -> None:
-        if e.motivo in ("sem_permissao", "acao"):
+        if e.motivo in self.MOTIVOS_DO_GRUPO - {"grupo_invalido"}:
             self.repo.marcar(mensagem, MSG_PULADA, erro=e.motivo)
             r.puladas += 1
             return

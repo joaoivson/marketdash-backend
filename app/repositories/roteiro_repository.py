@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models.roteiro import (
     EXEC_AGENDADA, EXEC_ENVIANDO, MSG_ENVIADA, MSG_ENVIANDO, MSG_FALHOU,
-    MSG_PENDENTE, Roteiro, RoteiroExecucao, RoteiroMensagem, RoteiroPasso,
+    MSG_PENDENTE, PassoBloco, Roteiro, RoteiroExecucao, RoteiroMensagem,
+    RoteiroPasso,
 )
 
 
@@ -41,14 +42,70 @@ class RoteiroRepository:
             .all()
         )
 
+    def passo_por_id(self, passo_id: int) -> Optional[RoteiroPasso]:
+        return self.db.query(RoteiroPasso).get(passo_id)
+
     def adicionar(self, obj) -> object:
         self.db.add(obj)
         self.db.flush()
         return obj
 
     def remover_passos(self, roteiro_id: int) -> None:
+        """DELETE em massa dos passos.
+
+        ⚠️ `roteiro_mensagens.passo_id` é ON DELETE CASCADE: isto leva junto
+        TODA a fila materializada do roteiro, inclusive mensagens pendentes de
+        execução em andamento. Foi exatamente assim que, em 06/09, um `salvar`
+        às 12:04:39 apagou a mensagem que sairia às 12:05. `definir_passos` NÃO
+        usa mais este caminho — faz diff por id. Só chame ao descartar o
+        roteiro inteiro.
+        """
         self.db.query(RoteiroPasso).filter(
             RoteiroPasso.roteiro_id == roteiro_id
+        ).delete(synchronize_session=False)
+
+    # --- blocos do passo ----------------------------------------------------
+
+    def blocos(self, passo_id: int) -> List[PassoBloco]:
+        return (
+            self.db.query(PassoBloco)
+            .filter(PassoBloco.passo_id == passo_id)
+            .order_by(PassoBloco.ordem, PassoBloco.id)
+            .all()
+        )
+
+    def blocos_por_passo(self, passo_ids: List[int]) -> Dict[int, List[PassoBloco]]:
+        """Uma query para a lista inteira — o editor abre 22 passos de uma vez
+        e um SELECT por passo transformava abrir o roteiro em 22 idas ao banco."""
+        if not passo_ids:
+            return {}
+        mapa: Dict[int, List[PassoBloco]] = {pid: [] for pid in passo_ids}
+        linhas = (
+            self.db.query(PassoBloco)
+            .filter(PassoBloco.passo_id.in_(passo_ids))
+            .order_by(PassoBloco.passo_id, PassoBloco.ordem, PassoBloco.id)
+            .all()
+        )
+        for b in linhas:
+            mapa.setdefault(b.passo_id, []).append(b)
+        return mapa
+
+    def zerar_retomada_dos_blocos(self, passo_id: int) -> int:
+        """`blocos_enviados` é posicional. Ao trocar os blocos do passo, uma
+        linha que parou no bloco 2 retomaria do "bloco 3" de uma lista nova."""
+        n = (
+            self.db.query(RoteiroMensagem)
+            .filter(RoteiroMensagem.passo_id == passo_id,
+                    RoteiroMensagem.blocos_enviados > 0)
+            .update({"blocos_enviados": 0}, synchronize_session=False)
+        )
+        return int(n or 0)
+
+    def remover_blocos(self, passo_id: int) -> None:
+        """Blocos são conteúdo puro do passo — não há FK apontando para eles,
+        então trocar por substituição é seguro (ao contrário dos passos)."""
+        self.db.query(PassoBloco).filter(
+            PassoBloco.passo_id == passo_id
         ).delete(synchronize_session=False)
 
     # --- execuções ----------------------------------------------------------
@@ -65,6 +122,42 @@ class RoteiroRepository:
         """Uso interno do worker (Celery não tem current_user; o user_id vem
         da própria execução e TODAS as queries de mensagem filtram por ele)."""
         return self.db.query(RoteiroExecucao).get(execucao_id)
+
+    def execucoes_por_roteiro(self, roteiro_ids: List[int]
+                              ) -> Dict[int, List[RoteiroExecucao]]:
+        """Execuções de vários roteiros em UMA query, mais recente primeiro.
+
+        A listagem chamava `execucao_ativa` + `ultima_execucao` por roteiro,
+        dentro do laço — 2 SELECTs por linha da tela, mais o `passos()` que já
+        existia. Com 20 roteiros era 60 idas ao banco para desenhar 20 chips.
+        """
+        if not roteiro_ids:
+            return {}
+        linhas = (
+            self.db.query(RoteiroExecucao)
+            .filter(RoteiroExecucao.roteiro_id.in_(roteiro_ids))
+            .order_by(RoteiroExecucao.criado_em.desc(), RoteiroExecucao.id.desc())
+            .all()
+        )
+        mapa: Dict[int, List[RoteiroExecucao]] = {rid: [] for rid in roteiro_ids}
+        for e in linhas:
+            mapa.setdefault(e.roteiro_id, []).append(e)
+        return mapa
+
+    def total_de_passos(self, roteiro_ids: List[int]) -> Dict[int, int]:
+        """Contagem por roteiro — a listagem só precisa do número, e trazia
+        todas as linhas de `roteiro_passos` para chamar `len()`."""
+        if not roteiro_ids:
+            return {}
+        linhas = (
+            self.db.query(RoteiroPasso.roteiro_id, func.count(RoteiroPasso.id))
+            .filter(RoteiroPasso.roteiro_id.in_(roteiro_ids))
+            .group_by(RoteiroPasso.roteiro_id)
+            .all()
+        )
+        base = {rid: 0 for rid in roteiro_ids}
+        base.update({rid: int(n) for rid, n in linhas})
+        return base
 
     def execucoes_do_roteiro(self, roteiro_id: int) -> List[RoteiroExecucao]:
         return (

@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     WHATSAPP_GRUPO_JITTER_MIN_S: float = 1.0    # respiro dentro da rodada
     WHATSAPP_GRUPO_JITTER_MAX_S: float = 3.0
     WHATSAPP_RODADA_TAMANHO: int = 2            # msgs por rodada (padrão de mercado)
+    # Respiro ENTRE BLOCOS do mesmo passo. Cinco mídias saindo no mesmo segundo
+    # é assinatura de robô. Não é configurável pela afiliada — é ritmo de
+    # sistema, como as pausas acima.
+    WHATSAPP_BLOCO_PAUSA_MIN_S: float = 2.0
+    WHATSAPP_BLOCO_PAUSA_MAX_S: float = 5.0
     WHATSAPP_TETO_POR_INSTANCIA: int = 80       # msgs/dia por número (3×80=240=teto MAX)
     WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA: int = 5000  # proteção da plataforma
     WHATSAPP_FATIA_ORCAMENTO_S: int = 900       # ~15min por fatia (< task_time_limit 1200)

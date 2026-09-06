@@ -44,7 +44,7 @@ from app.models.campanha_link import (
     CampanhaLink, CampanhaLinkEvento, GrupoEvento, GrupoSnapshot,
 )
 from app.models.roteiro import (
-    Roteiro, RoteiroPasso, RoteiroExecucao, RoteiroMensagem,
+    PassoBloco, Roteiro, RoteiroPasso, RoteiroExecucao, RoteiroMensagem,
     TemplateMensagem, TemplateVariacao,
 )
 from app.models.monitoramento import Monitoramento, MonitoramentoCaptura
@@ -63,7 +63,7 @@ __all__ = [
     "Campanha", "CampanhaGrupo", "CampanhaNumero", "CampanhaSubId", "Integracao",
     "CampanhaLink", "CampanhaLinkEvento", "GrupoEvento", "GrupoSnapshot",
     "CampanhaAnuncio",
-    "Roteiro", "RoteiroPasso", "RoteiroExecucao", "RoteiroMensagem",
+    "Roteiro", "RoteiroPasso", "PassoBloco", "RoteiroExecucao", "RoteiroMensagem",
     "TemplateMensagem", "TemplateVariacao", "Monitoramento", "MonitoramentoCaptura", "ConexaoConvite",
 ]
 

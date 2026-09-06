@@ -65,6 +65,15 @@ if PG_OK:
             "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS pending_vence_em TIMESTAMPTZ",
             "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS "
             "pending_provider_transaction_id VARCHAR",
+            # 082 (blocos + modelo de tempo por passo): `roteiro_passos` e
+            # `roteiro_mensagens` já existem neste banco, e `create_all` não
+            # altera tabela existente — mesmo gotcha de produção.
+            "ALTER TABLE roteiro_passos ADD COLUMN IF NOT EXISTS offset_segundos INTEGER",
+            "ALTER TABLE roteiro_passos ADD COLUMN IF NOT EXISTS offset_unidade VARCHAR(10)",
+            "ALTER TABLE roteiro_passos ADD COLUMN IF NOT EXISTS "
+            "acao_descontinuada BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE roteiro_mensagens ADD COLUMN IF NOT EXISTS "
+            "blocos_enviados INTEGER NOT NULL DEFAULT 0",
         ):
             _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
@@ -522,9 +531,13 @@ def _cenario_acao(db, acao, parametro=None, sou_admin=True, com_campanha=True):
 
     roteiro = Roteiro(user_id=user.id, nome=f"r-{suf}", campanha_id=campanha_id)
     db.add(roteiro); db.flush()
+    # 082: passo de hora fixa exige data própria. AMANHÃ, não hoje — hoje às
+    # 09:00 já passou depois das 9h e o `agendar` recusa passo no passado.
     passo = RoteiroPasso(roteiro_id=roteiro.id, ordem=1, tipo_conteudo="acao_grupo",
                          acao=acao, acao_parametro=parametro,
-                         tipo_tempo="ancora", hora_fixa=time_t(9, 0))
+                         acao_descontinuada=acao in ("abrir_entrada", "fechar_entrada"),
+                         tipo_tempo="ancora", hora_fixa=time_t(9, 0),
+                         data_fixa=(datetime.now(timezone.utc) + timedelta(days=1)).date())
     db.add(passo); db.flush()
 
     g = WhatsappGrupo(user_id=user.id, jid=f"120363{suf}@g.us", nome="Antigo",
@@ -566,19 +579,29 @@ def test_acao_renomear_grupo_chama_o_waha_e_atualiza_o_nome(db):
     assert r["enviadas"] == 1 and cliente.enviadas == []   # ação não manda mensagem
 
 
-def test_acao_abrir_entrada_faz_flip_local_sem_tocar_no_whatsapp(db):
+def test_acao_de_entrada_descontinuada_nao_mexe_no_vinculo_e_vira_pulado(db):
+    """Abrir/fechar entrada saíram na 082 — eram ambíguas (o toggle "Aberto" da
+    aba Grupos e o link de entrada da campanha governam a mesma ideia).
+
+    Passo antigo com essas ações NÃO é executado: vira `pulado` com motivo
+    próprio, visível no relatório. Mexer em silêncio num estado que hoje tem
+    dono na tela é pior do que não fazer nada."""
     from app.models.campanha_grupos import CampanhaGrupo
 
     user, grupo, execucao, campanha_id = _cenario_acao(db, "fechar_entrada")
     cliente = _WahaComRenome()
-    _servico(db, cliente).processar_fatia(execucao.id)
+    r = _servico(db, cliente).processar_fatia(execucao.id)
 
     db.expire_all()
     vinculo = (db.query(CampanhaGrupo)
                .filter(CampanhaGrupo.campanha_id == campanha_id,
                        CampanhaGrupo.grupo_id == grupo.id).one())
-    assert vinculo.aberto is False
+    assert vinculo.aberto is True          # o flip NÃO acontece mais
     assert cliente.renomeados == [] and cliente.enviadas == []
+    assert r["puladas"] == 1
+    linha = (db.query(RoteiroMensagem)
+             .filter(RoteiroMensagem.execucao_id == execucao.id).one())
+    assert linha.status == MSG_PULADA and linha.erro_motivo == "acao_descontinuada"
 
 
 def test_renomear_sem_admin_nasce_pulado_no_agendar(db):
@@ -588,6 +611,8 @@ def test_renomear_sem_admin_nasce_pulado_no_agendar(db):
                                              sou_admin=False)
     # a materialização acontece no agendar; aqui exercitamos a regra direto
     roteiro = db.query(Roteiro).filter(Roteiro.user_id == user.id).one()
+    execucao.status = EXEC_CONCLUIDA      # 082: uma execução ativa por roteiro
+    db.commit()
     nova, _avisos = RoteiroService(db).agendar(roteiro,
                                                datetime.now(timezone.utc).date(),
                                                ignorar_avisos=True)
@@ -597,11 +622,11 @@ def test_renomear_sem_admin_nasce_pulado_no_agendar(db):
     assert linhas[0].erro_motivo == "sem_admin"
 
 
-def test_acao_de_entrada_sem_campanha_falha_a_linha_sem_derrubar_o_lote(db):
-    user, grupo, execucao, _ = _cenario_acao(db, "abrir_entrada", com_campanha=False)
+def test_acao_sem_parametro_pula_a_linha_sem_derrubar_o_lote(db):
+    user, grupo, execucao, _ = _cenario_acao(db, "renomear_grupo", parametro=None)
     r = _servico(db, _WahaComRenome()).processar_fatia(execucao.id)
     db.expire_all()
-    assert r["puladas"] == 1        # ValueError vira pulado, não exceção
+    assert r["puladas"] == 1        # erro de configuração vira pulado, não exceção
     assert execucao.status == EXEC_CONCLUIDA
 
 
@@ -650,6 +675,8 @@ def test_admin_vem_do_vinculo_por_numero_nao_do_flag_do_grupo(db):
     db.commit()
 
     roteiro = db.query(Roteiro).filter(Roteiro.user_id == user.id).one()
+    execucao.status = EXEC_CONCLUIDA      # 082: uma execução ativa por roteiro
+    db.commit()
     nova, _a = RoteiroService(db).agendar(roteiro,
                                           datetime.now(timezone.utc).date(),
                                           ignorar_avisos=True)
@@ -658,11 +685,15 @@ def test_admin_vem_do_vinculo_por_numero_nao_do_flag_do_grupo(db):
     assert [l.status for l in linhas] == [MSG_PENDENTE]   # não foi pulado
 
 
-def test_flip_local_nao_paga_pausa_anti_ban(db):
+def test_acao_descontinuada_nao_conta_para_o_disjuntor(db):
+    """Cinco grupos com ação removida não podem desconectar o número — o
+    problema é do PASSO, não do chip."""
     user, grupo, execucao, _ = _cenario_acao(db, "abrir_entrada")
-    pausas = []
-    _servico(db, _WahaComRenome(), dormir=pausas.append).processar_fatia(execucao.id)
-    assert pausas == []   # abrir/fechar entrada não toca o WhatsApp
+    _servico(db, _WahaComRenome()).processar_fatia(execucao.id)
+    db.expire_all()
+    inst = db.query(WhatsappInstancia).filter(WhatsappInstancia.user_id == user.id).one()
+    assert inst.status == "conectada"
+    assert (inst.falhas_seguidas or 0) == 0
 
 
 # --- §2.6: falha de PROXY não é banimento (e vice-versa) ---------------------

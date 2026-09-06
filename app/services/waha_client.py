@@ -492,6 +492,54 @@ class WahaClient:
         # desativaria grupos bons em lote (um passo, N grupos).
         raise ErroWhatsapp("acao", f"status {status}: {detalhe}")
 
+    def _acao_de_grupo(self, metodo: str, caminho: str, corpo: dict,
+                       rotulo: str) -> None:
+        """Tronco comum das ações de grupo — mesma classificação de erro do
+        `renomear_grupo`, que é a única que existia quando o motor nasceu.
+
+        `auth_em_403=False` em todas: 403 numa ação de grupo é "não sou admin
+        DESTE grupo", nunca credencial inválida. Como `auth` é motivo FATAL,
+        subir assim desconectaria o número inteiro por causa de um grupo — e um
+        passo de ação passa por todos os grupos da campanha de uma vez.
+        """
+        status, dados = self._pedir(metodo, caminho, corpo, auth_em_403=False)
+        if status < 400:
+            return
+        detalhe = str(dados)[:150]
+        d = detalhe.lower()
+        if status == 403 or any(p in d for p in ("admin", "forbidden", "not authorized")):
+            raise ErroWhatsapp("sem_permissao", detalhe)
+        if any(p in d for p in ("not exist", "not found", "jid", "no longer")):
+            raise ErroWhatsapp("grupo_invalido", detalhe)
+        # 5xx / transitório NÃO é grupo inválido: classificar assim desativaria
+        # grupos bons em lote (um passo, N grupos).
+        raise ErroWhatsapp("acao", f"{rotulo}: status {status}: {detalhe}")
+
+    def alterar_descricao(self, jid: str, descricao: str) -> None:
+        """PUT /api/{sessao}/groups/{id}/description — só funciona como admin."""
+        self._acao_de_grupo(
+            "PUT",
+            f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid)}/description",
+            {"description": (descricao or "").strip()[:2000]},
+            "descricao",
+        )
+
+    def alterar_imagem(self, jid: str, url_imagem: str,
+                       mimetype: str = "image/jpeg") -> None:
+        """PUT /api/{sessao}/groups/{id}/picture — só funciona como admin.
+
+        Manda a URL (mesmo contrato do `enviar_imagem`): quem baixa o arquivo é
+        o WAHA, não a API — o worker não carrega bytes de imagem na memória.
+        """
+        if not (url_imagem or "").strip():
+            raise ErroWhatsapp("acao", "alterar_imagem sem URL")
+        self._acao_de_grupo(
+            "PUT",
+            f"/api/{self.sessao}/groups/{validar_jid_de_grupo(jid)}/picture",
+            {"file": {"mimetype": mimetype, "url": url_imagem}},
+            "imagem",
+        )
+
     def remover_participante(self, jid_grupo: str, jid_participante: str) -> None:
         """
         POST /api/{sessao}/groups/{id}/participants/remove — só como admin.

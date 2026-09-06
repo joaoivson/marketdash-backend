@@ -22,10 +22,40 @@ ORIGEM_ENVIO_RAPIDO = "envio_rapido"
 TEMPO_ANCORA = "ancora"
 TEMPO_RELATIVO = "relativo"
 
-CONTEUDO_TEXTO = "texto"
-CONTEUDO_MIDIA = "midia"
+# Tipo do PASSO. `texto`/`midia` migraram para `mensagem` na 082 e viraram
+# tipos de BLOCO — as constantes ficam porque execução antiga ainda as lê.
+CONTEUDO_MENSAGEM = "mensagem"
 CONTEUDO_OFERTA = "oferta"
 CONTEUDO_ACAO = "acao_grupo"
+CONTEUDO_TEXTO = "texto"    # legado (pré-082)
+CONTEUDO_MIDIA = "midia"    # legado (pré-082)
+
+# Tipo do BLOCO. `audio`/`video`/`oferta` existem no schema para quando a fila
+# de ofertas for definida; o motor de hoje envia `texto` e `imagem`.
+BLOCO_TEXTO = "texto"
+BLOCO_IMAGEM = "imagem"
+BLOCO_AUDIO = "audio"
+BLOCO_VIDEO = "video"
+BLOCO_OFERTA = "oferta"
+BLOCOS_ENVIAVEIS = (BLOCO_TEXTO, BLOCO_IMAGEM)
+
+# Ações no grupo. `abrir_entrada`/`fechar_entrada` saíram na 082 (ambiguidade
+# com o toggle "Aberto" da aba Grupos e com o link de entrada da campanha):
+# passo antigo fica marcado `acao_descontinuada` e é pulado com motivo claro.
+ACAO_RENOMEAR = "renomear_grupo"
+ACAO_DESCRICAO = "alterar_descricao"
+ACAO_IMAGEM = "alterar_imagem"
+ACOES_VALIDAS = (ACAO_RENOMEAR, ACAO_DESCRICAO, ACAO_IMAGEM)
+ACOES_DESCONTINUADAS = ("abrir_entrada", "fechar_entrada")
+
+# Unidade de exibição do offset — o canônico gravado é sempre em segundos.
+UNIDADE_SEGUNDOS = "segundos"
+UNIDADE_MINUTOS = "minutos"
+UNIDADE_HORAS = "horas"
+UNIDADES = {UNIDADE_SEGUNDOS: 1, UNIDADE_MINUTOS: 60, UNIDADE_HORAS: 3600}
+
+# Estados de execução que ocupam o roteiro (índice único uq_roteiro_execucao_ativa).
+EXEC_ATIVAS = ("agendada", "enviando", "pausada")
 
 EXEC_AGENDADA = "agendada"
 EXEC_ENVIANDO = "enviando"
@@ -90,7 +120,8 @@ class RoteiroPasso(Base):
     tipo_tempo = Column(String(12), nullable=False, default=TEMPO_ANCORA)
     hora_fixa = Column(Time, nullable=True)
     data_fixa = Column(Date, nullable=True)
-    offset_minutos = Column(Integer, nullable=True)
+    offset_segundos = Column(Integer, nullable=True)
+    offset_unidade = Column(String(10), nullable=True)
     tipo_conteudo = Column(String(16), nullable=False)
     texto = Column(Text, nullable=True)
     midia_url = Column(Text, nullable=True)
@@ -99,6 +130,7 @@ class RoteiroPasso(Base):
                          nullable=True)
     acao = Column(String(24), nullable=True)
     acao_parametro = Column(Text, nullable=True)
+    acao_descontinuada = Column(Boolean, nullable=False, default=False)
     grupos_alvo = Column(String(12), nullable=False, default="todos")
     grupos_alvo_ids = Column(JSON_PORTATIL, nullable=True)
     marcar_todos = Column(String(8), nullable=False, default="nunca")
@@ -149,3 +181,27 @@ class RoteiroMensagem(Base):
     texto_final = Column(Text, nullable=True)
     erro_motivo = Column(Text, nullable=True)
     enviado_em = Column(DateTime(timezone=True), nullable=True)
+    # Retomada por bloco: falhar no bloco 3 e reenviar do zero mandaria os
+    # blocos 1 e 2 DE NOVO no grupo.
+    blocos_enviados = Column(Integer, nullable=False, default=0)
+
+
+class PassoBloco(Base):
+    """Um bloco do passo — o que sai, em sequência.
+
+    O passo continua dono do QUANDO, do PARA QUEM e do marcar-todos; o bloco é
+    só o conteúdo. Diferente de N passos com `+0s`: blocos compartilham horário
+    e grupos, são editados e pré-visualizados juntos, e movem juntos na ordem.
+    """
+    __tablename__ = "passo_blocos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    passo_id = Column(Integer, ForeignKey("roteiro_passos.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    ordem = Column(Integer, nullable=False)
+    tipo = Column(String(12), nullable=False)      # texto|imagem|audio|video|oferta
+    conteudo = Column(Text, nullable=True)         # texto do bloco, ou URL da mídia
+    legenda = Column(Text, nullable=True)          # legenda que acompanha a mídia
+    template_id = Column(Integer, ForeignKey("templates_mensagem.id", ondelete="SET NULL"),
+                         nullable=True)
+    criado_em = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

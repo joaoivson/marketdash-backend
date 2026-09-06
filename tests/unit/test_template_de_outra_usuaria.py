@@ -31,6 +31,18 @@ if PG_OK:
     import app.models  # noqa: F401
     ENGINE = create_engine(PG_URL)
     Base.metadata.create_all(ENGINE)
+    with ENGINE.begin() as _conn:
+        # 082: `create_all` cria tabela nova (passo_blocos) mas não altera
+        # tabela existente — mesmo gotcha de produção.
+        for _alter in (
+            "ALTER TABLE roteiro_passos ADD COLUMN IF NOT EXISTS offset_segundos INTEGER",
+            "ALTER TABLE roteiro_passos ADD COLUMN IF NOT EXISTS offset_unidade VARCHAR(10)",
+            "ALTER TABLE roteiro_passos ADD COLUMN IF NOT EXISTS "
+            "acao_descontinuada BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE roteiro_mensagens ADD COLUMN IF NOT EXISTS "
+            "blocos_enviados INTEGER NOT NULL DEFAULT 0",
+        ):
+            _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
 
 from types import SimpleNamespace  # noqa: E402
@@ -62,9 +74,13 @@ def _usuaria_com_template(db, corpo):
 
 
 def _passo_in(template_id):
+    from datetime import date as _date, time as _time
+    bloco = SimpleNamespace(tipo="texto", conteudo="oi", legenda=None,
+                            template_id=template_id)
     return SimpleNamespace(
-        ordem=1, tipo_tempo="ancora", hora_fixa=None, data_fixa=None,
-        offset_minutos=None, tipo_conteudo="texto", texto=None, midia_url=None,
+        id=None, ordem=1, tipo_tempo="ancora", hora_fixa=_time(9, 0),
+        data_fixa=_date(2099, 1, 1), offset_valor=None, offset_unidade=None,
+        tipo_conteudo="mensagem", blocos=[bloco], texto=None, midia_url=None,
         oferta_url=None, template_id=template_id, acao=None, acao_parametro=None,
         grupos_alvo="todos", grupos_alvo_ids=None, marcar_todos="nunca",
     )
@@ -91,7 +107,7 @@ def test_disparo_nao_usa_variacao_de_template_alheio(db):
     roteiro = Roteiro(user_id=minha.id, nome="r", status="pronto", origem="editor")
     db.add(roteiro); db.flush()
     # Grava direto no banco, como estaria um passo salvo antes da checagem.
-    passo = RoteiroPasso(roteiro_id=roteiro.id, ordem=1, tipo_conteudo="texto",
+    passo = RoteiroPasso(roteiro_id=roteiro.id, ordem=1, tipo_conteudo="mensagem",
                          template_id=alheio.id, grupos_alvo="todos")
     db.add(passo); db.flush(); db.commit()
 
@@ -101,5 +117,6 @@ def test_disparo_nao_usa_variacao_de_template_alheio(db):
     execucao = SimpleNamespace(user_id=minha.id)
     mensagem = SimpleNamespace(passo_id=passo.id, short_link=None, grupo_id=None)
 
-    texto = svc._texto_final(execucao, mensagem)
+    saida = svc._preparar_saida(execucao, mensagem, passo)
+    texto = "\n".join(b["texto"] or "" for b in saida)
     assert "SEGREDO DA CONCORRENTE" not in texto
