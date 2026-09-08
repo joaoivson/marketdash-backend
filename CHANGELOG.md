@@ -11,6 +11,95 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-08 (Tradução do navegador derrubava o app; Meus Links vira lista)
+
+Só frontend. Duas coisas independentes, as duas com destino produção.
+
+### O Chrome traduzia a página e o app caía em tela preta
+
+Relato da Anne: a tela ficava preta e voltava para o login. No vídeo dela dava
+para ver os menus em outro idioma — "Dashboard" virou "Painel", "Upload
+Cliques" virou "Enviar Cliques", "Mês atual" virou "Mêstual".
+
+**Causa raiz:** o `index.html` declarava `lang="en"`. O Chrome concluía que a
+página era em inglês e oferecia a tradução automática. O tradutor troca cada nó
+de texto do DOM por elementos `font`; o React continua guardando referência aos
+nós antigos e, na primeira re-renderização, chama `removeChild` num nó que já
+não é filho daquele pai → `NotFoundError`. Como o projeto **não tem
+ErrorBoundary**, o throw derruba a árvore inteira — inclusive a sidebar. Daí a
+tela preta.
+
+Correção em três camadas:
+
+| Camada | O quê | Cobre |
+|---|---|---|
+| 1 | `lang="pt-BR"` | tira o motivo de o Chrome oferecer tradução |
+| 2 | `translate="no"`, `class="notranslate"`, `meta name="google"` | tradutor nativo do Chrome quando acionado à mão |
+| 3 | guard inline no `head`, antes do bundle: `removeChild`/`insertBefore` viram no-op quando o nó já não é filho | **extensão** de tradução, webview do Instagram/Facebook e "traduzir" do Android — que ignoram `notranslate` |
+
+Só a camada 3 cobre o caso real: as duas primeiras são declarações que só o
+tradutor nativo respeita. As camadas 1 e 2 também são reforçadas em runtime no
+`main.tsx`.
+
+Reproduzido e verificado com Playwright — inclusive **no app real logado**,
+com backend local e banco de homologação — substituindo os nós de texto da tela
+por elementos `font` (exatamente o que o tradutor faz) e forçando re-render:
+
+| | linhas | sidebar | filhos de `#root` | texto visível | erros |
+|---|---|---|---|---|---|
+| **com** o guard | 1 → 1 | 1 → 1 | 3 | 327 caracteres | 0 |
+| **sem** o guard (nativo restaurado de um iframe) | 1 → **0** | 1 → **0** | **0** | **0** | 4× `NotFoundError` |
+
+A linha de baixo é o print da Anne: tela preta lisa, sidebar inclusa.
+
+> Armadilha ao editar o `index.html`: não escreva nome de tag entre `<` e `>`
+> dentro de comentário. O Vite injeta os scripts procurando a abertura de
+> `head` por texto, e o comentário fazia os scripts do dev server caírem
+> **dentro** dele — HMR morria em silêncio. Aconteceu na primeira versão desta
+> correção.
+
+### Meus Links: grid de cards → lista
+
+Com o MAX liberando **links ilimitados**, o grid de cards não escala: achar um
+link virava rolagem. Agora é lista, com o mesmo conjunto de ações.
+
+- **Linha:** `toggle · nome + (slug · criado · selo "parado") · cliques ·
+  último clique · ações`. Nome com ellipsis; `title` mostra a URL de destino.
+- **Busca** por nome ou slug, em tempo real.
+- **Ordenação:** mais recentes (padrão), mais antigos, mais cliques, menos
+  cliques, último clique, nome A-Z. Link sem clique nenhum vai para o **fim**
+  de "último clique", não para o topo.
+- **Filtros em chips:** Todos · Ativos · Inativos · Parados (a regra de 48h que
+  já existia).
+- **Contador** ("12 links de 30" quando há filtro) e **estado vazio** com
+  "Limpar busca e filtros".
+- **Paginação** de 25 (seletor 25/50/100), com o `Paginacao` compartilhado —
+  resolve a pendência 1 do documento antes de a base crescer.
+- Mudança de busca/filtro/ordem volta para a página 1; excluir o último item de
+  uma página recua sozinho.
+
+Densidade medida: linha de **61 px** no desktop contra ~200 px do card — 3,3x
+mais itens por tela.
+
+**O breakpoint da lista é `lg:`, não `sm:`.** Com `sm:` o tablet (820 px) já
+usava o layout de colunas, mas a sidebar aberta deixa só ~500 px de container:
+o bloco de identidade era espremido a quase zero e o nome vazava **por cima**
+dos números. Achado por screenshot — os testes de tipo e o lint passavam.
+
+Validado em 7 larguras (360, 390, 768, 820, 1024, 1280, 1440): zero
+sobreposição, zero rolagem horizontal, zero erro de console. Altura da linha:
+61 px no desktop, 95 px no tablet, 94–115 px no celular.
+
+E validado também **com backend real** (login `relacionamento@` contra o
+`marketdash_app` local, banco de homologação): 200 em `/links` e
+`/links/1/insight`, com busca, ordenação, chips, paginação e o modal de insight
+funcionando nos três tamanhos. A conta de hml tem só 1 link — o comportamento
+com muitas linhas continua coberto pela passada de 30 itens acima.
+
+Não mexeu em: redirect `/l/{slug}` e UTMs, aba Converter e a ponte "criar link
+rastreável", modal de insight de cliques, toggle de ativação, expiração e
+contagem de cliques.
+
 ## [Não versionado] - 2026-09-06 (Roteiros: modelo de tempo, blocos e edição do que já foi agendado)
 
 Documento delta sobre Roteiros. **Migration 082.** Os dois 🔴 do documento
