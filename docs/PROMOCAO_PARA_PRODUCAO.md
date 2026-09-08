@@ -717,6 +717,36 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > **mantendo o lado da develop** (é a mesma mudança, mais recente), nunca
 > descartando o cherry-pick sem olhar.
 
+> ⚠️ **Mais quatro commits em `main` por cherry-pick (08/09/2026)** — tradução
+> do navegador e Meus Links em lista, **sem migration**:
+>
+> | develop | main | o quê |
+> |---|---|---|
+> | front `c35090a` | `2ef7323` | `lang="pt-BR"` + guard de `removeChild`/`insertBefore` no `index.html` e reforço no `main.tsx` |
+> | front `796b188` | `db43f4a` | Meus Links vira lista (busca, ordenação, chips, paginação) |
+> | — | `5df131d` | **só em `main`**: traz `src/components/shared/Paginacao.tsx` da develop (`5b3de8b`), sem o commit de origem |
+> | back `f14c4c1` | `1444b99` | CHANGELOG (não deploya, `paths-ignore`) |
+>
+> Espere conflito no merge futuro em `index.html`, `src/main.tsx`,
+> `CustomLinks.tsx`, `CHANGELOG.md` e `src/components/shared/Paginacao.tsx` —
+> resolver **mantendo o lado da develop**.
+>
+> **A lição do dia, que o cherry-pick limpo esconde.** O `git cherry-pick` de
+> `796b188` aplicou **sem conflito**, e mesmo assim o build quebrava em `main`:
+> `CustomLinks.tsx` importa `@/components/shared/Paginacao`, que nasceu na
+> develop e nunca foi promovido. Cherry-pick resolve **texto**, não
+> **dependência de arquivo novo**. Depois de todo cherry-pick, rode
+> `npm run build` (ou `pytest`) **no worktree de `main`** antes de empurrar —
+> foi o build que achou isto, não o `tsc` e não o lint.
+>
+> Segundo detalhe: o auto-merge manteve o shell antigo da página que só existe
+> em `main` (`<h1>` próprio, `DashboardLayout` sem `title`, padding `p-4 md:p-6`
+> e um `DashboardLayout` **sem** o `min-w-0`). Isso muda a largura útil no
+> celular, então a validação visual foi refeita **no worktree de `main`**, não
+> só na develop: 7 larguras, zero sobreposição, zero rolagem horizontal. E o
+> `tsc` de `main` tem baseline **26** (não 25 como na develop) — o erro de
+> `title` em `CustomLinks.tsx` já existia lá.
+
 ### 8.6 O que a rodada de 31/08 acrescentou
 
 Card por número na aba Dispositivos, **renomear** e **pausar o envio**:
