@@ -717,6 +717,21 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > **mantendo o lado da develop** (é a mesma mudança, mais recente), nunca
 > descartando o cherry-pick sem olhar.
 
+> ⚠️ **Mais um cherry-pick em `main` (09/09/2026)** — backend `589f0e8` →
+> `1463d8d`: login separa indisponibilidade do Supabase (503) de erro de
+> credencial (401). Sem migration. Espere conflito em
+> `app/services/auth_service.py` no merge futuro — resolver **mantendo o lado
+> da develop**, que já usa os acessores novos de chave
+> (`supabase_chave_publica`/`supabase_chave_admin`) enquanto `main` ainda usa
+> `SUPABASE_KEY`/`SUPABASE_SERVICE_KEY`. O auto-merge preservou o lado de
+> `main` corretamente, mas a suíte foi rodada **no worktree de `main`** (638
+> passam) — cherry-pick limpo não é garantia, como 08/09 mostrou.
+>
+> Nota para rodar teste no worktree de `main`: o `.env` da develop tem 15
+> chaves a mais (`COOLIFY_TOKEN`, `WAHA_*`, `SUPABASE_JWKS_URL`, `OPENAI_*`…)
+> e o `Settings` de `main` recusa extras — copie o `.env` sem elas, senão o
+> pytest morre na coleção com `ValidationError` que parece erro do código.
+
 > ⚠️ **Mais quatro commits em `main` por cherry-pick (08/09/2026)** — tradução
 > do navegador e Meus Links em lista, **sem migration**:
 >

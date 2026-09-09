@@ -11,6 +11,68 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-09 (Login: instabilidade do Supabase deixa de virar "troque sua senha")
+
+Só backend, sem migration. Consequência direta do incidente de 08/09.
+
+### O que acontecia
+
+No dia 08/09 o Supabase de produção degradou — 504 em `/auth/v1/*`. O login
+passou a devolver:
+
+> Erro na migração de conta. Por favor, use 'Esqueci minha senha'.
+
+É a **mesma** mensagem de quando a conta já existe no Supabase com outra
+senha. Mas a senha da aluna estava **correta**: o passo 2 do login já a havia
+conferido contra o banco local. A mensagem mandava trocar uma senha certa — e
+trocá-la não resolveria nada. O log em nível `info` ("usuário pode não estar
+migrado") ainda apagava o rastro do timeout de quem fosse investigar.
+
+Os dois casos caíam no mesmo `except Exception`.
+
+### O que mudou
+
+`falha_de_indisponibilidade()` classifica a exceção antes de decidir a
+resposta:
+
+| Situação | Antes | Agora |
+|---|---|---|
+| Supabase fora (timeout, 502/503/504) | 401 "use 'Esqueci minha senha'" | **503** "o serviço de autenticação está instável no momento. Sua senha está correta — tente novamente em alguns minutos" |
+| Conta já existe no Supabase com outra senha | 401 "use 'Esqueci minha senha'" | igual — aqui trocar a senha resolve mesmo |
+| Senha errada | 401 "Email ou senha incorretos" | igual |
+
+A base da classificação não é heurística de texto: `AuthRetryableError` é o
+que a própria `supabase-auth` devolve em `handle_exception` para
+502/503/504/520-530 e para exceção de rede. Somam-se os ramos de status HTTP
+e de `httpx` — porque um timeout real de conexão escapa **cru** como
+`httpx.ConnectTimeout`, sem passar pelo `handle_exception` que o embrulharia
+(medido contra um IP não-roteável).
+
+Se o passo 1 já falhou por indisponibilidade, uma falha sem tipo no passo 4
+também vira 503: errar para esse lado não manda ninguém trocar senha à toa, e
+a tentativa seguinte devolve o 401 correto se a causa for de estado.
+
+O default continua 401 — só sobe para 503 o que for reconhecido
+explicitamente. E o log do passo 1 sobe de `info` para `warning` quando é
+infraestrutura, que é o rastro que faltou na investigação.
+
+Verificado ponta a ponta com o cliente Supabase real apontado para um IP não
+roteável: 503 com a mensagem nova em 10,2s — mesma ordem de grandeza dos
+10,5s que produção devolveu no incidente. Dez testes novos, incluindo um de
+controle que desliga o classificador e confirma a volta do comportamento
+antigo, e um de regressão garantindo que senha errada continua "Email ou
+senha incorretos" mesmo com o Supabase fora.
+
+O frontend não mudou: o `login.service.ts` já propaga o `detail` da resposta
+independente do status.
+
+### O que NÃO entrou, e por quê
+
+Validar o JWT localmente por JWKS (que manteria o painel carregando dados com
+o auth do Supabase fora) foi avaliada e **descartada pelo João**. Fica
+registrada em `.claude/memoria/DECISOES.md` com o motivo e o custo, caso a
+decisão mude.
+
 ## [Não versionado] - 2026-09-08 (Tradução do navegador derrubava o app; Meus Links vira lista)
 
 Só frontend. Duas coisas independentes, as duas com destino produção.

@@ -11,6 +11,55 @@
 
 ---
 
+## 2026-09-09 — A mensagem de erro do login mentia, e mandava trocar senha certa
+
+**O que mudou.** `falha_de_indisponibilidade()` em `auth_service.py` separa
+"o Supabase não respondeu" de "a credencial/estado está errada". Indisponibilidade
+na Lazy Migration passa a devolver **503** dizendo que a senha está correta;
+erro de estado mantém o 401 "use 'Esqueci minha senha'". Log do passo 1 sobe de
+`info` para `warning` quando é infraestrutura. Dez testes novos.
+
+**Por quê.** No incidente de 08/09 o Supabase de produção degradou e o login
+devolveu a mensagem de "erro na migração" — a mesma de conta duplicada. A senha
+da aluna estava certa (o passo 2 já a conferiu contra o banco local). O conselho
+da tela era **ativamente errado**: trocar a senha não resolveria, e ainda gastaria
+o tempo dela num fluxo de recuperação durante uma queda.
+
+**O que quase me fez errar o diagnóstico.** Ia classificar por texto da exceção.
+Fui olhar a biblioteca antes e descobri que a `supabase-auth` **já classifica**:
+`handle_exception` devolve `AuthRetryableError` para 502/503/504/520-530 e para
+exceção de rede. Usar a semântica dela é mais robusto do que qualquer lista de
+substrings minha. O `grep` de texto ficou só como último recurso, e restrito.
+
+**O que só a medição real mostrou.** Apontei o cliente Supabase para um IP não
+roteável (10.255.255.1) e o timeout **não** veio embrulhado: veio como
+`httpx.ConnectTimeout` cru, sem passar pelo `handle_exception`. Ou seja, o caso
+mais comum de indisponibilidade escaparia se eu tivesse confiado só no
+`AuthRetryableError`. O ramo de `httpx` no classificador existe por causa dessa
+medição, não por precaução genérica.
+
+**O teste que vale mais que os outros nove.** O de controle: desliga o
+classificador com `patch` e confirma que o 401 antigo volta. Sem ele, os testes
+passariam mesmo que o 503 viesse de outro caminho do método — foi a mesma
+disciplina do experimento de controle do guard de tradução, ontem.
+
+**Promoção.** develop → hml (3 recursos `finished` no commit 589f0e8, os três
+caminhos de login conferidos no ar) → cherry-pick em `main` (`1463d8d`). O
+cherry-pick auto-mergeou de novo: `main` usa `settings.SUPABASE_KEY` /
+`SUPABASE_SERVICE_KEY` e a develop já usa os acessores novos
+(`supabase_chave_publica`/`admin`). O merge preservou o lado de `main`, que é o
+certo — mas, seguindo a lição de ontem, rodei a suíte **no worktree de `main`**
+(638 passam) em vez de confiar no cherry-pick limpo.
+
+**Pendente.** (1) Validação local de JWT por JWKS — **descartada pelo João**,
+registrada em `DECISOES.md` com custo e risco caso a decisão mude. (2) A causa
+do travamento do Supabase em si não foi determinada: os logs internos do projeto
+(painel → Logs → Postgres/Auth, janela ~17h30–18h40 de 08/09) não foram
+consultados. (3) `test_waha_servidores::test_cache_evita_uma_query_por_mensagem`
+falha na develop — pré-existente, confirmado com `git stash`, não é desta rodada.
+
+---
+
 ## 2026-09-05b — Medição de grupos: o que o documento supunha e o que os dados disseram
 
 Terceiro documento delta do módulo, sobre a cadeia de medição: entrada, saída,
