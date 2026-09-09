@@ -9,6 +9,63 @@ from app.repositories.user_repository import UserRepository
 from app.services.payment_provider_service import check_active_subscription, PaymentProviderError
 from app.services.email_service import EmailService
 
+# Status HTTP em que a resposta diz "não consegui processar agora", não
+# "sua credencial está errada". 500 entra: um erro interno do GoTrue não é
+# problema da senha de quem está tentando entrar.
+_STATUS_INDISPONIVEL = {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530}
+
+
+def falha_de_indisponibilidade(exc: BaseException) -> bool:
+    """Distingue "o Supabase não respondeu" de "a credencial/estado está errada".
+
+    As duas coisas caíam no mesmo `except Exception` e devolviam a mesma
+    mensagem — "use 'Esqueci minha senha'". Na degradação do Supabase de
+    08/09/2026 isso mandou a aluna trocar uma senha que estava **correta**,
+    e o log em nível `info` ("usuário pode não estar migrado") ainda apagou o
+    rastro do timeout.
+
+    A classificação principal não é heurística de texto: `AuthRetryableError`
+    é o que a própria supabase-auth devolve em `handle_exception` para
+    502/503/504/520-530 e para qualquer exceção de rede (timeout, conexão
+    recusada) que não vira `HTTPStatusError`. As checagens seguintes só cobrem
+    o que escapa antes da biblioteca embrulhar — `create_client`, DNS, TLS.
+    """
+    try:
+        from supabase_auth.errors import AuthRetryableError
+
+        if isinstance(exc, AuthRetryableError):
+            return True
+    except ImportError:  # nome do pacote mudou (era `gotrue`): cai nas checagens abaixo
+        pass
+
+    if type(exc).__name__ in {"AuthRetryableError", "APIConnectionError"}:
+        return True
+
+    codigo = getattr(exc, "status", None)
+    if not isinstance(codigo, int):
+        codigo = getattr(exc, "status_code", None)
+    if isinstance(codigo, int) and codigo in _STATUS_INDISPONIVEL:
+        return True
+
+    try:
+        import httpx
+
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return True
+    except ImportError:
+        pass
+
+    # Último recurso, para exceção embrulhada por camada intermediária que
+    # perdeu o tipo e o status. Deliberadamente restrito: qualquer coisa que
+    # não bater aqui continua sendo tratada como erro de credencial (401),
+    # que é o default seguro — dizer "instabilidade" para quem errou a senha
+    # esconde da pessoa o motivo real.
+    texto = str(exc).lower()
+    return any(
+        marca in texto
+        for marca in ("timeout", "timed out", "upstream request", "gateway", "temporarily unavailable")
+    )
+
 
 class AuthService:
     def __init__(self, user_repo: UserRepository):
@@ -56,6 +113,9 @@ class AuthService:
         from supabase import create_client, Client
         logger = logging.getLogger(__name__)
 
+        # Preenchido se o passo 1 falhar por indisponibilidade do Supabase.
+        indisponibilidade_supabase: Exception | None = None
+
         # 1. Tentar login direto no Supabase Auth (caso já migrado)
         try:
             supabase_anon: Client = create_client(settings.SUPABASE_URL, settings.supabase_chave_publica)
@@ -92,7 +152,16 @@ class AuthService:
                     "user": user
                 }
         except Exception as e:
-            logger.info(f"Login Supabase falhou para {email} (usuário pode não estar migrado): {e}")
+            if falha_de_indisponibilidade(e):
+                # Guardado para o passo 4: se o Supabase não respondeu aqui, a
+                # migração adiante vai falhar pelo mesmo motivo, e o diagnóstico
+                # dela sozinha é ambíguo.
+                indisponibilidade_supabase = e
+                logger.warning(
+                    f"Supabase Auth indisponível no login de {email}: {e}"
+                )
+            else:
+                logger.info(f"Login Supabase falhou para {email} (usuário pode não estar migrado): {e}")
 
         # 2. Fallback: Validar contra banco local (Legacy)
         user = self.user_repo.get_by_email(email)
@@ -152,10 +221,34 @@ class AuthService:
                     "token_type": "bearer",
                     "user": user
                 }
+        except HTTPException:
+            # Erro já classificado por nós — não reclassificar como falha de migração.
+            raise
         except Exception as e:
+            # A senha JÁ foi conferida contra o banco local no passo 2. Então,
+            # quando a falha é de infraestrutura, a instrução "use 'Esqueci
+            # minha senha'" é ativamente errada: manda trocar uma senha correta.
+            if falha_de_indisponibilidade(e) or indisponibilidade_supabase is not None:
+                logger.error(
+                    f"Supabase Auth indisponível na Lazy Migration para {email}: "
+                    f"{e}"
+                    + (
+                        f" (o passo 1 já havia falhado por indisponibilidade: {indisponibilidade_supabase})"
+                        if indisponibilidade_supabase is not None
+                        else ""
+                    )
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=(
+                        "O serviço de autenticação está instável no momento. "
+                        "Sua senha está correta — tente novamente em alguns minutos."
+                    ),
+                )
+
             logger.error(f"Erro crítico na Lazy Migration para {email}: {e}")
-            # Se a migração falhar (ex: usuário já existe mas a senha é diferente),
-            # retornamos erro de autenticação normal para o usuário.
+            # Aqui a causa é de estado mesmo (ex: usuário já existe no Supabase
+            # com senha diferente), e trocar a senha resolve.
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Erro na migração de conta. Por favor, use 'Esqueci minha senha'.",
