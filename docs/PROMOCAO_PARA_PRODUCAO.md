@@ -564,7 +564,7 @@ homologação.
 | 16 | `080_grupos_participantes_cheio_subids.sql` | `campanha_grupos.cheio_override` · `grupo_participantes` (lista de membros) · `campanha_sub_ids` | **PENDENTE** | OK (04/09) |
 | 17 | `081_fallback_lotado_e_subid_legivel.sql` | `campanha_link_eventos.resultado` + índice parcial · `whatsapp_grupos.sub_id` para `VARCHAR(64)` | **PENDENTE** | OK (05/09) |
 | 18 | `082_roteiros_blocos_tempo_status.sql` | `roteiro_passos.offset_segundos`/`offset_unidade`/`acao_descontinuada` · **`passo_blocos`** (tabela) · `roteiro_mensagens.blocos_enviados` · backfill de `data_fixa` · `tipo_conteudo` texto/midia → `mensagem` · índice único `uq_roteiro_execucao_ativa` | **PENDENTE** | OK (06/09) |
-| 19 | `083_instagram_webhook_entregas.sql` | **`instagram_webhook_entregas`** (tabela): ledger do que a Meta ENTREGOU no webhook do Instagram, item a item, com o desfecho carimbado pela task | **PENDENTE** | **PENDENTE** |
+| 19 | `083_instagram_webhook_entregas.sql` | **`instagram_webhook_entregas`** (tabela): ledger do que a Meta ENTREGOU no webhook do Instagram, item a item, com o desfecho carimbado pela task | **APLICADA 11/09** (via Management API, antes do push) | **PENDENTE** |
 
 > ⚠️ **A `082` (06/09) é da rodada de Roteiros e tem DUAS armadilhas.**
 >
@@ -598,6 +598,14 @@ homologação.
 > Esta é a migration que fecha o buraco de 11/09 — uma conta ficou 2 dias sem
 > responder comentário e não havia como distinguir "a Meta não entregou" de
 > "entregou e a gente descartou em silêncio".
+>
+> **Já foi para produção por cherry-pick em 11/09**, fora do merge: migration
+> aplicada primeiro (`d3e5600` em `main`, a partir de `600557c` na develop).
+> Só o código, a migration e os testes foram no cherry-pick — CHANGELOG,
+> runbook e memória ficaram na develop, porque o `main` estava 112 commits
+> atrás e mesclar doc ali só criaria conflito pior. **Par de SHAs para o
+> merge futuro: `600557c` (develop) ↔ `d3e5600` (main)** — resolver mantendo
+> o lado da develop.
 
 > ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
 > **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,

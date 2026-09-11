@@ -154,6 +154,9 @@
 | 2026-09-06 | **`abrir_entrada`/`fechar_entrada` saem do roteiro; entram `alterar_descricao` e `alterar_imagem`** | Ambiguidade: fecha o quê — o grupo daquele passo, o toggle "Aberto" da aba Grupos, ou o link de entrada da campanha? Três controles de nome parecido governando coisas diferentes. Se voltarem, precisam se chamar igual ao toggle da aba Grupos |
 | 2026-09-06 | **Ritmo entre blocos (2–5s aleatórios) é config de SISTEMA, como as demais pausas** | Cinco mídias no mesmo segundo é padrão de robô. A afiliada não tem como saber o que é seguro, e o número dela é o ativo |
 
+| 2026-09-11 | **O ledger de entrega do webhook NUNCA muda o desfecho do comentário** (`instagram_webhook_entregas`, migration 083) | Banco fora do ar faz a linha não nascer e o comentário segue para a fila igual. Derrubar o webhook por causa do diagnóstico faria a Meta **desativar a assinatura** — justamente a falha que a tabela existe para detectar |
+| 2026-09-11 | **O que o webhook descarta na porta vira UMA linha agregada**, não uma por item | O descarte é quase todo DM comum. Uma linha por DM guardaria metadado de conversa privada sem necessidade — o que se precisa saber é só que houve tráfego |
+| 2026-09-11 | **Homologação fica com a automação de Instagram DESATIVADA**; ativa só quando for ajustar algo lá | Prod e hml usam o MESMO app da Meta (APP_ID, APP_SECRET e VERIFY_TOKEN idênticos) e um app tem UMA URL de callback. Enquanto o callback estiver em hml, a automação de todas as alunas em produção para **sem erro, sem log e sem alerta** — e `webhook_subscrito` continua `true`, porque é um retrato do dia da conexão, não a verdade viva da Meta |
 ## Pendências
 
 | Prioridade | Item | Contexto | Status |
@@ -170,6 +173,8 @@
 | Média | **`roteiro_passos.marcar_todos` é aceito, gravado e NUNCA usado** — o motor não menciona ninguém. O cliente WAHA não tem suporte a `mentions` | Mesma família do bug de 06/09: entrada aceita e ignorada em silêncio. Fora do escopo do documento de Roteiros | Pendente — ou implementar mentions no `waha_client`, ou tirar o toggle da tela |
 | Baixa | **Blocos de `audio`/`video` existem no schema e o motor não envia** — o cliente WAHA só tem `sendText` e `sendImage`. O Pydantic recusa ao salvar e o motor falha com motivo próprio (`bloco_nao_suportado`), então não vaza | Reservado para quando a fila de ofertas for definida | Pendente — só se o produto pedir |
 
+| **Alta** | **A automação de Instagram cobre 9 de 278 posts que pedem "Comente X"** (medido em 11/09 na conta @promosdabeatrizz_ pela Graph API). `escopo = post_especifico` exige uma automação por post, e posts antigos recebem comentário por meses — o reel MAMADEIRA, de 29/06, recebeu comentário em 10/09. `ESCOPO_QUALQUER` existe no código mas tem um único link, então não serve para quem vende um produto diferente por post | Foi a causa real da queixa "a automação não está funcionando" | **Pendente — decisão de produto com o João** |
+| Média | **Prod e hml compartilham o app da Meta** — separar exigiria App Review próprio para o app de hml | Administrado hoje por disciplina (hml desativada), não por construção | Pendente — só se o custo do App Review compensar |
 ## Débitos técnicos
 
 | Item | Onde | Impacto | Plano |
@@ -178,3 +183,4 @@
 | **Sem Alembic** | `migrations/` | Migration é SQL solto aplicado à mão; ordem e idempotência são responsabilidade de quem roda | Conviver com disciplina, ou adotar Alembic com baseline |
 | **`cost` / `profit` mortos em `dataset_rows_v2`** | modelo + tabela | As colunas existem e não são a fonte de nada — o KPI que a usuária vê é calculado **no frontend** a partir de `raw_data`. Confiar nelas dá número errado | Não usar; remover só com migração consciente |
 | **CI deployava só a API** | pipeline | O worker Celery ficou semanas com código velho porque um `\|\| echo` mascarava a falha do deploy | **Resolvido em 03/08** — manter o olho quando mexer no CI |
+| **`webhook_subscrito` é um retrato, não a verdade** | `instagram_connections` | A coluna guarda o resultado da inscrição no dia da conexão. A Meta pode ter mudado depois e nada no nosso lado percebe — em 11/09 ela dizia `true` e só o `GET {ig_user_id}/subscribed_apps` confirmou que era verdade mesmo | Reconferir periodicamente contra a Meta, ou tratar a coluna como "última tentativa", não como estado |
