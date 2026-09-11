@@ -18,6 +18,7 @@ import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 
@@ -130,9 +131,20 @@ async def receber_webhook(
     corpo = await request.body()
 
     if not verificar_assinatura(corpo, x_hub_signature_256):
-        logger.warning(
-            "Webhook do Instagram com assinatura inválida (ip=%s)",
-            request.client.host if request.client else "?",
+        ip = request.client.host if request.client else "?"
+        logger.warning("Webhook do Instagram com assinatura inválida (ip=%s)", ip)
+        # Ledger ANTES do 403: sem esta linha, "a Meta não entregou" e "entregou
+        # e a gente recusou" ficam indistinguíveis — os dois deixam o banco vazio.
+        await run_in_threadpool(
+            _gravar_entregas,
+            [
+                {
+                    "tipo": "outro",
+                    "assinatura_ok": False,
+                    "desfecho": "assinatura_invalida",
+                    "detalhe": f"ip={ip} header={'presente' if x_hub_signature_256 else 'ausente'}",
+                }
+            ],
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Assinatura inválida")
 
@@ -145,7 +157,14 @@ async def receber_webhook(
     if payload.get("object") != "instagram":
         return {"status": "ignored"}
 
-    enfileirados = 0
+    # Os itens são montados ANTES de enfileirar para que o ledger nasça com os
+    # ids em mãos: cada task recebe o `entrega_id` da sua linha e carimba o
+    # desfecho no fim. Sem isso, "descartado pelo pipeline" não teria onde ser
+    # registrado — o caminho "nenhuma automação cobre este post" retorna sem
+    # gravar nada em instagram_events.
+    itens: list[dict] = []
+    fora_do_escopo = 0
+
     for entrada in payload.get("entry") or []:
         ig_user_id = str(entrada.get("id") or "")
         if not ig_user_id:
@@ -159,73 +178,204 @@ async def receber_webhook(
         for msg_evt in entrada.get("messaging") or []:
             mensagem = msg_evt.get("message") or {}
             if mensagem.get("is_echo"):
+                fora_do_escopo += 1
                 continue  # eco do que NÓS enviamos — responder seria loop
             story = (mensagem.get("reply_to") or {}).get("story") or {}
             if not story.get("id"):
+                fora_do_escopo += 1
                 continue  # DM comum/reação — não é reply de story, descarta
             remetente = str(((msg_evt.get("sender") or {}).get("id")) or "")
             if not remetente or remetente == ig_user_id:
+                fora_do_escopo += 1
                 continue
-            _enfileirar_story_reply(
-                ig_user_id,
+            itens.append(
                 {
-                    "mid": mensagem.get("mid"),
-                    "sender_id": remetente,
-                    "story_id": str(story.get("id")),
-                    "text": mensagem.get("text") or "",
-                    # epoch em MILISSEGUNDOS na mensageria (o parse normaliza)
-                    "timestamp": msg_evt.get("timestamp"),
-                },
+                    "tipo": "story_reply",
+                    "ig_user_id": ig_user_id,
+                    "item_id": str(mensagem.get("mid") or ""),
+                    "media_id": str(story.get("id")),
+                    "evento": {
+                        "mid": mensagem.get("mid"),
+                        "sender_id": remetente,
+                        "story_id": str(story.get("id")),
+                        "text": mensagem.get("text") or "",
+                        # epoch em MILISSEGUNDOS na mensageria (o parse normaliza)
+                        "timestamp": msg_evt.get("timestamp"),
+                    },
+                }
             )
-            enfileirados += 1
 
         for mudanca in entrada.get("changes") or []:
             if mudanca.get("field") != "comments":
+                fora_do_escopo += 1
                 continue
             valor = mudanca.get("value") or {}
             # O webhook nem sempre traz `timestamp` no comentário; `entry.time`
             # (epoch) é a melhor aproximação disponível para a janela de 7 dias.
             if not valor.get("timestamp") and entrada.get("time"):
                 valor = {**valor, "timestamp": entrada.get("time")}
-            _enfileirar(ig_user_id, valor)
-            enfileirados += 1
+            itens.append(
+                {
+                    "tipo": "comentario",
+                    "ig_user_id": ig_user_id,
+                    "item_id": str(valor.get("id") or ""),
+                    "media_id": str((valor.get("media") or {}).get("id") or "") or None,
+                    "valor": valor,
+                }
+            )
+
+    # Uma linha por item + no máximo UMA linha agregada para o que o webhook
+    # descartou logo na porta. Agregada de propósito: o descarte é quase todo DM
+    # comum, e uma linha por DM guardaria metadado de conversa privada sem
+    # necessidade — o que se precisa saber é só que houve tráfego.
+    linhas = [
+        {
+            "tipo": i["tipo"],
+            "ig_user_id": i["ig_user_id"],
+            "item_id": i["item_id"] or None,
+            "media_id": i.get("media_id"),
+        }
+        for i in itens
+    ]
+    if fora_do_escopo:
+        linhas.append(
+            {
+                "tipo": "outro",
+                "ig_user_id": None,
+                "desfecho": "fora_do_escopo",
+                "detalhe": f"{fora_do_escopo} item(ns) descartados no webhook",
+            }
+        )
+
+    # Em threadpool: é um INSERT síncrono no caminho quente do webhook, e a
+    # Meta desativa a assinatura de quem responde devagar.
+    ids = await run_in_threadpool(_gravar_entregas, linhas)
+
+    enfileirados = 0
+    for indice, item in enumerate(itens):
+        entrega_id = ids[indice] if indice < len(ids) else None
+        if item["tipo"] == "story_reply":
+            _enfileirar_story_reply(item["ig_user_id"], item["evento"], entrega_id)
+        else:
+            _enfileirar(item["ig_user_id"], item["valor"], entrega_id)
+        enfileirados += 1
 
     return {"status": "ok", "enfileirados": enfileirados}
 
 
-def _enfileirar(ig_user_id: str, valor: dict) -> None:
+def _gravar_entregas(linhas: list[dict]) -> list[Optional[int]]:
+    """Grava o ledger e devolve os ids, na mesma ordem das linhas.
+
+    NUNCA levanta: o ledger é diagnóstico, e derrubar o webhook por causa dele
+    faria a Meta reentregar — ou desativar a assinatura, que é exatamente a
+    falha que esta tabela existe para detectar. Banco fora do ar devolve uma
+    lista de None e o comentário segue para a fila do mesmo jeito.
+    """
+    if not linhas:
+        return []
+    try:
+        from app.db.session import SessionLocal
+        from app.models.instagram_automation import InstagramWebhookEntrega
+
+        db = SessionLocal()
+        try:
+            registros = [
+                InstagramWebhookEntrega(
+                    ig_user_id=l.get("ig_user_id"),
+                    tipo=l.get("tipo") or "outro",
+                    item_id=(l.get("item_id") or None),
+                    media_id=l.get("media_id"),
+                    assinatura_ok=bool(l.get("assinatura_ok", True)),
+                    desfecho=l.get("desfecho") or "enfileirado",
+                    detalhe=l.get("detalhe"),
+                )
+                for l in linhas
+            ]
+            db.add_all(registros)
+            db.commit()
+            return [r.id for r in registros]
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.error("Instagram: falha ao gravar ledger de entrega do webhook: %s", exc)
+        return [None] * len(linhas)
+
+
+def _enfileirar(ig_user_id: str, valor: dict, entrega_id: Optional[int] = None) -> None:
     """Manda para o Celery. Broker fora do ar não pode derrubar o webhook.
 
     Se a fila estiver indisponível, respondemos 200 assim mesmo: um 5xx faria a
     Meta reentregar (bom) mas, em pico, também derrubaria a assinatura do
-    webhook (ruim). O comentário perdido fica registrado no log de erro.
+    webhook (ruim). O comentário perdido fica registrado no log de erro — e,
+    desde a migration 083, também na linha do ledger.
     """
     try:
         from app.tasks.instagram_tasks import processar_comentario_instagram_task
 
         processar_comentario_instagram_task.apply_async(
-            kwargs={"ig_user_id": ig_user_id, "valor": valor}, priority=0
+            kwargs={"ig_user_id": ig_user_id, "valor": valor, "entrega_id": entrega_id},
+            priority=0,
         )
     except Exception as exc:
         logger.error(
             "Instagram: falha ao enfileirar comentário ig_user_id=%s comment=%s: %s",
             ig_user_id, (valor or {}).get("id"), exc,
         )
+        marcar_desfecho_entrega(entrega_id, "erro_enfileiramento", str(exc))
 
 
-def _enfileirar_story_reply(ig_user_id: str, evento: dict) -> None:
+def _enfileirar_story_reply(
+    ig_user_id: str, evento: dict, entrega_id: Optional[int] = None
+) -> None:
     """Mesma política do _enfileirar: broker fora do ar não derruba o webhook."""
     try:
         from app.tasks.instagram_tasks import processar_story_reply_instagram_task
 
         processar_story_reply_instagram_task.apply_async(
-            kwargs={"ig_user_id": ig_user_id, "evento": evento}, priority=0
+            kwargs={"ig_user_id": ig_user_id, "evento": evento, "entrega_id": entrega_id},
+            priority=0,
         )
     except Exception as exc:
         logger.error(
             "Instagram: falha ao enfileirar reply de story ig_user_id=%s mid=%s: %s",
             ig_user_id, (evento or {}).get("mid"), exc,
         )
+        marcar_desfecho_entrega(entrega_id, "erro_enfileiramento", str(exc))
+
+
+def marcar_desfecho_entrega(
+    entrega_id: Optional[int], desfecho: str, detalhe: Optional[str] = None
+) -> None:
+    """Carimba o desfecho na linha do ledger. Chamada pela task, no fim.
+
+    Silenciosa por construção, como o resto do ledger: falhar aqui não pode
+    mudar o que aconteceu com o comentário. Linha que fica em `enfileirado` para
+    sempre é o sinal de fila sem consumidor.
+    """
+    if not entrega_id:
+        return
+    try:
+        from app.db.session import SessionLocal
+        from app.models.instagram_automation import InstagramWebhookEntrega
+        from sqlalchemy import update
+        from sqlalchemy.sql import func as sqlfunc
+
+        db = SessionLocal()
+        try:
+            db.execute(
+                update(InstagramWebhookEntrega)
+                .where(InstagramWebhookEntrega.id == entrega_id)
+                .values(
+                    desfecho=(desfecho or "")[:64],
+                    detalhe=(detalhe or None) and str(detalhe)[:2000],
+                    processado_em=sqlfunc.now(),
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Instagram: falha ao carimbar entrega %s: %s", entrega_id, exc)
 
 
 # --------------------------------------------------------------------------- #

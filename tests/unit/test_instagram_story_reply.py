@@ -309,12 +309,19 @@ class TestWebhookMessaging:
     def _captura(self, monkeypatch):
         self.stories: list[tuple[str, dict]] = []
         self.comentarios: list[tuple[str, dict]] = []
+        # `entrega_id` (migration 083) é opcional: o ledger não muda o que a
+        # task recebe, só acrescenta o ponteiro para a linha de entrega.
         monkeypatch.setattr(
-            webhook, "_enfileirar_story_reply", lambda ig_id, ev: self.stories.append((ig_id, ev))
+            webhook, "_enfileirar_story_reply",
+            lambda ig_id, ev, entrega_id=None: self.stories.append((ig_id, ev)),
         )
         monkeypatch.setattr(
-            webhook, "_enfileirar", lambda ig_id, v: self.comentarios.append((ig_id, v))
+            webhook, "_enfileirar",
+            lambda ig_id, v, entrega_id=None: self.comentarios.append((ig_id, v)),
         )
+        # Sem isto o teste bate no Postgres local por causa do ledger; o que
+        # este arquivo testa é o roteamento do webhook, não a gravação.
+        monkeypatch.setattr(webhook, "_gravar_entregas", lambda linhas: [None] * len(linhas))
 
     def _post(self, payload: dict) -> dict:
         corpo = json.dumps(payload).encode()
