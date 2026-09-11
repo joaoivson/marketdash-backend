@@ -1413,3 +1413,92 @@ Mais três de menor gravidade (o `Checkbox` cru que sobrou no
 regressões, e "cada uma nasceu de uma melhoria dela". Aqui foi igual — as três
 críticas nasceram das três melhorias centrais (trava de passado, status por
 passo, blocos). Auditoria adversarial item a item pagou o custo dela sozinha.
+
+---
+
+## 11/09/2026 — "A automação do insta não tá funcionando" era cobertura, e o diagnóstico só existiu porque a Meta respondeu
+
+Queixa do João: @promosdabeatrizz_ (`lfernandooliveira@outlook.com`, produção)
+com comentários "Quero" sem direct há 2 dias, print de 6 comentários sem
+resposta e o link do reel `Dc3rR4fRqBP`.
+
+**Veredito: a automação nunca esteve quebrada.** O reel do print TEM automação e
+ela respondeu os dois comentários posteriores à criação dela em **8 e 10
+segundos** — um deles aconteceu enquanto eu investigava. O terceiro comentário
+do post é de 8h ANTES de a automação existir.
+
+O problema é cobertura, medido pela Graph API com o token real:
+
+```
+Publicações na conta ................................... 283
+Que pedem "Comente X" na legenda ....................... 278
+Que têm automação no MarketDash ........................   9
+Pedem comentário, sem automação, e já receberam ........ 111
+```
+
+Posts antigos continuam recebendo comentário por meses — o reel MAMADEIRA, de
+29/06, recebeu comentário em 10/09. Dá para ver a Beatriz respondendo tudo na
+mão pela API: dezenas de `"te mandei no direct 😍"` digitados horas ou dias
+depois. No mesmo dia 11/09 ela publicou 6 reels, todos pedindo "Comente X",
+nenhum com automação.
+
+### O erro de diagnóstico, que é a parte que vale guardar
+
+Eu concluí, e afirmei ao João, que **a Meta não estava entregando os webhooks**.
+O argumento: os 19 eventos de toda a produção tinham `dm_status = enviado` e
+**nenhum** `sem_match` — impossível numa conta que pede "Comente ALGODÃO" e
+recebe emoji, "lindo" e "quanto custa".
+
+O argumento estava certo. A conclusão, errada. `sem_match` só é gravado quando
+**existe automação cobrindo aquele post**. Nos 9 posts cobertos chega quase só a
+palavra pedida, então 100% de match é exatamente o esperado. Eu estava medindo
+uma população (9 posts) e concluindo sobre outra (283).
+
+Um número pode "provar" uma hipótese e estar medindo a coisa errada. A pergunta
+certa nunca foi "quantos eventos chegaram", era "quantos posts estão cobertos"
+— e essa só a Graph API responde, não o nosso banco.
+
+O que me tirou do buraco foi parar de inferir e ir perguntar à fonte:
+`GET {ig_user_id}/subscribed_apps` (a Meta confirmou `comments` + `messages`) e
+`GET {media_id}/comments` (a Meta devolveu 6 comentários no reel, 3 deles
+respostas da própria Beatriz).
+
+### Duas hipóteses que morreram no caminho, e o que sobrou delas
+
+- **"Perdemos Advanced Access / o app saiu do Live"** — o cabeçalho do
+  `scripts/simular_comentario_instagram.py` documenta que o campo `comments` só
+  entrega com Advanced Access e app em Live, então a hipótese era plausível.
+  Morreu quando a Meta devolveu a inscrição íntegra e os comentários respondidos.
+- **"Prod e hml brigam pelo mesmo app da Meta"** — não era a causa, mas o achado
+  ficou: os dois ambientes têm `INSTAGRAM_APP_ID`, `APP_SECRET` e
+  `WEBHOOK_VERIFY_TOKEN` **idênticos**, e um app tem UMA URL de callback.
+  Apontar o callback para hml desliga a automação de todas as alunas em produção
+  **sem erro, sem log e sem alerta** — e `webhook_subscrito` continua `true`,
+  porque é um retrato do dia da conexão, não a verdade viva da Meta. Decisão do
+  João: hml fica desativada, ativa quando precisar ajustar.
+
+### O que a rodada entrega: migration 083
+
+O buraco que tornou o diagnóstico caro é real e merecia código.
+`instagram_events` só registra o que o pipeline **aceitou processar**. Quatro
+falhas de natureza completamente diferente deixavam o banco **idêntico**:
+
+1. a Meta não entregou;
+2. entregou e recusamos a assinatura (403) — só ia para o log;
+3. entregou, a task rodou, e o pipeline descartou em silêncio — o caminho
+   `nenhuma automação cobre este post` retorna **sem gravar nada**, que é
+   exatamente o que acontece 111 vezes nesta conta;
+4. a task foi aceita pela fila e nunca executou — o modo de falha do
+   `priority=5` da Shopee.
+
+`instagram_webhook_entregas` grava uma linha por item recebido e a task carimba
+o desfecho. Ausência de linha passa a significar "a Meta não entregou", e cada
+descarte passa a ter motivo escrito.
+
+Três decisões que não devem ser desfeitas: o ledger **nunca** muda o desfecho do
+comentário (banco fora do ar não impede o enfileiramento — derrubar o webhook
+faria a Meta desativar a assinatura, justamente a falha que a tabela detecta); o
+descarte na porta vira **uma linha agregada**, não uma por DM, para não guardar
+metadado de conversa privada sem necessidade; e a gravação roda em
+`run_in_threadpool`, porque é INSERT síncrono no caminho quente de um endpoint
+que a Meta desativa se demorar.

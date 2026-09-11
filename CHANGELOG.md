@@ -11,6 +11,67 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-11 (Instagram: o webhook passa a deixar rastro do que chegou)
+
+Backend, com migration `083`. Nasceu de um diagnóstico que não pôde ser feito.
+
+### O que aconteceu
+
+A conta `@promosdabeatrizz_` ficou dois dias sem responder comentário. Seis
+pessoas comentaram "Quero" no reel `Dc3rR4fRqBP` e nenhuma recebeu direct — a
+automação que cobre exatamente esse post estava **ativa**, com `quero` na lista
+de palavras, token válido até 01/11 e `webhook_subscrito = true`.
+
+O que se conseguiu medir no banco: em toda a história da produção são 19
+eventos, e os 19 têm `dm_status = enviado`. Nenhum `sem_match`, nenhum
+`ignorado`. Numa conta que publica "Comente ALGODÃO" e recebe emoji, "lindo" e
+"quanto custa", é impossível que 100% dos comentários que chegaram tenham
+casado com palavra-chave. O que esse número diz é que quase nada chega.
+
+### Por que não deu para concluir mais do que isso
+
+Porque as três causas possíveis deixam o banco **exatamente igual**:
+
+1. a Meta não entregou o webhook;
+2. entregou e a assinatura foi recusada (403) — só ia para o log;
+3. entregou, a task rodou e o pipeline descartou em silêncio: o caminho
+   "nenhuma automação cobre este post" retorna **sem gravar nada** em
+   `instagram_events`.
+
+E há uma quarta, igualmente muda: a task ser aceita pela fila e nunca executar
+— o mesmo modo de falha do `priority=5` da Shopee.
+
+`instagram_events` só registra o que o pipeline **aceitou processar**. Não
+existia nenhum lugar que registrasse o que **chegou**.
+
+### O que mudou
+
+Nova tabela `instagram_webhook_entregas`: uma linha por item recebido
+(comentário ou reply de story), gravada no momento em que o webhook entra, e o
+desfecho carimbado pela task quando ela termina. Linha parada em `enfileirado`
+é fila sem consumidor; `assinatura_invalida` é entrega recusada; `ignorado` com
+o motivo é descarte do pipeline; **ausência de linha é a Meta não tendo
+entregado**. As quatro viraram distinguíveis.
+
+Três decisões que valem registro:
+
+- **O ledger nunca muda o desfecho do comentário.** Banco fora do ar faz a
+  linha não nascer, e o comentário segue para a fila do mesmo jeito. Derrubar o
+  webhook por causa do diagnóstico faria a Meta desativar a assinatura — que é
+  justamente a falha que a tabela existe para detectar.
+- **O que o webhook descarta na porta vira UMA linha agregada**, não uma por
+  item. O descarte é quase todo DM comum: uma linha por DM guardaria metadado
+  de conversa privada sem necessidade. O que se precisa saber é só que houve
+  tráfego.
+- **A gravação roda em threadpool.** É um INSERT síncrono no caminho quente de
+  um endpoint que a Meta desativa se demorar a responder.
+
+### Migration
+
+`083_instagram_webhook_entregas.sql` — tabela nova, sem `user_id` e sem RLS de
+propósito: ela nasce antes de se saber de quem é a conta (no caso de assinatura
+inválida, nem isso) e nunca é exposta por endpoint de aluna.
+
 ## [Não versionado] - 2026-09-09 (Login: instabilidade do Supabase deixa de virar "troque sua senha")
 
 Só backend, sem migration. Consequência direta do incidente de 08/09.

@@ -220,3 +220,33 @@ class InstagramEvent(Base):
         Index("idx_instagram_events_dedupe", "automation_id", "media_id", "commenter_id"),
         Index("idx_instagram_events_user_processed", "user_id", "processed_at"),
     )
+
+
+class InstagramWebhookEntrega(Base):
+    """O que a Meta ENTREGOU no webhook, item a item (migration 083).
+
+    Existe porque `instagram_events` só guarda o que o pipeline aceitou
+    processar. Quando um comentário chega e é descartado antes disso — post sem
+    automação, assinatura recusada, task que nunca rodou — não sobrava rastro
+    nenhum, e "a Meta não entregou" ficava indistinguível de "a gente jogou
+    fora". Esta tabela responde a primeira metade da pergunta; o `desfecho`,
+    carimbado pela task, responde a segunda.
+
+    Linha parada em `enfileirado` é sinal de fila sem consumidor — o mesmo modo
+    de falha silenciosa do `priority=5` da Shopee.
+    """
+
+    __tablename__ = "instagram_webhook_entregas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    recebido_em = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    ig_user_id = Column(String(64), nullable=True, index=True)
+    # comentario | story_reply | outro
+    tipo = Column(String(24), nullable=False, default="outro")
+    # comment_id ou mid — 512 pelo mesmo motivo do InstagramEvent (migration 073).
+    item_id = Column(String(512), nullable=True, index=True)
+    media_id = Column(String(128), nullable=True)
+    assinatura_ok = Column(Boolean, nullable=False, default=True)
+    desfecho = Column(String(64), nullable=False, default="enfileirado")
+    detalhe = Column(Text, nullable=True)
+    processado_em = Column(DateTime(timezone=True), nullable=True)

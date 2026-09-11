@@ -419,7 +419,7 @@ da Meta.
 1. **Medir** produção com o SQL da seção 1 — não confie nesta tabela
 2. **Listar** `git log --oneline main..develop` nos dois repos e decidir item a item
    (49 e 33 commits em 31/08 — ver seção 2 e 8.5)
-3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080→081→082`
+3. **Aplicar** `058→059→060→062→063→065→066→067→068→070→074→075→076→077→079→080→081→082→083`
    em produção — a lista fechada é a **§8.1**, e é ela que manda, não este
    resumo (**sem** `061`/`064`/`069`, que são de pg_cron e vão no passo 10).
    ⚠️ A `079` **e a `080`** só entram **depois** da política de privacidade
@@ -564,6 +564,7 @@ homologação.
 | 16 | `080_grupos_participantes_cheio_subids.sql` | `campanha_grupos.cheio_override` · `grupo_participantes` (lista de membros) · `campanha_sub_ids` | **PENDENTE** | OK (04/09) |
 | 17 | `081_fallback_lotado_e_subid_legivel.sql` | `campanha_link_eventos.resultado` + índice parcial · `whatsapp_grupos.sub_id` para `VARCHAR(64)` | **PENDENTE** | OK (05/09) |
 | 18 | `082_roteiros_blocos_tempo_status.sql` | `roteiro_passos.offset_segundos`/`offset_unidade`/`acao_descontinuada` · **`passo_blocos`** (tabela) · `roteiro_mensagens.blocos_enviados` · backfill de `data_fixa` · `tipo_conteudo` texto/midia → `mensagem` · índice único `uq_roteiro_execucao_ativa` | **PENDENTE** | OK (06/09) |
+| 19 | `083_instagram_webhook_entregas.sql` | **`instagram_webhook_entregas`** (tabela): ledger do que a Meta ENTREGOU no webhook do Instagram, item a item, com o desfecho carimbado pela task | **PENDENTE** | **PENDENTE** |
 
 > ⚠️ **A `082` (06/09) é da rodada de Roteiros e tem DUAS armadilhas.**
 >
@@ -584,6 +585,19 @@ homologação.
 > dispara em produção, e o sintoma é exatamente "agendei e não saiu". O
 > agendamento vem da **`061`**, que está na lista do passo 10 (pg_cron), não na
 > §8.1 — confira que ela foi de fato executada lá.
+
+> ⚠️ **A `083` (11/09) cria tabela nova — a armadilha do `create_all` vale.**
+> Mas aqui ela é **inofensiva por construção**: `instagram_webhook_entregas`
+> não tem `user_id` e não é exposta por nenhum endpoint de aluna. Ela nasce
+> antes de se saber de quem é a conta (no caso de assinatura inválida, nem
+> isso), então não há linha por dono para RLS proteger — é tabela de
+> operação, lida por SQL/admin. Aplicar antes ou depois do deploy dá no
+> mesmo; o que **não** dá no mesmo é não aplicar: sem ela o ledger loga erro
+> a cada webhook e o diagnóstico continua cego.
+>
+> Esta é a migration que fecha o buraco de 11/09 — uma conta ficou 2 dias sem
+> responder comentário e não havia como distinguir "a Meta não entregou" de
+> "entregou e a gente descartou em silêncio".
 
 > ⚠️ **As `074`–`077` são da rodada de Configurações (03/09).** Aplicadas em
 > **homologação em 03/09/2026** e verificadas objeto a objeto (colunas criadas,

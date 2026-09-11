@@ -20,6 +20,7 @@ from app.models.instagram_automation import (
     InstagramConnection,
     InstagramAutomation,
     InstagramEvent,
+    InstagramWebhookEntrega,
 )
 from app.models.campaign import Campaign, CampaignDailyInsight, CampaignPlatformDailyInsight
 from app.models.kiwify_plan_product import KiwifyPlanProduct
@@ -55,6 +56,7 @@ __all__ = [
     "Job", "JobChunk", "CaptureSite", "CustomLink", "CustomLinkEvent", "PageEvent", "Commission",
     "UserSettings", "ShopeeIntegration", "FacebookIntegration",
     "InstagramConnection", "InstagramAutomation", "InstagramEvent",
+    "InstagramWebhookEntrega",
     "Campaign", "CampaignDailyInsight", "CampaignPlatformDailyInsight", "KiwifyPlanProduct",
     "SubscriptionEvent", "UserLogin", "Expense", "AdminClientNote", "PageView", "SyncErrorLog",
     "SyncRun",
