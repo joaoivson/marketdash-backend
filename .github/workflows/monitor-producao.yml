@@ -20,9 +20,13 @@ name: Monitor Produção
 
 on:
   schedule:
-    # A cada 10 min. O agendador do GitHub é best-effort e atrasa sob carga;
-    # não adianta pedir 1 min. Para detecção mais apertada, um serviço externo
-    # de uptime (UptimeRobot/Better Stack) complementa este workflow.
+    # MEDIDO em 12/09/2026, e o resultado importa: pedimos 10 min e o GitHub
+    # entregou UMA execução em 37 minutos. A primeira só veio ~3h depois do
+    # push. O agendador é best-effort e ignora intervalos curtos, então este
+    # workflow NÃO é um alarme com latência garantida — é uma rede de segurança
+    # barata. Para detecção com prazo, um serviço externo de uptime
+    # (UptimeRobot/Better Stack) apontando para /health é o instrumento certo.
+    # Deixado em 10 min mesmo assim: não custa nada e às vezes o GitHub cumpre.
     - cron: '*/10 * * * *'
   workflow_dispatch:
 

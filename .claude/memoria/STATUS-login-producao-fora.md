@@ -181,7 +181,7 @@ autorização de compra.
 | Ligar healthcheck de produção | ⚠️ **reinterpretado** | O `running:healthy` estava CORRETO — o HEALTHCHECK do Dockerfile testa por dentro e a app estava sã. Healthcheck interno não vê rota de Traefik quebrada. Corrigi o path para `/health`; quem cobre o buraco é a sonda externa. |
 | Limitar CPU por container | ✅ feito | Teto de 2,0 das 4 vCPU para os 5 containers de hml. |
 | Tirar hml do VPS | ⬜ adiado | Decisão do João. Mitigado pela linha 24. |
-| Alerta de CPU | ✅ feito | Sonda externa a cada 10 min; alerta inclui lentidão >3s, que é o aviso ANTES do apagão. |
+| Alerta de CPU | ⚠️ parcial | Sonda externa existe e funciona (inclui lentidão >3s, o aviso ANTES do apagão), mas o agendador do GitHub entregou **1 execução em 37 min** com cron de 10. Rede de segurança, não alarme com prazo. |
 
 ## O que continua descoberto
 
@@ -432,3 +432,35 @@ quando alguém aperta o botão. Há um vigia rodando para pegar a primeira.
 Se não disparar, o plano B é um serviço externo de uptime (UptimeRobot/Better
 Stack) apontando para `https://api.marketdash.com.br/health`, que não depende
 do agendador do GitHub.
+
+---
+
+# O cron do GitHub não cumpre o intervalo (medido em 12/09, 17h)
+
+A primeira execução `event: schedule` só veio às **16:28:03Z — ~3 horas depois
+do push**. E nos **37 minutos seguintes não houve nenhuma outra**, com
+`cron: '*/10 * * * *'` e o workflow `active` na branch default.
+
+| | configurado | entregue |
+|---|---|---|
+| intervalo | 10 min | 1 execução em 37 min |
+| primeira após o push | — | ~3 h |
+
+**Consequência honesta:** a sonda é uma rede de segurança barata, **não um
+alarme com latência garantida**. Se produção cair logo depois de uma execução,
+o aviso pode demorar mais de meia hora — ou não vir. Foi corrigido no CHANGELOG
+(que prometia "a cada 10 min") e no comentário do próprio workflow.
+
+**O instrumento certo para detecção com prazo** é um serviço externo de uptime
+apontando para `https://api.marketdash.com.br/health` — UptimeRobot tem plano
+grátis com checagem de 5 min e alerta por e-mail/push. Exige cadastro do João;
+não dá para eu criar a conta. Configuração:
+
+- URL: `https://api.marketdash.com.br/health`
+- Tipo: **Keyword**, palavra `healthy` (NÃO "HTTP(s)" simples — o Traefik sem
+  rota devolve 404, mas um proxy mal configurado pode devolver 200 de outra
+  coisa; a palavra é o que garante que a resposta é da NOSSA aplicação)
+- Intervalo: 5 min
+
+A sonda do GitHub fica de qualquer forma: não custa nada e cobre o frontend e o
+preflight de CORS, que o UptimeRobot não cobre.
