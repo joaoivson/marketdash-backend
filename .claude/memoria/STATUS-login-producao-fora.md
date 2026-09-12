@@ -162,3 +162,86 @@ autorização de compra.
 - **`CHANGELOG.md` e `.claude/memoria/DIARIO.md` ficaram intocados**: têm
   trabalho em andamento do João (rodada de automação do Instagram), não desta
   apuração.
+
+---
+
+# Fechamento (12/09) — decisão do João: não gastar com servidor agora
+
+| # | Etapa | O que está sendo feito | Quem | Código | API | Tela |
+|---|---|---|---|---|---|---|
+| 23 | Tirar hml do VPS | **ADIADO** — decisão do João: sem gasto agora | João | — | — | — |
+| 24 | Serializar builds (substitui 23 sem custo) | grupo `coolify-build-vps` nos 2 deploys + `aguardar-build.sh` | eu | ✅ | ✅ 4 caminhos testados contra o Coolify real | — |
+| 25 | Monitor revalidado | run 34696789682 | eu | ✅ | ✅ success; criação de issue pulada (prod saudável) | — |
+| 26 | Confirmar que CI não rebuilda mais | 2 pushes (develop + main) | eu | ✅ | ✅ zero deploys disparados | — |
+
+## Estado final dos 4 pedidos
+
+| Pedido | Situação | Observação |
+|---|---|---|
+| Ligar healthcheck de produção | ⚠️ **reinterpretado** | O `running:healthy` estava CORRETO — o HEALTHCHECK do Dockerfile testa por dentro e a app estava sã. Healthcheck interno não vê rota de Traefik quebrada. Corrigi o path para `/health`; quem cobre o buraco é a sonda externa. |
+| Limitar CPU por container | ✅ feito | Teto de 2,0 das 4 vCPU para os 5 containers de hml. |
+| Tirar hml do VPS | ⬜ adiado | Decisão do João. Mitigado pela linha 24. |
+| Alerta de CPU | ✅ feito | Sonda externa a cada 10 min; alerta inclui lentidão >3s, que é o aviso ANTES do apagão. |
+
+## O que continua descoberto
+
+- **Dois builds simultâneos** só ficam impossíveis com a serialização da linha
+  24; se alguém desligar o `concurrency`, o gatilho volta.
+- **Não se sabe se havia processo em loop** além do build. Precisa de
+  `docker stats` — a chave pública está no topo deste arquivo, ainda não
+  cadastrada no painel da Hostinger.
+- **Frontend não tem sonda própria de conteúdo** (só código 200). Bundle velho
+  servido em silêncio continua invisível — falha já registrada 3× em
+  [[reference_coolify]].
+
+---
+
+# As duas pendências (12/09, fim da tarde)
+
+| # | Etapa | O que está sendo feito | Quem | Código | API | Tela |
+|---|---|---|---|---|---|---|
+| 27 | `docker stats` no host | SSH segue negado; chave NÃO cadastrada | João | — | ❌ bloqueado | — |
+| 28 | Métricas do Coolify (alternativa ao SSH) | PATCH recusado: `is_metrics_enabled` "field is not allowed" | eu | — | ✅ testado, é toggle de UI | — |
+| 29 | Sonda checa conteúdo do frontend | div#root + bundle referenciado + tipo/tamanho do .js | eu | ✅ | ✅ run 34698168348 verde, bundle 2.275.343B | — |
+| 30 | Bundle velho no ar (repo do frontend) | hash do build do CI × hash servido, 3 desfechos | eu | ✅ | ✅ 2 casos testados contra o site real | — |
+| 31 | `.github/**` + concurrency no frontend | igual ao backend | eu | ✅ | ✅ push não disparou deploy | — |
+
+## Item 27 — o que ainda falta e por quê
+
+**Não dá para eu resolver sozinho.** Duas saídas, ambas de um clique seu:
+
+1. **Hostinger › SSH key › Manage** — colar:
+   `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAiX1TekhPRK61C4RvppgvPitZqioZ60TuzeTWeY1YLf claude-code-marketdash`
+2. **Coolify › Servers › localhost › Settings › Metrics** — ligar. O Sentinel
+   JÁ roda (`is_sentinel_enabled: True`, `sentinel_updated_at` atual), só a
+   coleta de métricas está desligada (`is_metrics_enabled: False`). Ligando,
+   passa a haver CPU/memória por container com 7 dias de histórico. A API
+   recusa esse campo (422 "This field is not allowed") — é toggle de UI.
+
+⚠️ **Nenhuma das duas responde retroativamente** o que consumiu CPU em 11/09: o
+Sentinel não coletava e os containers já foram reiniciados. O que o SSH ainda
+daria é forense de log — `journalctl --since "2026-09-11 16:30"` e
+`docker ps --format "{{.Names}}\t{{.CreatedAt}}\t{{.Status}}"` (contagem de
+restart). Ligar as métricas serve para a PRÓXIMA vez.
+
+## Item 30 — por que precisou dos DOIS hashes
+
+Comparar só com o hash esperado daria falso alarme: `VITE_API_URL` entra
+**inline** no bundle, então CI e Coolify podem gerar hashes diferentes do mesmo
+código. Comparar só com o "antes" não distinguiria build no-op de deploy que
+não chegou. Com os dois: `== esperado` é confirmação exata, `!= antes` é deploy
+feito com hash diferente (avisa e passa), `== antes` é o bundle velho no ar
+(erro barulhento).
+
+## O que a sonda NÃO cobre (para não dar falsa sensação)
+
+- **Bundle velho em produção** — de fora não se sabe qual hash deveria estar no
+  ar. Isso é do passo de deploy (item 30), não da sonda.
+- **Builds simultâneos ENTRE OS DOIS REPOS.** Grupo de `concurrency` do GitHub
+  é por repositório: o backend usa `coolify-build-vps` e o frontend
+  `coolify-build-vps-frontend`, e eles não se enxergam. Um deploy de backend e
+  um de frontend ainda podem construir juntos no mesmo VPS. O
+  `aguardar-build.sh` do backend reduz a janela (espera a fila do Coolify
+  esvaziar), mas o frontend não tem esse passo.
+- **Degradação parcial** (endpoint lento que não seja `/health`, fila do Celery
+  parada, cron desagendado).
