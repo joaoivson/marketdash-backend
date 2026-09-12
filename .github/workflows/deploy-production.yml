@@ -80,6 +80,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+
+      # Simétrico à espera do repo do frontend: o `concurrency` do GitHub é por
+      # repositório e não enxerga o outro repo, mas a fila do Coolify é do
+      # servidor inteiro. Esperar por ela antes do primeiro disparo é o que
+      # impede backend e frontend de construírem juntos no mesmo VPS.
+      - name: Esperar o VPS parar de construir antes de disparar
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          chmod +x .github/scripts/aguardar-build.sh
+          .github/scripts/aguardar-build.sh "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_PROD }}"
       - name: Trigger Coolify deployment (API)
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
@@ -91,6 +102,18 @@ jobs:
       # a partir de um Dockerfile.worker próprio — é OUTRO recurso no Coolify.
       # Sem este passo ele fica com o código de quando foi subido à mão, enquanto
       # o CI reporta deploy verde. Foi o que aconteceu entre 29/07 e 02/08/2026.
+
+      # Serializa DENTRO do push: sem esta espera os recursos deste mesmo
+      # workflow constroem em paralelo. Em 11/09 o push da develop sozinho
+      # disparou 3 builds simultâneos, e junto com os 2 da main deu o pico de
+      # cinco em 4 vCPU. O grupo de `concurrency` separa push de push; esta
+      # espera separa recurso de recurso.
+      - name: Aguardar o build de api terminar
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          chmod +x .github/scripts/aguardar-build.sh
+          .github/scripts/aguardar-build.sh "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_PROD }}"
       - name: Trigger Coolify deployment (Celery worker)
         env:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
