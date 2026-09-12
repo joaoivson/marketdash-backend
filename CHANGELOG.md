@@ -54,8 +54,8 @@ cron jobid 91), webhook do Instagram (1-7 entregas/hora) e o próprio Traefik.
 
 ### O que passou a existir
 
-**Sonda externa** (`monitor-producao.yml`, a cada 10 min na infra do GitHub —
-monitor hospedado no VPS morre junto com o que vigia). O healthcheck do
+**Sonda externa** (`monitor-producao.yml`, na infra do GitHub — monitor
+hospedado no VPS morre junto com o que vigia). O healthcheck do
 Dockerfile dizia `healthy` o tempo todo e estava CERTO: ele testa
 `localhost:8000/health` por dentro, e por dentro a app estava sã. Nenhum
 healthcheck interno enxerga rota de proxy quebrada. A sonda lê o **corpo**
