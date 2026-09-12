@@ -117,8 +117,13 @@ jobs:
         run: |
           TITULO="🔴 Produção inacessível de fora"
           # Uma issue por incidente, não uma a cada 10 min.
-          existente=$(gh issue list --state open --label incidente --search "$TITULO in:title" \
-                        --json number --jq '.[0].number' 2>/dev/null)
+          #
+          # Sem `--label`: filtrar por uma label que não existe no repo faz o gh
+          # sair com código 1 e, sob `bash -e`, derruba o step inteiro — foi
+          # assim que a primeira execução deste workflow falhou com produção
+          # saudável. O `|| true` cobre o resto (repo sem issues, rede).
+          existente=$(gh issue list --state open --search "$TITULO in:title" \
+                        --json number --jq '.[0].number' 2>/dev/null || true)
 
           corpo=$(printf '%s\n\n**Detectado em:** %s UTC\n\n**O que falhou:**\n\n%b\n\n---\n\n**Primeiro comando do diagnóstico:**\n\n```bash\ncurl -s -i https://api.marketdash.com.br/health\n```\n\n- `404 page not found` em `text/plain` → é o **Traefik sem rota**. O container pode estar de pé e saudável. Corrigir com restart do container no Coolify.\n- `{"detail":"Not Found"}` em JSON → é o **FastAPI**, a app está no ar.\n\nControle: `curl -s https://api.hml.marketdash.com.br/health` usa o **mesmo** Traefik. hml 200 + prod 404 isola o problema no container de produção.\n\nRunbook completo: `.claude/memoria/STATUS-login-producao-fora.md`\n' \
                     "Sonda externa (GitHub Actions) não conseguiu falar com a produção." \
@@ -127,6 +132,7 @@ jobs:
           if [ -n "$existente" ] && [ "$existente" != "null" ]; then
             gh issue comment "$existente" --body "$corpo"
           else
+            # Tenta com label; se ela não existir no repo, cria sem.
             gh issue create --title "$TITULO" --label incidente --body "$corpo" \
               || gh issue create --title "$TITULO" --body "$corpo"
           fi
@@ -136,9 +142,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          n=$(gh issue list --state open --label incidente \
+          # Idem: sem `--label` e com `|| true`. Este step roda no caminho FELIZ,
+          # a cada 10 minutos — ele falhar pinta o repositório de vermelho e
+          # ensina a ignorar o alerta justamente quando ele for verdadeiro.
+          n=$(gh issue list --state open \
                 --search "Produção inacessível de fora in:title" \
-                --json number --jq '.[0].number' 2>/dev/null)
+                --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -n "$n" ] && [ "$n" != "null" ]; then
-            gh issue close "$n" --comment "✅ Sonda externa voltou a receber \`status: healthy\` de https://api.marketdash.com.br/health."
+            gh issue close "$n" --comment "✅ Sonda externa voltou a receber \`status: healthy\` de https://api.marketdash.com.br/health." || true
           fi
