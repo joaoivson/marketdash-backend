@@ -113,3 +113,52 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAiX1TekhPRK61C4RvppgvPitZqioZ60TuzeTWeY1YLf
 5. **Healthcheck no Coolify está DESLIGADO** (`health_check_enabled: False`) no
    app de produção — por isso o Coolify dizia `running:healthy` com a API
    inalcançável há horas. Ligar com path `/health`.
+
+---
+
+# Execução das 4 medidas (12/09, tarde)
+
+| # | Etapa | O que está sendo feito | Quem | Código | API | Tela |
+|---|---|---|---|---|---|---|
+| 17 | Teto de CPU em hml | PATCH limits_cpus/limits_memory nos 5 containers | eu | ✅ | ✅ 5× http=200, valores conferidos na releitura | — |
+| 18 | Aplicar os tetos | restart dos 5 containers hml | eu | ✅ | ✅ api-hml e frontend-hml de volta em 200 | — |
+| 19 | Healthcheck de produção | health_check_path `/` → `/health` | eu | ✅ | ✅ PATCH 200 | — |
+| 20 | Sonda externa | `.github/workflows/monitor-producao.yml` | eu | ✅ | ✅ 4 cenários testados | — |
+| 21 | Não rebuildar por mudança de CI | `.github/**` no paths-ignore dos 2 deploys | eu | ✅ | ✅ push em main NÃO disparou Deploy to Production | — |
+| 22 | Fix do monitor | label inexistente derrubava o step sob `bash -e` | eu | ✅ | 🔄 revalidando | — |
+| 23 | Tirar hml do VPS | **depende de decisão do João** (servidor novo) | João | ⬜ | ⬜ | ⬜ |
+
+**Bloqueio da linha 23:** exige contratar um segundo VPS. Não executo sem
+autorização de compra.
+
+## Decisões e correções desta rodada
+
+- **O healthcheck NÃO era o buraco.** `running:healthy` estava correto: o
+  `HEALTHCHECK` do Dockerfile (linhas 27-28) testa `localhost:8000/health` de
+  dentro do container, e por dentro a app estava saudável. Healthcheck interno
+  — Docker ou Coolify — não enxerga rota de Traefik quebrada. Corrigi o path
+  para `/health` por higiene, mas quem cobre esse modo de falha é a sonda
+  EXTERNA (linha 20). Deixei o healthcheck do Coolify desabilitado: o do
+  Dockerfile já cobre o interno e habilitar os dois só duplica.
+
+- **Teto de CPU não cobre o gatilho real.** O pico veio de dois `docker build`
+  simultâneos; build não roda dentro do container limitado. O teto serve para
+  um worker de hml em loop não roubar produção. Quem cobre o build é não
+  empurrar `develop` e `main` no mesmo minuto, e a linha 23.
+
+- **Bug pego no teste, não em produção:** `printf "$falhas"` sai vazio quando o
+  texto começa com `-` (o printf lê como opção). O alerta chegaria em branco.
+  Corrigido para `printf '%b'`.
+
+- **O monitor falhou na 1ª execução com produção saudável:** `gh issue list
+  --label incidente` com label inexistente sai com código 1 e derruba o step
+  sob `bash -e`. Monitor vermelho no caminho feliz ensina a ignorar o alerta.
+
+- **O push em `develop` ainda disparou build de hml** apesar do `.github/**` no
+  paths-ignore (o de `main` não disparou, que era o que importava). A partir do
+  próximo push a regra já está na branch. Uma build isolada de hml é inofensiva
+  — o que derruba é o par simultâneo.
+
+- **`CHANGELOG.md` e `.claude/memoria/DIARIO.md` ficaram intocados**: têm
+  trabalho em andamento do João (rodada de automação do Instagram), não desta
+  apuração.
