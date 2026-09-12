@@ -245,3 +245,78 @@ feito com hash diferente (avisa e passa), `== antes` é o bundle velho no ar
   esvaziar), mas o frontend não tem esse passo.
 - **Degradação parcial** (endpoint lento que não seja `/health`, fila do Celery
   parada, cron desagendado).
+
+---
+
+# FORENSE COM SSH (12/09, 14h30) — causa raiz confirmada e uma correção minha
+
+Com a chave cadastrada e as métricas ligadas, deu para fechar. O journal
+**sobreviveu ao reboot** (boot -2 cobre 05/09 → 12/09 13:00), e o banco do
+Coolify guardou as datas de cada deployment.
+
+## O gatilho, com carimbo de hora
+
+`application_deployment_queues` mostra **CINCO builds começando em 17 segundos**
+em 11/09 — não dois, como eu disse antes:
+
+| recurso | início | duração |
+|---|---|---|
+| marketdash-backend-hml | 21:12:30 | 237s |
+| celery-hml | 21:12:31 | 278s |
+| celery-whatsapp-hml | 21:12:31 | 501s |
+| **api.marketdash.com.br (prod)** | 21:12:46 | ~505s |
+| **celery prod** | 21:12:47 | 683s |
+
+`develop` levou 3 recursos e `main` levou 2, com 21s de diferença entre os
+pushes. Cinco `docker build` concorrentes por ~11 minutos em 4 vCPU.
+
+**Todos os cinco são recursos do repo do BACKEND** — o frontend nem deployou
+naquele dia (último em 08/09). Ou seja, o grupo de `concurrency` compartilhado
+entre `deploy-production.yml` e `deploy-homologation.yml` do backend cobre
+exatamente este caso: os 3 de hml terminariam antes de os 2 de prod começarem.
+
+## Por que durou ~20h
+
+Hostinger aplicou o "CPU limitation". Com o teto reduzido, a carga ROTINEIRA
+(10 containers + sync horário do Shopee + full sync das 04:00) já satura a
+fração liberada e o gráfico marca 100% continuamente. Não se recupera sozinho —
+depende de alguém remover no painel. Confirmado pelo desfecho: limitação
+removida + restart → CPU 8-26%, load 0.27, **com a mesma carga rodando**.
+
+## Descartados COM EVIDÊNCIA
+
+- **Deploy travado** — eu cheguei a afirmar isso lendo `updated_at` da linha
+  (57.196s) e estava ERRADO. Os logs do deployment mostram conclusão em 8m25s:
+  container novo criado 21:20:20, `"healthy"` às 21:21:01, "Removing old
+  containers", "Rolling update completed" 21:21:08. O `updated_at` só ficou
+  velho porque a linha foi tocada de novo quando meu restart rodou.
+- **Processo em loop** — não há acúmulo: recebidas ≈ concluídas em toda hora
+  (47/47, 48/48, 51/51…).
+- **Sync Shopee como culpado** — é intencional. `cron.job` tem 24 jobs ativos:
+  23 `incremental` de hora em hora + **jobid 91 às 04:00 = `full`**. O pico de
+  04:00-07:00 (2.299 chamadas GraphQL vs ~245 de base, e 10 estouros do soft
+  limit de 3000s) é o full sync diário, por desenho. E ele roda hoje com CPU em
+  8-26%.
+- **Webhook do Instagram** — 1 a 7 entregas/hora.
+- **Traefik em si** — hml serviu 200 o tempo todo pelo mesmo proxy.
+- **Sonda `qemu-ga` da Hostinger** — cheguei a tratar como sinal de CPU alta; é
+  rotina, ~52×/dia desde 05/09.
+
+## O que NÃO foi possível recuperar, e a culpa é minha
+
+O container de produção do incidente e os 5 de hml **foram recriados pelos meus
+próprios restarts de hoje**, o que apagou os logs deles. E o Sentinel estava com
+`is_metrics_enabled: False`, então não existe histórico de CPU por container.
+Numa próxima, capturar `docker logs` e `docker stats` ANTES de reiniciar.
+
+## Estado saudável registrado (para comparação futura)
+
+Container de produção: rede `coolify`, 15 labels do Traefik, router
+`Host(api.marketdash.com.br) && PathPrefix(/)`. Foi a perda disso — com o
+container de pé e saudável — que produziu o 404.
+
+## Buraco que continua aberto
+
+Dentro de UM push, os recursos ainda constroem em paralelo (o push da develop
+sozinho dispara 3 builds simultâneos). Serializar isso exigiria esperar entre
+cada disparo, o que alonga o deploy de ~8 para ~12 min.
