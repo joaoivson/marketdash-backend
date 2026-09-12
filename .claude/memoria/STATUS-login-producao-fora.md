@@ -377,3 +377,58 @@ medindo. Não estimar isso de novo por cálculo.
 Duas corridas continuam teoricamente possíveis, ambas com janela de segundos:
 dois jobs de repos diferentes consultarem a fila vazia no mesmo instante. Não
 vale mais complexidade — o caso real eram builds sobrepostos por 11 minutos.
+
+---
+
+# Verificação final do estado REAL (12/09, 15h)
+
+Conferido no estado real, não no que a API do Coolify diz ter salvo.
+
+## Limites de CPU — ativos no Docker
+
+```
+cogwsgwocwk8k4wkswokks0s (celery-wpp hml)  0.40 vCPU  1.0G
+jos0k8so0gw4c8okkgg8kskg (celery hml)      0.50 vCPU  1.5G
+r448swsggoock0wg80csws0k (api hml)         0.50 vCPU  1.5G
+mws0c0g4kkw00cwg88o00kw4 (front hml)       0.20 vCPU  0.5G
+hw88gc8ocsko04k8wkocs8kc (waha hml)        0.40 vCPU  2.0G
+                                    total  2.00 vCPU
+produção (api, celery, front) + redis     ilimitado (de propósito)
+```
+
+Três desses containers têm **ID novo** — foram recriados pelo deploy de
+homologação das 14:44, e mantiveram os limites. Ou seja, o teto sobrevive a
+deploy, não só ao restart manual.
+
+## O que está na `main` (produção)
+
+`monitor-producao.yml`, `aguardar-build.sh`, `deploy-production.yml`
+serializado, `CHANGELOG.md` e este quadro — todos presentes. **Nenhum deploy
+foi disparado** por esses pushes: são só `.md` e `.github/**`, ambos no
+paths-ignore. Não havia código de aplicação nesta rodada.
+
+`health_check_path` da API de produção: `/health` (era `/`).
+
+## ⚠️ NÃO merguei develop → main
+
+`develop` está **126 commits (backend) e 73 (frontend)** à frente da `main` —
+Instagram (tela de cobertura, ledger), Meus Links em lista, Roteiros, tradução
+do navegador. "Subir em produção" não autoriza levar esse acúmulo. Tudo desta
+rodada foi por cherry-pick.
+
+Efeito colateral conhecido: os SHAs em `main` são outros, então o merge futuro
+da develop vai reconflitar nesses arquivos de CI e no CHANGELOG. Resolver
+mantendo o lado da develop.
+
+## ⚠️ Pendente de confirmação: o cron da sonda nunca disparou sozinho
+
+As 3 execuções foram `workflow_dispatch`. O workflow está `active` na branch
+default e o `cron: '*/10 * * * *'` está correto no arquivo da `main`, mas em
+1h30 o agendador do GitHub não rodou nenhuma vez. Isso é conhecido (schedules
+novos e de intervalo curto são muito atrasados), mas **enquanto não houver uma
+execução com `event: schedule`, o alerta não existe de fato** — só funciona
+quando alguém aperta o botão. Há um vigia rodando para pegar a primeira.
+
+Se não disparar, o plano B é um serviço externo de uptime (UptimeRobot/Better
+Stack) apontando para `https://api.marketdash.com.br/health`, que não depende
+do agendador do GitHub.
