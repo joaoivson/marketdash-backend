@@ -10,6 +10,19 @@ on:
       - '.gitignore'
       - 'README.md'
 
+# Homologação e produção compartilham o MESMO VPS de 4 vCPU, e o Coolify
+# constrói as imagens ali mesmo. Em 11/09/2026 `develop` e `main` foram
+# empurradas com 21 segundos de diferença: dois `docker build` simultâneos
+# levaram a CPU a 100%, a Hostinger ativou a limitação e a API de produção
+# ficou ~20h inalcançável.
+#
+# Grupo IGUAL nos dois workflows de propósito — é isso que faz um esperar o
+# outro em vez de os dois construírem juntos. `cancel-in-progress: false`
+# porque um deploy já disparado não pode ser abortado no meio.
+concurrency:
+  group: coolify-build-vps
+  cancel-in-progress: false
+
 jobs:
   validate:
     name: Validate Code
@@ -83,6 +96,17 @@ jobs:
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
           .github/scripts/trigger-deploy.sh worker "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_PROD }}"
+
+
+      # Segura o lock de concurrency até o build REALMENTE terminar. Sem isto o
+      # job acaba em segundos (o webhook é assíncrono), o lock é liberado antes
+      # do build começar e a serialização acima não vale nada.
+      - name: Aguardar a fila de builds do Coolify
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          chmod +x .github/scripts/aguardar-build.sh
+          .github/scripts/aguardar-build.sh "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_PROD }}"
 
       - name: Deployment status
         run: |
