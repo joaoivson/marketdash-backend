@@ -19,6 +19,10 @@ from app.models.instagram_automation import (
 )
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
 from app.schemas.instagram_automation import (
+    InstagramAutomacaoLoteItem,
+    InstagramAutomacaoLotePulada,
+    InstagramAutomacaoLoteRequest,
+    InstagramAutomacaoLoteResponse,
     InstagramAutomationCreate,
     InstagramAutomationResponse,
     InstagramAutomationUpdate,
@@ -27,7 +31,7 @@ from app.schemas.instagram_automation import (
 )
 from app.services import instagram_login_client as ig
 from app.services.instagram_connection_service import InstagramConnectionService
-from app.utils.text_normalize import normalizar_comentario
+from app.utils.text_normalize import normalizar_comentario, palavra_pedida_na_legenda
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +50,22 @@ def _caption_preview(caption: Optional[str]) -> Optional[str]:
     return texto[:MAX_CAPTION_PREVIEW]
 
 
-def _media_item(bruto: dict) -> InstagramMediaItem:
+def _media_item(bruto: dict, cobertos: frozenset[str] = frozenset()) -> InstagramMediaItem:
+    media_id = str(bruto.get("id") or "")
+    legenda = bruto.get("caption")
     return InstagramMediaItem(
-        id=str(bruto.get("id") or ""),
-        caption_preview=_caption_preview(bruto.get("caption")),
+        id=media_id,
+        caption_preview=_caption_preview(legenda),
         media_type=bruto.get("media_type"),
         media_product_type=bruto.get("media_product_type"),
         permalink=bruto.get("permalink"),
         # Vídeo/Reel só tem thumbnail_url; imagem só tem media_url.
         thumbnail_url=bruto.get("thumbnail_url") or bruto.get("media_url"),
         timestamp=bruto.get("timestamp"),
+        tem_automacao=media_id in cobertos,
+        # A sugestão sai da legenda INTEIRA, não do preview: o preview é cortado
+        # para caber na tela e o pedido costuma vir depois do corte.
+        palavra_sugerida=palavra_pedida_na_legenda(legenda),
     )
 
 
@@ -73,12 +83,18 @@ class InstagramAutomationService:
         conexao = self.conexao_service.require_conexao_ativa(user_id)
         chave = (user_id, cursor or "")
 
+        # Fora do cache DE PROPÓSITO: o cache guarda a resposta da Meta (15 min),
+        # mas a cobertura muda no segundo em que a aluna cria uma automação. Ler
+        # do banco a cada chamada é uma query e evita a tela dizer "sem
+        # automação" para um post que ela acabou de cobrir.
+        cobertos = self.repo.media_ids_com_automacao_ativa(conexao.id)
+
         if not forcar:
             em_cache = _CACHE_MEDIA.get(chave)
             if em_cache and (time.time() - em_cache[0]) < CACHE_MEDIA_TTL_SEGUNDOS:
                 bruto = em_cache[1]
                 return InstagramMediaPage(
-                    items=[_media_item(m) for m in bruto.get("data") or []],
+                    items=[_media_item(m, cobertos) for m in bruto.get("data") or []],
                     next_cursor=((bruto.get("paging") or {}).get("cursors") or {}).get("after")
                     if (bruto.get("paging") or {}).get("next")
                     else None,
@@ -95,7 +111,7 @@ class InstagramAutomationService:
         _CACHE_MEDIA[chave] = (time.time(), bruto)
         paging = bruto.get("paging") or {}
         return InstagramMediaPage(
-            items=[_media_item(m) for m in bruto.get("data") or []],
+            items=[_media_item(m, cobertos) for m in bruto.get("data") or []],
             next_cursor=(paging.get("cursors") or {}).get("after") if paging.get("next") else None,
             from_cache=False,
         )
@@ -274,6 +290,114 @@ class InstagramAutomationService:
         self.db.refresh(automacao)
         logger.info("Automação Instagram criada id=%s user_id=%s", automacao.id, user_id)
         return self._to_response(automacao)
+
+    async def criar_em_lote(
+        self, user_id: int, pedido: InstagramAutomacaoLoteRequest
+    ) -> InstagramAutomacaoLoteResponse:
+        """Cria uma automação de post para cada item, com um modelo comum.
+
+        Por que existe: `escopo = post_especifico` cobre UM post, e a conta que
+        motivou isto tem 283 publicações pedindo "Comente X" com 9 cobertas.
+        Uma a uma, pela tela de edição, ela nunca alcança — e post antigo segue
+        recebendo comentário por meses.
+
+        Três decisões:
+
+        - **Post já coberto é PULADO, não duplicado.** Duas automações ativas no
+          mesmo post disputariam o mesmo comentário, e a Meta só aceita uma
+          private reply — a segunda viraria erro permanente. Também torna o
+          endpoint seguro contra clique duplo.
+        - **Item inválido não derruba o lote.** Ele volta em `puladas` com o
+          motivo, e o resto é criado. Recusar tudo por causa de um link mal
+          colado faria a aluna recomeçar a passada inteira.
+        - **O webhook é conferido UMA vez**, não por item — são 50 chamadas à
+          Meta que a aluna esperaria à toa.
+        """
+        conexao = self.conexao_service.require_conexao_ativa(user_id)
+        ativar = pedido.status == AUTOMACAO_ATIVA
+        if ativar:
+            await self._exigir_webhook_ativo(user_id)
+
+        ja_cobertos = self.repo.media_ids_com_automacao_ativa(conexao.id)
+        vistos: set[str] = set()
+        criadas: List[InstagramAutomationResponse] = []
+        puladas: List[InstagramAutomacaoLotePulada] = []
+
+        for item in pedido.itens:
+            media_id = str(item.media_id)
+            if media_id in ja_cobertos:
+                puladas.append(InstagramAutomacaoLotePulada(
+                    media_id=media_id, motivo="Este post já tem automação ativa."))
+                continue
+            if media_id in vistos:
+                puladas.append(InstagramAutomacaoLotePulada(
+                    media_id=media_id, motivo="Post repetido no mesmo lote."))
+                continue
+
+            palavras = [p for p in (list(item.palavras) + list(pedido.palavras_comuns)) if p and p.strip()]
+            dados = InstagramAutomationCreate(
+                nome=(item.nome or "").strip() or self._nome_do_lote(item, palavras),
+                escopo=ESCOPO_POST_ESPECIFICO,
+                media_id=media_id,
+                media_thumbnail_url=item.media_thumbnail_url,
+                media_caption_preview=item.media_caption_preview,
+                media_permalink=item.media_permalink,
+                trigger_tipo=TRIGGER_PALAVRAS,
+                palavras=palavras,
+                resposta_publica_ativa=pedido.resposta_publica_ativa,
+                resposta_publica_variacoes=list(pedido.resposta_publica_variacoes),
+                dm_texto=pedido.dm_texto,
+                dm_link=item.dm_link,
+                dm_botao_texto=pedido.dm_botao_texto,
+                status=pedido.status,
+            )
+            try:
+                self._validar(dados, para_ativar=ativar)
+            except HTTPException as exc:
+                puladas.append(InstagramAutomacaoLotePulada(
+                    media_id=media_id, motivo=self._motivo_legivel(exc)))
+                continue
+
+            automacao = InstagramAutomation(
+                user_id=user_id, connection_id=conexao.id, nome=dados.nome
+            )
+            self._aplicar(automacao, dados)
+            self.repo.add_automation(automacao)
+            vistos.add(media_id)
+            criadas.append(automacao)
+
+        # Um commit para o lote inteiro: 50 commits seriam 50 idas ao banco, e
+        # um erro no meio deixaria a passada pela metade sem ninguém saber onde.
+        self.db.commit()
+        respostas = []
+        for automacao in criadas:
+            self.db.refresh(automacao)
+            respostas.append(self._to_response(automacao))
+
+        logger.info(
+            "Automação Instagram em lote user_id=%s: %d criadas, %d puladas",
+            user_id, len(respostas), len(puladas),
+        )
+        return InstagramAutomacaoLoteResponse(criadas=respostas, puladas=puladas)
+
+    @staticmethod
+    def _nome_do_lote(item: InstagramAutomacaoLoteItem, palavras: List[str]) -> str:
+        """Nome legível sem pedir mais uma digitação por post.
+
+        A palavra do produto é o melhor nome disponível — é ela que a aluna
+        reconhece na lista. Sem palavra, cai no trecho da legenda.
+        """
+        if palavras:
+            return palavras[0][:255]
+        preview = (item.media_caption_preview or "").strip()
+        return (preview[:60] or "Automação sem título")
+
+    @staticmethod
+    def _motivo_legivel(exc: HTTPException) -> str:
+        detalhe = exc.detail
+        if isinstance(detalhe, dict):
+            return str(detalhe.get("message") or detalhe)
+        return str(detalhe)
 
     async def atualizar(
         self, user_id: int, automation_id: int, dados: InstagramAutomationUpdate

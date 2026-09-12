@@ -30,6 +30,12 @@ STATUS_VALIDOS = {AUTOMACAO_ATIVA, AUTOMACAO_PAUSADA, AUTOMACAO_RASCUNHO}
 MIN_VARIACOES_RECOMENDADO = 3
 MAX_VARIACOES = 5
 
+# Teto de itens por lote. Existe para o request não virar um transação gigante
+# nem uma tela travada: a conta que motivou tem 269 posts descobertos, e fazer
+# isso em blocos dá feedback no meio do caminho em vez de "carregando" por
+# minutos.
+MAX_ITENS_LOTE = 50
+
 
 # --------------------------------------------------------------------------- #
 #  Conexão                                                                     #
@@ -83,6 +89,15 @@ class InstagramMediaItem(BaseModel):
     thumbnail_url: Optional[str] = None
     timestamp: Optional[str] = None
 
+    # Já existe automação ATIVA cobrindo este post? É o campo que transforma a
+    # grade de seleção em diagnóstico: numa conta com 283 publicações e 9
+    # automações, o buraco não é visível de outro jeito.
+    tem_automacao: bool = False
+    # A palavra que a própria legenda manda comentar ("Comente ALGODÃO para..."),
+    # para pré-preencher a automação. None quando a legenda não deixa afirmar —
+    # ver `palavra_pedida_na_legenda`.
+    palavra_sugerida: Optional[str] = None
+
 
 class InstagramMediaPage(BaseModel):
     items: List[InstagramMediaItem] = []
@@ -95,6 +110,70 @@ class InstagramMediaPage(BaseModel):
 # --------------------------------------------------------------------------- #
 #  Automação                                                                   #
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+#  Criação em lote                                                             #
+# --------------------------------------------------------------------------- #
+
+
+class InstagramAutomacaoLoteItem(BaseModel):
+    """O que muda de post para post: a publicação, a palavra e o link."""
+
+    media_id: str = Field(min_length=1)
+    palavras: List[str] = []
+    dm_link: Optional[str] = None
+    nome: Optional[str] = Field(default=None, max_length=255)
+    media_thumbnail_url: Optional[str] = None
+    media_caption_preview: Optional[str] = None
+    media_permalink: Optional[str] = None
+
+
+class InstagramAutomacaoLoteRequest(BaseModel):
+    """Cria várias automações de post de uma vez.
+
+    A separação `modelo` × `itens` é o ponto: numa conta que publica "Comente X
+    para receber o link" todo dia, o texto da DM, as respostas públicas e as
+    palavras genéricas ("quero", "link") são IGUAIS em todo post — só a palavra
+    do produto e o link mudam. Repetir o modelo por item faria a tela pedir a
+    mesma coisa 269 vezes.
+    """
+
+    itens: List[InstagramAutomacaoLoteItem] = Field(min_length=1, max_length=MAX_ITENS_LOTE)
+
+    # O modelo, aplicado a todos os itens.
+    dm_texto: str = ""
+    dm_botao_texto: Optional[str] = Field(default=None, max_length=20)
+    resposta_publica_ativa: bool = True
+    resposta_publica_variacoes: List[str] = []
+    # Somadas à palavra de cada post — é como os 27% que comentam "quero" em vez
+    # da palavra do produto passam a ser atendidos.
+    palavras_comuns: List[str] = []
+    status: str = AUTOMACAO_RASCUNHO
+
+    @field_validator("status")
+    @classmethod
+    def _status_valido(cls, v: str) -> str:
+        if v not in STATUS_VALIDOS:
+            raise ValueError(f"status deve ser um de {sorted(STATUS_VALIDOS)}")
+        return v
+
+
+class InstagramAutomacaoLotePulada(BaseModel):
+    media_id: str
+    motivo: str
+
+
+class InstagramAutomacaoLoteResponse(BaseModel):
+    """Sempre devolve as duas listas.
+
+    Lote que falha parcialmente e responde só o total criado esconde o que não
+    entrou — e o que não entrou é justamente o post que segue sem responder
+    comentário.
+    """
+
+    criadas: List["InstagramAutomationResponse"] = []
+    puladas: List[InstagramAutomacaoLotePulada] = []
 
 
 class InstagramAutomationBase(BaseModel):

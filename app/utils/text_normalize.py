@@ -13,6 +13,7 @@ São DUAS normalizações, de propósito:
 
 import re
 import unicodedata
+from typing import Optional
 
 _NAO_ALFANUM = re.compile(r"[^a-z0-9]")
 _ESPACOS = re.compile(r"\s+")
@@ -79,3 +80,79 @@ def comentario_casa(texto_comentario: str, palavras_normalizadas) -> bool:
         if palavra and palavra in alvo:
             return True
     return False
+
+
+# --------------------------------------------------------------------------- #
+#  Palavra pedida na legenda                                                   #
+# --------------------------------------------------------------------------- #
+
+# Formatos reais vistos na conta @promosdabeatrizz_ (283 publicações):
+#   ✨Comente " ALGODÃO " para receber o link agora!
+#   ✨Comente “PERFUME” para receber o link
+#   Comente MAMADEIRA para receber
+#   Comenta "BASE COREANA" que eu te mando
+#
+# São DOIS padrões, com tolerância diferente, e a diferença importa:
+#
+# - COM ASPAS a própria aspa delimita a palavra, então dá pra aceitar até 4
+#   palavras ("CAIXA DE FERRAMENTAS" tem 3).
+# - SEM ASPAS quem delimita é a preposição seguinte, que é um chute muito pior:
+#   numa legenda corrida ela pode estar longe e arrastar meia frase junto. Daí o
+#   teto de 2 palavras.
+#
+# ⚠️ O `\b` depois da lista de delimitadores NÃO é decorativo: sem ele, o `que`
+# casa com o começo de "QUERO", e `Comente " EU QUERO " para...` extraía "EU".
+_DELIMITADORES = r"(?:para|pra|pro|que|e\s+eu|no\s+coment)\b"
+
+_COM_ASPAS = re.compile(
+    r"coment[ea]\s*[\"“”\'‘’]\s*([^\"“”\'‘’\n]{2,40}?)\s*[\"“”\'‘’]",
+    re.IGNORECASE,
+)
+# A aspa de ABERTURA é opcional aqui de propósito: legenda com aspa não fechada
+# existe (`Comente “GUARDA-CHUVA para receber`) e cairia fora dos dois padrões.
+# Continua protegido pelo teto de 2 palavras.
+_SEM_ASPAS = re.compile(
+    r"coment[ea]\s*[\"“”\'‘’]?\s*([^\"“”\'‘’\n!?.]{2,40}?)\s+" + _DELIMITADORES,
+    re.IGNORECASE,
+)
+
+MAX_PALAVRAS_COM_ASPAS = 4
+MAX_PALAVRAS_SEM_ASPAS = 2
+
+# Palavras que aparecem no lugar da palavra-chave quando a legenda pede um
+# genérico. Extrair uma dessas criaria uma automação de POST que dispara no
+# comentário de qualquer outro post — é caso de automação "qualquer post",
+# criada de propósito, não de sugestão automática.
+_NAO_SAO_PALAVRA_CHAVE = frozenset({
+    "aqui", "abaixo", "algo", "isso", "isto", "nos comentarios", "no comentario",
+    "comentario", "comentarios", "link", "eu quero", "quero", "me manda", "manda",
+})
+
+
+def palavra_pedida_na_legenda(legenda: Optional[str]) -> Optional[str]:
+    """A palavra que a legenda manda comentar, ou None se não der para afirmar.
+
+    Serve para pré-preencher a automação: em 66% dos comentários medidos a
+    pessoa escreve exatamente essa palavra, então ela é a palavra-chave certa.
+
+    Devolve None de propósito quando a legenda não segue o padrão. A assimetria
+    que governa o desenho: **não sugerir** custa a aluna digitar; **sugerir
+    errado** cria uma automação que manda o link errado para a cliente dela. Os
+    dois erros não têm o mesmo preço.
+    """
+    if not legenda:
+        return None
+
+    for padrao, teto in ((_COM_ASPAS, MAX_PALAVRAS_COM_ASPAS),
+                         (_SEM_ASPAS, MAX_PALAVRAS_SEM_ASPAS)):
+        achado = padrao.search(legenda)
+        if not achado:
+            continue
+        partes = achado.group(1).split()
+        if not partes or len(partes) > teto:
+            continue
+        bruta = " ".join(partes)
+        if normalizar_comentario(bruta) in _NAO_SAO_PALAVRA_CHAVE:
+            return None
+        return bruta
+    return None

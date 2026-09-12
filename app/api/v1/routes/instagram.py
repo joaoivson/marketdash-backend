@@ -19,6 +19,8 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
 from app.schemas.instagram_automation import (
+    InstagramAutomacaoLoteRequest,
+    InstagramAutomacaoLoteResponse,
     InstagramAuthUrlResponse,
     InstagramAutomationCreate,
     InstagramAutomationResponse,
@@ -155,6 +157,24 @@ async def criar_automacao(
     db: Session = Depends(get_db),
 ):
     return await _automacoes(db).criar(current_user.id, payload)
+
+
+@router.post(
+    "/automations/lote",
+    response_model=InstagramAutomacaoLoteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def criar_automacoes_em_lote(
+    payload: InstagramAutomacaoLoteRequest,
+    current_user: User = Depends(exige_plano_max),
+    db: Session = Depends(get_db),
+):
+    """Cria uma automação por publicação, com um modelo comum.
+
+    Rota ANTES de `/automations/{automation_id}`: o FastAPI casa na ordem de
+    declaração e "lote" seria capturado como id, devolvendo 422 em vez de criar.
+    """
+    return await _automacoes(db).criar_em_lote(current_user.id, payload)
 
 
 @router.get("/automations/{automation_id}", response_model=InstagramAutomationResponse)

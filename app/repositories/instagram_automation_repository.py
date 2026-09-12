@@ -9,6 +9,7 @@ from app.models.instagram_automation import (
     AUTOMACAO_ATIVA,
     CONEXAO_ATIVA,
     DM_ENVIADO,
+    ESCOPO_POST_ESPECIFICO,
     InstagramAutomation,
     InstagramConnection,
     InstagramEvent,
@@ -117,14 +118,44 @@ class InstagramAutomationRepository:
         )
 
     def active_automations_for_connection(self, connection_id: int) -> List[InstagramAutomation]:
+        """Automações ativas da conta, em ordem ESTÁVEL.
+
+        O `order_by(id)` não é enfeite: o pipeline responde com a PRIMEIRA que
+        casa, e sem ordenação explícita o Postgres devolve na ordem que quiser.
+        Duas automações que casam com o mesmo comentário responderiam ora uma,
+        ora outra — bug que só aparece em produção e não reproduz.
+
+        A ordem por ESPECIFICIDADE (post escolhido ganha de "qualquer post") é
+        regra de negócio e mora no pipeline, não aqui.
+        """
         return (
             self.db.query(InstagramAutomation)
             .filter(
                 InstagramAutomation.connection_id == connection_id,
                 InstagramAutomation.status == AUTOMACAO_ATIVA,
             )
+            .order_by(InstagramAutomation.id)
             .all()
         )
+
+    def media_ids_com_automacao_ativa(self, connection_id: int) -> frozenset[str]:
+        """Posts que já têm automação ATIVA apontando para eles.
+
+        Só escopo de post: `qualquer` não aponta para mídia nenhuma, e contá-lo
+        aqui marcaria as 283 publicações como cobertas — escondendo exatamente
+        o buraco que este campo existe para mostrar.
+        """
+        linhas = (
+            self.db.query(InstagramAutomation.media_id)
+            .filter(
+                InstagramAutomation.connection_id == connection_id,
+                InstagramAutomation.status == AUTOMACAO_ATIVA,
+                InstagramAutomation.escopo == ESCOPO_POST_ESPECIFICO,
+                InstagramAutomation.media_id.isnot(None),
+            )
+            .all()
+        )
+        return frozenset(str(l[0]) for l in linhas if l[0])
 
     def add_automation(self, automation: InstagramAutomation) -> InstagramAutomation:
         self.db.add(automation)
