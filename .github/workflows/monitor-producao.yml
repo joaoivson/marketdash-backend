@@ -94,9 +94,44 @@ jobs:
           fi
 
           # --- Frontend ---
-          front=$(curl -s --max-time 25 -o /dev/null -w '%{http_code}' https://marketdash.com.br/)
+          #
+          # Checar só o código HTTP aqui não vale quase nada: é uma SPA com
+          # fallback, então QUALQUER rota devolve 200 servindo o index.html —
+          # inclusive uma rota que não existe. Se o bundle sumir, o pedido do
+          # .js volta 200 com o HTML dentro, e um teste de status não vê nada.
+          # Por isso: o HTML precisa ter a âncora do React e apontar um bundle,
+          # e o bundle precisa voltar como JavaScript de verdade.
+          front=$(curl -s --max-time 25 -o /tmp/index.html -w '%{http_code}' https://marketdash.com.br/)
           echo "frontend: http=$front"
-          [ "$front" = "200" ] || falhas="${falhas}- Frontend https://marketdash.com.br/ devolveu HTTP $front.\n"
+          if [ "$front" != "200" ]; then
+            falhas="${falhas}- Frontend https://marketdash.com.br/ devolveu HTTP $front.\n"
+          else
+            grep -q 'id="root"' /tmp/index.html \
+              || falhas="${falhas}- HTML do frontend não tem \`<div id=\"root\">\` — não é a nossa aplicação que está sendo servida.\n"
+
+            bundle=$(grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' /tmp/index.html | head -1)
+            if [ -z "$bundle" ]; then
+              falhas="${falhas}- HTML do frontend não referencia nenhum bundle \`/assets/index-*.js\`. Build quebrado ou index errado no ar.\n"
+            else
+              echo "bundle servido: $bundle"
+              bmeta=$(curl -s --max-time 40 -o /dev/null \
+                        -w '%{http_code} %{size_download} %{content_type}' \
+                        "https://marketdash.com.br$bundle")
+              bcod=$(echo "$bmeta" | cut -d' ' -f1)
+              btam=$(echo "$bmeta" | cut -d' ' -f2)
+              btipo=$(echo "$bmeta" | cut -d' ' -f3)
+              echo "bundle: http=$bcod tamanho=${btam}B tipo=$btipo"
+
+              case "$btipo" in
+                *javascript*|*ecmascript*) ;;
+                *) falhas="${falhas}- O bundle \`$bundle\` voltou como \`$btipo\`, não JavaScript. Com o fallback da SPA isso significa que o arquivo NÃO existe e o servidor devolveu o index.html no lugar — tela branca para quem abrir.\n" ;;
+              esac
+              # O index.html tem ~3,6 KB; o bundle real passa de 2 MB. Qualquer
+              # coisa abaixo de 100 KB não é o bundle.
+              [ "${btam:-0}" -gt 102400 ] \
+                || falhas="${falhas}- O bundle \`$bundle\` veio com apenas ${btam} bytes (esperado > 2 MB).\n"
+            fi
+          fi
 
           if [ -n "$falhas" ]; then
             echo "FALHOU"
