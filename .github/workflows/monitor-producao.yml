@@ -1,0 +1,144 @@
+name: Monitor Produção
+
+# Por que este workflow existe.
+#
+# Em 12/09/2026 a API de produção ficou ~20h inalcançável e ninguém soube até
+# uma aluna reclamar que não conseguia logar. O container estava
+# `running:healthy` o tempo todo: o HEALTHCHECK do Dockerfile roda
+# `curl localhost:8000/health` DE DENTRO do container, e por dentro a aplicação
+# estava mesmo saudável. O que quebrou foi a rota do Traefik — de fora.
+#
+# Nenhum healthcheck interno (Docker ou Coolify) pega esse modo de falha. Só um
+# probe externo pega. E ele precisa rodar FORA do VPS: um monitor hospedado no
+# próprio servidor morre junto com o que deveria vigiar. Por isso ele vive aqui,
+# na infra do GitHub.
+#
+# O teste NÃO é "respondeu 200". O Traefik sem rota devolve 404 em text/plain e
+# um proxy mal configurado pode devolver 200 de outra coisa. O teste é
+# "respondeu JSON da NOSSA aplicação, com status healthy" — por isso o corpo é
+# inspecionado, não só o código HTTP.
+
+on:
+  schedule:
+    # A cada 10 min. O agendador do GitHub é best-effort e atrasa sob carga;
+    # não adianta pedir 1 min. Para detecção mais apertada, um serviço externo
+    # de uptime (UptimeRobot/Better Stack) complementa este workflow.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+# Duas execuções simultâneas só gerariam issues duplicadas.
+concurrency:
+  group: monitor-producao
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  probe:
+    name: Sondar produção de fora
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checar API e frontend
+        id: probe
+        run: |
+          set +e
+          falhas=""
+
+          # --- API: precisa ser JSON da nossa app, não o 404 do proxy ---
+          # Corpo vai para arquivo e metadados para variáveis: fatiar a saída
+          # com head/tail quebra quando o corpo tem número de linhas variável.
+          meta=$(curl -s --max-time 25 -o /tmp/health.txt \
+                   -w '%{http_code} %{time_total} %{content_type}' \
+                   https://api.marketdash.com.br/health)
+          codigo=$(echo "$meta" | cut -d' ' -f1)
+          tempo=$(echo "$meta" | cut -d' ' -f2)
+          tipo=$(echo "$meta" | cut -d' ' -f3)
+          json=$(head -c 500 /tmp/health.txt)
+
+          echo "api: http=$codigo tempo=${tempo}s tipo=$tipo"
+          echo "corpo: $json"
+
+          if [ "$codigo" != "200" ]; then
+            falhas="${falhas}- API /health devolveu HTTP $codigo (esperado 200). Corpo: \`$(printf '%s' "$json" | head -c 200)\`\n"
+            # O 404 em text/plain é a assinatura exata do Traefik sem rota.
+            case "$tipo" in
+              text/plain*) falhas="${falhas}  - Content-Type \`text/plain\` com 404: é o **Traefik sem rota**, não o FastAPI. O container provavelmente está de pé mas fora do roteamento — ver runbook.\n" ;;
+            esac
+          elif ! printf '%s' "$json" | grep -q '"status"[[:space:]]*:[[:space:]]*"healthy"'; then
+            falhas="${falhas}- API /health devolveu 200 mas sem \`\"status\":\"healthy\"\`. Corpo: \`$(printf '%s' "$json" | head -c 200)\`\n"
+          else
+            # Banco e Redis aparecem no mesmo payload; degradação parcial conta.
+            printf '%s' "$json" | grep -q '"database"[[:space:]]*:[[:space:]]*"connected"' \
+              || falhas="${falhas}- API respondeu, mas o **banco** não está \`connected\`.\n"
+            printf '%s' "$json" | grep -q '"redis"[[:space:]]*:[[:space:]]*"connected"' \
+              || falhas="${falhas}- API respondeu, mas o **Redis** não está \`connected\`.\n"
+          fi
+
+          # Lentidão é o aviso ANTES do apagão: sob throttling de CPU da
+          # Hostinger o /health sai de ~0,12s para vários segundos.
+          lento=$(awk -v t="$tempo" 'BEGIN { print (t > 3.0) ? "sim" : "nao" }')
+          if [ "$lento" = "sim" ]; then
+            falhas="${falhas}- API /health levou **${tempo}s** (normal ~0,12s). Sintoma de CPU saturada/limitada no VPS.\n"
+          fi
+
+          # --- CORS: o sintoma que a aluna vê é o preflight sem header ---
+          acao=$(curl -s --max-time 25 -o /dev/null -D - -X OPTIONS \
+                   https://api.marketdash.com.br/api/v1/auth/me \
+                   -H 'Origin: https://marketdash.com.br' \
+                   -H 'Access-Control-Request-Method: GET' \
+                   -H 'Access-Control-Request-Headers: authorization' \
+                 | grep -ci 'access-control-allow-origin')
+          if [ "$acao" = "0" ]; then
+            falhas="${falhas}- Preflight de \`/api/v1/auth/me\` voltou **sem \`Access-Control-Allow-Origin\`** — é exatamente o erro que o navegador mostra como \"Failed to fetch\" no login.\n"
+          fi
+
+          # --- Frontend ---
+          front=$(curl -s --max-time 25 -o /dev/null -w '%{http_code}' https://marketdash.com.br/)
+          echo "frontend: http=$front"
+          [ "$front" = "200" ] || falhas="${falhas}- Frontend https://marketdash.com.br/ devolveu HTTP $front.\n"
+
+          if [ -n "$falhas" ]; then
+            echo "FALHOU"
+            # printf "$falhas" NÃO serve: o relatório começa com "-" e o printf
+            # trata isso como opção, saindo vazio — alerta em branco é pior que
+            # alerta nenhum, porque parece que foi investigado.
+            { echo 'relatorio<<FIM'; printf '%b' "$falhas"; echo 'FIM'; } >> "$GITHUB_OUTPUT"
+            echo "ok=nao" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=sim" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abrir/atualizar issue de incidente
+        if: steps.probe.outputs.ok == 'nao'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELATORIO: ${{ steps.probe.outputs.relatorio }}
+        run: |
+          TITULO="🔴 Produção inacessível de fora"
+          # Uma issue por incidente, não uma a cada 10 min.
+          existente=$(gh issue list --state open --label incidente --search "$TITULO in:title" \
+                        --json number --jq '.[0].number' 2>/dev/null)
+
+          corpo=$(printf '%s\n\n**Detectado em:** %s UTC\n\n**O que falhou:**\n\n%b\n\n---\n\n**Primeiro comando do diagnóstico:**\n\n```bash\ncurl -s -i https://api.marketdash.com.br/health\n```\n\n- `404 page not found` em `text/plain` → é o **Traefik sem rota**. O container pode estar de pé e saudável. Corrigir com restart do container no Coolify.\n- `{"detail":"Not Found"}` em JSON → é o **FastAPI**, a app está no ar.\n\nControle: `curl -s https://api.hml.marketdash.com.br/health` usa o **mesmo** Traefik. hml 200 + prod 404 isola o problema no container de produção.\n\nRunbook completo: `.claude/memoria/STATUS-login-producao-fora.md`\n' \
+                    "Sonda externa (GitHub Actions) não conseguiu falar com a produção." \
+                    "$(date -u '+%d/%m/%Y %H:%M')" "$RELATORIO")
+
+          if [ -n "$existente" ] && [ "$existente" != "null" ]; then
+            gh issue comment "$existente" --body "$corpo"
+          else
+            gh issue create --title "$TITULO" --label incidente --body "$corpo" \
+              || gh issue create --title "$TITULO" --body "$corpo"
+          fi
+
+      - name: Fechar issue quando produção voltar
+        if: steps.probe.outputs.ok == 'sim'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh issue list --state open --label incidente \
+                --search "Produção inacessível de fora in:title" \
+                --json number --jq '.[0].number' 2>/dev/null)
+          if [ -n "$n" ] && [ "$n" != "null" ]; then
+            gh issue close "$n" --comment "✅ Sonda externa voltou a receber \`status: healthy\` de https://api.marketdash.com.br/health."
+          fi

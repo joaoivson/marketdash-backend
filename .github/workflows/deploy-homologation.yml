@@ -6,6 +6,7 @@ on:
       - develop
     paths-ignore:
       - '**.md'
+      - '.github/**'
       - '.gitignore'
       - 'README.md'
   # Redeploy sob demanda. Mudança de variável de ambiente no Coolify não
