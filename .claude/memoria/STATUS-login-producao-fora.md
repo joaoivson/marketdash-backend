@@ -345,13 +345,32 @@ Todo disparo fica entre duas esperas pela fila do Coolify, que é do SERVIDOR
 inteiro — é isso que cobre os dois repositórios, já que o `concurrency` do
 GitHub é por repo e não os enxerga um ao outro.
 
-## Custo, com número honesto
+## Custo — MEDIDO, e a minha estimativa estava errada
 
-Medido nos builds de 11/09: produção sai de ~11 para **~20 min**, homologação de
-~8 para **~17 min**, no pior caso. (Corrigi aqui o "~8 para ~12" que eu tinha
-estimado antes de olhar os tempos reais.) Na prática deve ficar bem abaixo:
-aqueles 505s e 683s foram medidos com cinco builds disputando 4 vCPU; sozinho
-cada build termina muito antes.
+Validei disparando um deploy real de homologação (run 34700145353, 14:44→14:52).
+A fila do Coolify foi observada de fora e teve **exatamente 1 build por vez**:
+
+| build | início | fim | duração |
+|---|---|---|---|
+| marketdash-backend-hml | 14:46:45 | 14:48:33 | 108s |
+| celery-hml | 14:48:33 | 14:50:26 | 113s |
+| celery-whatsapp-hml | 14:50:21 | 14:52:34 | 133s |
+
+**Serializado ficou MAIS RÁPIDO que paralelo**, não mais lento:
+
+| | 11/09 (5 em paralelo) | 12/09 (serializado) |
+|---|---|---|
+| durações | 237s, 278s, 501s | 108s, 113s, 133s |
+| tempo de parede | ~501s (8,4 min) | 354s (5,9 min) |
+| load average | CPU a 100%, throttle | 2,49 em 4 vCPU |
+
+A disputa por CPU estava deixando cada build 2 a 4× mais lento. Somar builds
+rápidos deu menos que esperar o mais lento de um lote que se atrapalha.
+
+⚠️ **Minhas duas estimativas anteriores estavam erradas:** primeiro "~8 → ~12
+min", depois "~11 → ~20 min". As duas assumiam que a duração de cada build era
+constante. Não é — ela depende da contenção. O número certo só apareceu
+medindo. Não estimar isso de novo por cálculo.
 
 ## Resíduo aceito
 
