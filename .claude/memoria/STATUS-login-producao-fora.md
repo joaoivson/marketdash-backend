@@ -320,3 +320,41 @@ container de pé e saudável — que produziu o 404.
 Dentro de UM push, os recursos ainda constroem em paralelo (o push da develop
 sozinho dispara 3 builds simultâneos). Serializar isso exigiria esperar entre
 cada disparo, o que alonga o deploy de ~8 para ~12 min.
+
+---
+
+# Serialização completa dos builds (12/09, 14h45)
+
+Fecha o último buraco: o `concurrency` separava push de push, mas dentro de UM
+push os recursos ainda construíam em paralelo (a develop sozinha dispara 3).
+
+| # | Etapa | O que está sendo feito | Quem | Código | API | Tela |
+|---|---|---|---|---|---|---|
+| 32 | Espera entre disparos (backend) | api → espera → worker → espera (prod); +celery/whatsapp (hml) | eu | ✅ | 🔄 validando com deploy real de hml | — |
+| 33 | Espera pré-disparo (backend) | cobre colisão com o repo do frontend | eu | ✅ | 🔄 idem | — |
+| 34 | Espera pré-disparo (frontend) | ponta simétrica; script com o mesmo sha256 | eu | ✅ | ✅ script testado ao vivo | — |
+| 35 | Cherry-pick nos 2 `main` | conflito do hml resolvido mantendo a versão da main | eu | ✅ | ✅ 4 branches atualizados | — |
+
+## Sequência final de um deploy
+
+**Produção (backend):** espera → api → espera → worker → espera
+**Homologação (backend):** espera → api → espera → celery → espera → whatsapp → espera
+**Frontend (os dois):** anota bundle → espera → dispara → confirma bundle novo
+
+Todo disparo fica entre duas esperas pela fila do Coolify, que é do SERVIDOR
+inteiro — é isso que cobre os dois repositórios, já que o `concurrency` do
+GitHub é por repo e não os enxerga um ao outro.
+
+## Custo, com número honesto
+
+Medido nos builds de 11/09: produção sai de ~11 para **~20 min**, homologação de
+~8 para **~17 min**, no pior caso. (Corrigi aqui o "~8 para ~12" que eu tinha
+estimado antes de olhar os tempos reais.) Na prática deve ficar bem abaixo:
+aqueles 505s e 683s foram medidos com cinco builds disputando 4 vCPU; sozinho
+cada build termina muito antes.
+
+## Resíduo aceito
+
+Duas corridas continuam teoricamente possíveis, ambas com janela de segundos:
+dois jobs de repos diferentes consultarem a fila vazia no mesmo instante. Não
+vale mais complexidade — o caso real eram builds sobrepostos por 11 minutos.
