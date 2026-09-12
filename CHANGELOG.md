@@ -11,6 +11,81 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-12 (Produção 16h fora do ar: o CORS que não era CORS)
+
+Infra e CI, sem mudança de código de aplicação e sem migration.
+
+Uma aluna não conseguia logar. O console mostrava erro de CORS em
+`api.marketdash.com.br/api/v1/auth/me` e a primeira suspeita foi Supabase. Não
+era nenhum dos dois.
+
+### O sintoma mentia
+
+`GET /health` devolvia `404 page not found` em `text/plain` — em TODA rota. Esse
+é o 404 default do **Traefik**; o FastAPI devolveria JSON `{"detail":"Not
+Found"}`. Sem rota não existe resposta da aplicação, logo não existe header de
+CORS, e o navegador só sabe dizer "faltou Access-Control-Allow-Origin".
+
+O detector que separa as duas coisas em um comando, e que vale para qualquer
+incidente desses:
+
+```bash
+curl -s -i https://api.marketdash.com.br/health
+```
+
+`text/plain` → é o proxy. JSON → é a aplicação. E `api.hml.marketdash.com.br`
+serve de controle: usa o **mesmo** Traefik, então hml 200 + prod 404 isola o
+problema no container de produção.
+
+### A causa raiz, achada no banco do Coolify
+
+`develop` e `main` foram empurradas com **21 segundos de diferença** em 11/09.
+Cada push deploya vários recursos, e o Coolify constrói no mesmo VPS que serve
+produção: **cinco `docker build` começaram em 17 segundos** (21:12:30 a
+21:12:47), disputando 4 vCPU por onze minutos. A Hostinger aplicou "CPU
+limitation" e, com o teto reduzido, a carga rotineira passou a saturar a fração
+liberada — 100% contínuo que não se recupera sozinho, até alguém remover no
+painel.
+
+Descartados com evidência, não por palpite: deploy travado (os logs mostram
+conclusão em 8m25s, container novo saudável), processo em loop (recebidas ≈
+concluídas em toda hora), sync Shopee (o pico das 04:00 é o full sync agendado,
+cron jobid 91), webhook do Instagram (1-7 entregas/hora) e o próprio Traefik.
+
+### O que passou a existir
+
+**Sonda externa** (`monitor-producao.yml`, a cada 10 min na infra do GitHub —
+monitor hospedado no VPS morre junto com o que vigia). O healthcheck do
+Dockerfile dizia `healthy` o tempo todo e estava CERTO: ele testa
+`localhost:8000/health` por dentro, e por dentro a app estava sã. Nenhum
+healthcheck interno enxerga rota de proxy quebrada. A sonda lê o **corpo**
+atrás de `"status":"healthy"`, avisa quando o Content-Type é `text/plain` que o
+problema é o proxy, e alerta em resposta acima de 3s — o aviso ANTES do apagão.
+
+**Um build por vez no VPS.** Grupo de `concurrency` entre os deploys de cada
+repo, mais espera pela fila do Coolify antes e depois de cada disparo. A fila é
+do servidor inteiro, e é isso que cobre os dois repositórios — o `concurrency`
+do GitHub é por repo e não enxerga o outro.
+
+Medido num deploy real de hml: **serializar ficou mais RÁPIDO** — 108s + 113s +
+133s = 354s de parede, contra ~501s do lote paralelo de 11/09, com load average
+2,49 em vez de CPU a 100%. A contenção deixava cada build 2 a 4× mais lento.
+
+**Prova de que o bundle novo subiu.** "Webhook aceito" nunca foi "código no ar":
+três vezes registradas o ambiente seguiu servindo o bundle antigo em silêncio. O
+`validate` já roda `npm run build`, então publica o hash do bundle deste commit
+e o deploy espera o site trocar. E a sonda passou a checar o conteúdo do
+frontend, porque a SPA devolve 200 para qualquer rota — se o bundle sumir, o
+pedido do `.js` volta 200 com HTML dentro e um teste de status não vê nada.
+
+**Teto de CPU para homologação** (2,0 das 4 vCPU) e `.github/**` no
+paths-ignore, para mudança de CI não rebuildar o ambiente.
+
+### Adiado por decisão
+
+Separar homologação para um VPS próprio. Os dois ambientes seguem dividindo 4
+vCPU em runtime; a serialização cobre o gatilho, não a convivência.
+
 ## [Não versionado] - 2026-09-12 (Instagram: cobrir centenas de publicações deixa de ser inviável)
 
 Backend e frontend, sem migration. É a resposta ao que o diagnóstico de 11/09
