@@ -175,6 +175,18 @@ class InstagramAutomation(Base):
             return True
         return bool(self.media_id) and str(self.media_id) == str(media_id)
 
+    @property
+    def especificidade(self) -> int:
+        """Quão específica é a automação: 1 = post/story escolhido, 0 = qualquer.
+
+        Serve para desempatar quando mais de uma automação cobre o mesmo
+        comentário. A escolhida a dedo para AQUELE post sempre ganha da que vale
+        para a conta inteira — senão uma automação "qualquer post" com a palavra
+        "quero" engole os comentários de todas as específicas, e a aluna vê o
+        link errado sair para a cliente dela.
+        """
+        return 1 if self.escopo in (ESCOPO_POST_ESPECIFICO, ESCOPO_STORY_ESPECIFICO) else 0
+
     def cobre_story(self, story_id: str) -> bool:
         """A automação vale para este story? (media_id guarda o id do story)"""
         if self.escopo == ESCOPO_STORY_QUALQUER:

@@ -111,6 +111,20 @@ def dentro_da_janela(comment_ts: Optional[datetime], agora: Optional[datetime] =
     return (agora - comment_ts) < timedelta(days=JANELA_PRIVATE_REPLY_DIAS)
 
 
+def ordenar_por_especificidade(
+    automacoes: list[InstagramAutomation],
+) -> list[InstagramAutomation]:
+    """Mais específica primeiro; entre iguais, a mais antiga.
+
+    `sorted` é estável, então o desempate por `id` preserva a ordem que o
+    repository já garante — e o resultado é o mesmo em toda execução. Duas
+    automações que casam com o mesmo comentário precisam responder SEMPRE a
+    mesma, senão o bug não reproduz e a aluna descreve "às vezes vem o link
+    errado".
+    """
+    return sorted(automacoes, key=lambda a: (-a.especificidade, a.id or 0))
+
+
 def automacao_dispara(automacao: InstagramAutomation, texto: str) -> bool:
     """A automação reage a este comentário?"""
     if automacao.trigger_tipo == TRIGGER_QUALQUER:
@@ -189,6 +203,11 @@ class InstagramCommentPipeline:
 
         # 4) Matching. A primeira que casar é a que responde — a Meta só permite
         #    uma private reply por comentário, então não faz sentido tentar duas.
+        #    Por isso a ORDEM importa: a automação escolhida para AQUELE post
+        #    ganha da que vale para qualquer post. Sem isso, uma automação
+        #    "qualquer post" com a palavra "quero" engole os comentários de
+        #    todas as específicas e manda o link errado para a cliente.
+        candidatas = ordenar_por_especificidade(candidatas)
         automacao = next((a for a in candidatas if automacao_dispara(a, texto)), None)
         if automacao is None:
             self._registrar(
@@ -312,7 +331,7 @@ class InstagramCommentPipeline:
             return {"status": "duplicado", "motivo": "mid já processado"}
 
         ativas = self.repo.active_automations_for_connection(conexao.id)
-        candidatas = [a for a in ativas if a.cobre_story(story_id)]
+        candidatas = ordenar_por_especificidade([a for a in ativas if a.cobre_story(story_id)])
         if not candidatas:
             return {"status": "ignorado", "motivo": "nenhuma automação cobre este story"}
 
