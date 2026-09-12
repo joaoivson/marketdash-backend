@@ -1502,3 +1502,75 @@ descarte na porta vira **uma linha agregada**, não uma por DM, para não guarda
 metadado de conversa privada sem necessidade; e a gravação roda em
 `run_in_threadpool`, porque é INSERT síncrono no caminho quente de um endpoint
 que a Meta desativa se demorar.
+
+---
+
+## 12/09/2026 — Cobrir 278 posts, e o bug que só apareceria no primeiro dia de uso
+
+Continuação direta de 11/09. Com o diagnóstico fechado ("a automação cobre 9 de
+278 posts"), a pergunta virou o desenho da solução — e a medição decidiu:
+
+```
+383 comentários de terceiros em 283 posts
+  casam com a PALAVRA do post ....  253  (66,1%)   ← Algodão, Mamadeira, Câmera
+  genéricos ('quero', 'link') ....  104  (27,2%)
+  outros .........................   26  ( 6,8%)
+```
+
+Dois terços escrevem a palavra única do post. Isso quase levou a "uma automação
+por PALAVRA, válida em qualquer post" — que parecia elegante e **não resolve
+nada**: cada post vende um produto diferente com link diferente, então o número
+de automações continua sendo o número de produtos. O problema é irredutível; o
+que dá para atacar é o CUSTO de criar cada uma.
+
+### O bug latente que a investigação destampou
+
+`active_automations_for_connection` fazia `.all()` **sem `ORDER BY`**, e o
+pipeline responde com a PRIMEIRA que casa. No instante em que a aluna criasse
+uma automação "qualquer post" com a palavra "quero" — o caminho natural, já que
+27% comentam isso — ela roubaria os comentários das específicas, **de forma não
+determinística**. O sintoma seria "às vezes vem o link errado": não reproduz,
+não aparece no log, e a culpa cairia na Meta.
+
+Não era uma feature nova, era um bug esperando o gatilho. `ORDER BY id` no
+repository (estabilidade) + ordenação por especificidade no pipeline (regra de
+negócio, e por isso não no SQL).
+
+### A palavra estava escrita na legenda o tempo todo
+
+`Comente " ALGODÃO " para receber o link`. 260 de 283 legendas (92%), **nenhuma
+extração errada**. O desenho é governado por uma assimetria: não sugerir custa a
+aluna digitar; sugerir errado manda o link errado para a cliente dela. Daí
+devolver `None` na dúvida, e recusar "quero"/"link" — 16 das 18 recusas são
+legendas que pedem literalmente o genérico, e todas as recusas estão certas.
+
+Dois defeitos que só os testes pegaram, e o melhor deles: `que` estava na lista
+de delimitadores e casa com o começo de **QUERO**, então `Comente " EU QUERO "`
+extraía **"EU"**. Um `\b` resolveu. O outro: sem aspas, a preposição
+delimitadora pode estar longe e arrastar meia frase — daí o teto de 2 palavras
+sem aspas contra 4 com aspas.
+
+### O que a validação na tela derrubou
+
+A tela de lote nasceu com uma barra de ação `sticky bottom-*`. Dois defeitos, e
+**`tsc` verde + lint verde + 1002 testes verdes não diziam nada sobre nenhum**:
+
+1. **O sticky não engatava.** A barra ficava no fim de uma página de ~28 mil px
+   (118 publicações no acervo de teste) — o botão "Criar" não existia para quem
+   não rolasse tudo. Medido no Playwright: `boundingClientRect().bottom = 27894`
+   contra um viewport de 844.
+2. Se engatasse como `fixed bottom-0`, **cobriria o MobileBottomNav** — a
+   navegação principal no celular.
+
+Virou duas linhas de ação em fluxo normal, topo e fim, que é o padrão que o
+painel já usa. Revalidado: botão na primeira dobra em 390px (y=137) e 1440px
+(y=113). A lição é a de sempre aqui, e ela se repetiu inteira: **a tela é a
+única coisa que fala sobre a tela**.
+
+### Uma correção minha de rota
+
+Escrevi um teste afirmando que um item sem palavras seria pulado no lote. Ele
+falhou — e o **teste** é que estava errado: com `palavras_comuns` preenchidas o
+item fica válido, que é justamente o desenho (é assim que os 27% que comentam
+"quero" passam a ser atendidos). Ajustei o cenário para uma invalidez real (item
+sem link) e acrescentei o contraponto explícito.

@@ -11,6 +11,75 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-12 (Instagram: cobrir centenas de publicações deixa de ser inviável)
+
+Backend e frontend, sem migration. É a resposta ao que o diagnóstico de 11/09
+achou: a automação nunca esteve quebrada — ela cobria **9 de 278 posts** que
+pedem "Comente X".
+
+### O bug que ninguém tinha visto ainda
+
+`active_automations_for_connection` fazia `.all()` **sem `ORDER BY`**, e o
+pipeline responde com a PRIMEIRA automação que casa. No instante em que a aluna
+criasse uma automação "vale para qualquer post" com a palavra "quero" — que é o
+caminho natural, já que 27% das pessoas comentam isso — ela passaria a roubar os
+comentários das automações específicas. E de forma **não determinística**, porque
+a ordem vinha do Postgres: o sintoma seria "às vezes vem o link errado", que não
+reproduz e não se acha no log.
+
+Agora a ordem é explícita em dois lugares, de propósito: `ORDER BY id` no
+repository (estabilidade) e ordenação por **especificidade** no pipeline (regra
+de negócio). Post escolhido ganha de "qualquer post"; entre iguais, vence a mais
+antiga, sempre.
+
+### A palavra sai da legenda
+
+`Comente " ALGODÃO " para receber o link` — a palavra-chave já está escrita na
+legenda de todo post. Medido contra as 283 legendas reais da conta: **260
+sugestões (92%), nenhuma errada**.
+
+A assimetria que governa o desenho: **não sugerir** custa a aluna digitar;
+**sugerir errado** cria uma automação que manda o link errado para a cliente
+dela. Por isso a função devolve `None` na dúvida, e recusa "quero"/"link", que
+não identificam o post — são 16 das 18 recusas, todas corretas.
+
+Dois padrões com tolerância diferente: com aspas até 4 palavras (a aspa
+delimita), sem aspas até 2 (quem delimita é a preposição, e ela pode estar
+longe). E o `\b` depois dos delimitadores não é decorativo — sem ele o `que`
+casava com o começo de "QUERO" e `Comente " EU QUERO "` extraía "EU".
+
+### Criar em lote
+
+`POST /instagram/automations/lote` separa **modelo** × **itens**: texto da DM,
+resposta pública e palavras genéricas são iguais em todo post; só a palavra do
+produto e o link mudam. Pedir o modelo 269 vezes é o que tornava a tela inviável.
+
+- Post já coberto é **pulado**, não duplicado — duas automações ativas no mesmo
+  post disputariam o mesmo comentário, e a Meta só aceita uma private reply.
+- Item inválido **não derruba o lote**: volta em `puladas` com o motivo.
+- A resposta traz **sempre as duas listas**. Devolver só o total criado esconde
+  o post que continua sem responder.
+
+`/media` passa a devolver `tem_automacao` e `palavra_sugerida` — sem isso o
+buraco não é visível na tela.
+
+### Tela: /dashboard/automacoes/em-lote
+
+Cabeçalho com o diagnóstico ("0 de 118 publicações já respondem comentário"), o
+modelo comum em cima e, por publicação, só palavra + link.
+
+**O que a validação na tela derrubou:** a primeira versão tinha uma barra de
+ação `sticky bottom-*`. Ela não engatava — ficava no fim de uma página de ~28
+mil px, então o botão "Criar" simplesmente não existia para quem não rolasse
+tudo. E, se engatasse como `fixed bottom-0`, cobriria o MobileBottomNav, que é a
+navegação principal no celular. Virou duas linhas de ação em fluxo normal (topo
+e fim), que é o padrão que o resto do painel já usa. `tsc` e lint verdes não
+diziam nada sobre isso.
+
+### Testes
+
+53 casos novos (precedência, extração da legenda, lote). Suíte: 1002 passed.
+
 ## [Não versionado] - 2026-09-11 (Instagram: o webhook passa a deixar rastro do que chegou)
 
 Backend, com migration `083`. Nasceu de um diagnóstico que não pôde ser feito.
