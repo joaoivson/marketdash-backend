@@ -88,6 +88,23 @@ vCPU em runtime; a serialização cobre o gatilho, não a convivência.
 
 ## [Não versionado] - 2026-09-12 (Instagram: cobrir centenas de publicações deixa de ser inviável)
 
+> **Em produção desde 14/09/2026**, por cherry-pick: backend `564c162` →
+> `f2edbfb`, frontend `358361b` → `f0eacc0`. Sem migration. O merge futuro da
+> `develop` vai reconflitar nesses arquivos — resolver mantendo o lado da
+> develop (ver runbook §8.5).
+>
+> **O que disparou a promoção:** o ledger da 083 respondeu a investigação de
+> 13/09 com número. Em 2,5 dias chegaram **185 comentários** ao servidor; 4
+> foram respondidos e **146 descartados por "nenhuma automação cobre este
+> post"**, espalhados por 26 publicações. A perda estava acelerando — 17 em
+> 11/09, 51 em 12/09, 78 em 13/09.
+>
+> Isso encerrou as hipóteses de plataforma (perda de Advanced Access, throttle
+> da Meta): a Meta entrega. E revelou a causa raiz mais específica — **ela
+> republica o mesmo produto e a automação fica só numa das cópias**. Existem
+> dois posts pedindo ALGODÃO e dois pedindo AXILIA, com a automação na cópia
+> que quase não recebe comentário.
+
 Backend e frontend, sem migration. É a resposta ao que o diagnóstico de 11/09
 achou: a automação nunca esteve quebrada — ela cobria **9 de 278 posts** que
 pedem "Comente X".

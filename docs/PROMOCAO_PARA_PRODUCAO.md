@@ -754,6 +754,36 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > e o `Settings` de `main` recusa extras — copie o `.env` sem elas, senão o
 > pytest morre na coleção com `ValidationError` que parece erro do código.
 
+> ⚠️ **Dois cherry-picks em `main` na rodada de Instagram (11-14/09/2026).**
+>
+> | assunto | develop | main | migration |
+> |---|---|---|---|
+> | Ledger de entrega do webhook (083) | `600557c` | `d3e5600` | **083, aplicada em produção antes do push** |
+> | Cobertura: precedência, palavra da legenda, lote | `564c162` | `f2edbfb` | — |
+> | Cobertura: tela `/automacoes/em-lote` (frontend) | `358361b` | `f0eacc0` | — |
+>
+> Nos três, só código/migration/testes foram no cherry-pick — CHANGELOG,
+> runbook e memória ficaram na develop de propósito (o `main` estava ~112
+> commits atrás e levar doc junto criaria conflito pior). O merge futuro **vai**
+> reconflitar; resolver **mantendo o lado da develop**.
+>
+> Espere conflito em: `app/api/webhooks/instagram.py`,
+> `app/models/instagram_automation.py`, `app/models/__init__.py`,
+> `app/tasks/instagram_tasks.py`, `app/services/instagram_comment_pipeline.py`,
+> `app/services/instagram_automation_service.py`,
+> `app/repositories/instagram_automation_repository.py`,
+> `app/schemas/instagram_automation.py`, `app/utils/text_normalize.py`,
+> `app/api/v1/routes/instagram.py` — e, no frontend,
+> `src/app/routes/app-routes.tsx`, `src/features/dashboard/pages/Automacoes.tsx`,
+> `src/services/instagram.service.ts`, `src/shared/types/instagram.ts`.
+>
+> ⚠️ **A 083 já está aplicada em produção.** Reaplicar é inofensivo
+> (`CREATE TABLE IF NOT EXISTS`), mas ela **não** deve entrar de novo na lista
+> do passo 3 como se fosse pendente — ver o inventário em §8.1, linha 19.
+>
+> Suítes rodadas **no worktree de `main`**, não na develop: 646 no cherry-pick
+> da 083 e 694 no da cobertura, ambas sem falha.
+
 > ⚠️ **Mais quatro commits em `main` por cherry-pick (08/09/2026)** — tradução
 > do navegador e Meus Links em lista, **sem migration**:
 >
