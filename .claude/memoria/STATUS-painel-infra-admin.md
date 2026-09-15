@@ -133,3 +133,57 @@ exata de 11/09. O certo é remover a limitação no painel da Hostinger primeiro
 - Janela das métricas: **12 h**, não 1 h — com uma hora o degrau some e sobra
   um número alto sem história.
 - Bloco `ct_set_limits` com explicação do porquê ele não se resolve sozinho.
+
+---
+
+# Rodada 3 (15/09, noite) — subiu para produção, e o que a subida ensinou
+
+O João colou os tokens, removeu a limitação da Hostinger (CPU voltou a 108 ms
+de latência, de 490-660 ms) e autorizou subir **só esta feature**.
+
+| # | Etapa | O que está sendo feito | Quem | Código | API | Tela |
+|---|---|---|---|---|---|---|
+| 23 | Cherry-pick nos 2 `main` | 131 commits do backend e 73 do frontend NÃO foram junto | eu | ✅ | ✅ boot com 121 endpoints, sem módulo de develop vazando | — |
+| 24 | Deploy backend produção | api + worker | eu | ✅ | ✅ `/admin/infra` no openapi de produção | — |
+| 25 | Tokens no ambiente de produção | COOLIFY_API_TOKEN_GET + HOSTINGER_API_TOKEN | eu | ✅ | ✅ gravados e lidos | — |
+| 26 | Deploy frontend produção | bundle novo confirmado | eu | ✅ | ✅ `Infraestrutura` no bundle servido | — |
+| 27 | **Bug achado na tela de produção** | `COOLIFY_URL` colide com a variável que o Coolify injeta | eu | ✅ | ✅ | ✅ bloco vazio → 10 recursos |
+| 28 | Deploy da correção **falhou** | build morreu no `pip install` (exit 255) com a VPS estrangulada | eu | ✅ | ✅ rollback do Coolify manteve produção no ar | — |
+| 29 | Redisparo pela API do Coolify | `status: finished` em 10min53 | eu | ✅ | ✅ | ✅ |
+| 30 | Validação final em produção | 10 linhas × 10 recursos da API | eu | ✅ | ✅ | ✅ 1440 e 390, sem rolagem horizontal |
+| 31 | Alerta por WhatsApp (pedido novo) | endpoint em hml + sonda chama | eu | ✅ | ✅ entregue nos 2 números | ✅ print do João |
+| 32 | Texto do alerta da Hostinger corrigido | "mexeu nos limites", não "aplicou limitação" | eu | ✅ | — | ⚠️ **falta subir** |
+
+**Pendência da linha 32:** o ajuste de texto está commitado na `develop` dos
+dois repos e **não** foi para produção — subir custa 3 builds numa VPS que
+segue com CPU em 82%. Vai junto do próximo deploy.
+
+## O que a subida ensinou (e que nenhum teste local pegaria)
+
+1. **O Coolify injeta `COOLIFY_URL` em todo container que sobe**, com o FQDN da
+   própria aplicação. O painel passou a consultar
+   `https://api.marketdash.com.br/api/v1/applications` — ele mesmo — e colheu
+   404 com o bloco inteiro vazio. Local e hml não pegariam: local tem a
+   variável explícita no compose. Renomeado para `COOLIFY_API_URL`, com teste
+   de regressão.
+2. **Declarar a env explicitamente NÃO basta sem redeploy.** Tentei consertar
+   sem build gravando `COOLIFY_URL` na app e dando `restart` — o container
+   voltou com o env antigo. Restart não recarrega env: só redeploy.
+3. **CI verde ≠ deploy feito, de novo.** O job "Deploy to Coolify" marcou
+   `success` com todos os passos verdes enquanto o deployment do Coolify
+   terminou em `failed` — o build morreu no meio do `pip install` (exit 255)
+   com a VPS estrangulada. Quem contou a verdade foi
+   `GET /deployments/<uuid>` → `status: failed`, e o marcador real foi
+   `last_online_at` do container (20:37, do deploy ANTERIOR).
+4. **O rollback do Coolify funciona:** produção seguiu no ar com o container
+   antigo durante todo o episódio.
+
+## Estado da CPU ao fim da rodada
+
+Continua **alta e sem causa identificada**: 82% na amostra das 21:20 UTC, com
+degrau de ~9% para 85%+ às 12:50 BRT, sem variação de rede nem de memória. A
+Hostinger registrou `ct_set_limits` às 19:01, 20:01 e 21:01 UTC. O uptime da
+VPS zerou às 20:19 UTC (reinício do João ao remover a limitação).
+
+**O que falta para fechar isso:** `docker stats` no host — SSH segue bloqueado
+para mim pelo classificador do Claude Code.

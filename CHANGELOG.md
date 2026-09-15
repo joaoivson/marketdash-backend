@@ -83,6 +83,31 @@ só dava para saber pelo painel ou pelo e-mail deles. Agora grita na tela.
 O token usado é o **read-only** (`COOLIFY_API_TOKEN_GET`); `COOLIFY_TOKEN`, que
 é root, fica só de fallback.
 
+⚠️ A variável da URL chama-se `COOLIFY_API_URL` e **não pode** voltar a ser
+`COOLIFY_URL`: o próprio Coolify injeta esse nome em todo container que sobe,
+com o FQDN da aplicação. Em produção isso fez o painel consultar a si mesmo e
+colher 404 — achado olhando a tela de produção, minutos depois do deploy.
+
+### Aviso por WhatsApp quando a produção cai
+
+Pedido do João: mensagem direta para dois contatos, enviada pelo número do
+suporte, **só** para queda de produção. Quem detecta é a sonda externa (GitHub
+Actions); quem envia é a API de **homologação**, e não por acaso — uma
+aplicação caída não avisa que caiu. hml é outro container, com outro banco e
+outro worker, e é onde o WhatsApp (WAHA) está conectado.
+
+A deduplicação é parte do desenho: a sonda passa a cada ~10 min e uma queda de
+3 h viraria 18 mensagens iguais. Chega **uma** mensagem quando cai e **uma**
+quando volta, com a duração. O caminho feliz nunca custa mensagem.
+
+Limite honesto: hml roda no mesmo VPS. Se a máquina inteira cair, o aviso não
+sai — cobrir isso exige um serviço de uptime externo.
+
+Detalhe que só apareceu no teste real: os dois números **não** recebem no
+formato de 13 dígitos. O WhatsApp entrega boa parte da base brasileira no
+formato histórico, sem o nono dígito (1.752 de 2.499 medidos em homologação); o
+envio tenta as duas formas.
+
 ### Correção: a sonda de produção detectava e não avisava
 
 Em 15/09 às 12:13 a produção ficou **25 segundos** sem responder (`/health` em
