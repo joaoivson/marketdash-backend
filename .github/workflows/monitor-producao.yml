@@ -161,6 +161,56 @@ jobs:
             echo "ok=sim" >> "$GITHUB_OUTPUT"
           fi
 
+      # ── WhatsApp para o João e o suporte ────────────────────────────────
+      #
+      # A issue do GitHub é registro; quem acorda alguém é o WhatsApp. O envio
+      # NÃO é feito aqui: o WAHA não é alcançável de fora (o host sslip.io
+      # devolve 404 no https), então quem manda é a API de HOMOLOGAÇÃO, que
+      # tem a sessão do suporte conectada e é outro container — em 11/09 hml
+      # respondeu 200 durante as 20 h em que produção esteve fora.
+      #
+      # ⚠️ O limite honesto: hml roda no MESMO VPS. Se a máquina inteira cair,
+      # este aviso não sai. Cobrir isso exige um serviço de uptime externo.
+      #
+      # `|| true` no curl: alerta que não sai não pode pintar a sonda de
+      # vermelho e escondê-la — foi assim que o alerta de 15/09 se perdeu.
+      - name: Avisar no WhatsApp que a produção caiu
+        if: steps.probe.outputs.ok == 'nao'
+        env:
+          BASE: ${{ secrets.ALERTA_API_BASE }}
+          SEGREDO: ${{ secrets.CRON_SECRET }}
+          RELATORIO: ${{ steps.probe.outputs.relatorio }}
+        run: |
+          if [ -z "$BASE" ] || [ -z "$SEGREDO" ]; then
+            echo "::warning::ALERTA_API_BASE/CRON_SECRET ausentes — WhatsApp não enviado."
+            exit 0
+          fi
+          corpo=$(jq -nc --arg d "$RELATORIO" '{estado:"caiu", detalhe:$d}')
+          resposta=$(curl -s -m 25 -X POST "$BASE/api/v1/internal/alertas/producao" \
+                       -H "Authorization: Bearer $SEGREDO" \
+                       -H "Content-Type: application/json" \
+                       -d "$corpo" || true)
+          echo "resposta do alerta: ${resposta:-<vazia>}"
+
+      - name: Avisar no WhatsApp que a produção voltou
+        if: steps.probe.outputs.ok == 'sim'
+        env:
+          BASE: ${{ secrets.ALERTA_API_BASE }}
+          SEGREDO: ${{ secrets.CRON_SECRET }}
+        run: |
+          # Roda no caminho FELIZ, a cada execução. Só vira mensagem se havia
+          # um incidente aberto — a deduplicação é do lado da API.
+          # `[ ... ] || [ ... ] && exit 0` PARECE certo e quebra: com as duas
+          # variáveis presentes o encadeamento sai não-zero e, sob `bash -e`,
+          # derruba o step no caminho FELIZ. É o mesmo defeito que já pintou
+          # esta sonda de vermelho com produção saudável.
+          if [ -z "$BASE" ] || [ -z "$SEGREDO" ]; then exit 0; fi
+          resposta=$(curl -s -m 25 -X POST "$BASE/api/v1/internal/alertas/producao" \
+                       -H "Authorization: Bearer $SEGREDO" \
+                       -H "Content-Type: application/json" \
+                       -d '{"estado":"voltou"}' || true)
+          echo "resposta do alerta: ${resposta:-<vazia>}"
+
       - name: Abrir/atualizar issue de incidente
         if: steps.probe.outputs.ok == 'nao'
         env:
