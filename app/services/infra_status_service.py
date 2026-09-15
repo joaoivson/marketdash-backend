@@ -683,13 +683,22 @@ async def _acoes_hostinger(client: httpx.AsyncClient, base: str, vm_id: Any) -> 
 
 
 def _limitacao_de_cpu(acoes: list[dict]) -> Optional[dict]:
-    """`ct_set_limits` nas últimas 24 h — a "CPU limitation" da Hostinger.
+    """`ct_set_limits` nas últimas 24 h — o evento de limite da Hostinger.
 
-    Por que isso é o sinal mais importante do painel inteiro: a limitação é
+    Por que vale um alarme: quando a Hostinger estrangula a CPU, a limitação é
     **auto-sustentável**. Com o teto reduzido, a carga rotineira já satura a
-    fração liberada, o gráfico marca 100% para sempre e a máquina não se
-    recupera sozinha — depende de alguém remover no painel da Hostinger. Foi
-    isso que fez o incidente de 11/09 durar ~20 h em vez de 11 minutos.
+    fração liberada, o gráfico marca 100% e a máquina não se recupera sozinha
+    — depende de alguém remover no painel. Foi isso que fez o incidente de
+    11/09 durar ~20 h em vez de 11 minutos.
+
+    ⚠️ **O que este sinal NÃO prova.** `ct_set_limits` é "a Hostinger mexeu nos
+    limites desta VPS", não "existe limitação ativa agora". Observado em
+    15/09: o evento se repete **de hora em hora** durante o episódio (19:01,
+    20:01, 21:01 UTC) e aparece **também logo depois de remover** a limitação
+    pelo painel. E fica ausente por dias quando está tudo bem — entre 12/09 e
+    15/09 não houve nenhum. Serve como gatilho para ir olhar o painel da
+    Hostinger, não como veredito; por isso o texto na tela pede a confirmação
+    em vez de afirmar.
     """
     recentes = []
     limite = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -709,10 +718,12 @@ def _limitacao_de_cpu(acoes: list[dict]) -> Optional[dict]:
         "ocorrencias_24h": len(recentes),
         "ultima_em": recentes[-1].isoformat(),
         "explicacao": (
-            "A Hostinger aplicou limitação de CPU nesta VPS. Com o teto "
-            "reduzido, a carga normal já satura a fração liberada e a máquina "
-            "NÃO se recupera sozinha — é preciso remover a limitação no painel "
-            "da Hostinger. Foi o que prolongou o apagão de 11/09 por ~20 h."
+            "A Hostinger mexeu nos limites desta VPS. É o evento que aparece "
+            "quando ela estrangula a máquina por saturação — e que se repete "
+            "de hora em hora enquanto o episódio dura. Confirme no painel da "
+            "Hostinger se há limitação ativa: se houver, ela NÃO se desfaz "
+            "sozinha (a carga normal satura a fração liberada), e foi isso que "
+            "prolongou o apagão de 11/09 por ~20 h."
         ),
     }
 

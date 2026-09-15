@@ -217,6 +217,15 @@ class TestLimitacaoDeCpu:
         assert r["ocorrencias_24h"] == 2
         assert "painel da Hostinger" in r["explicacao"]
 
+    def test_texto_pede_confirmacao_em_vez_de_afirmar(self):
+        """`ct_set_limits` é "mexeu nos limites", não "há limitação ativa": em
+        15/09 o evento apareceu de hora em hora durante o episódio E logo
+        depois de a limitação ser REMOVIDA no painel. Afirmar demais aqui faria
+        o painel mentir com cara de precisão."""
+        r = infra._limitacao_de_cpu([self._acao("ct_set_limits", 1)])
+        assert "Confirme no painel" in r["explicacao"]
+        assert "aplicou limitação" not in r["explicacao"]
+
     def test_limitacao_antiga_nao_alarma(self):
         """A de 12/09 foi resolvida — repetir o alarme dela por semanas
         ensinaria a ignorar o vermelho."""
