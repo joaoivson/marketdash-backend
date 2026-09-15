@@ -52,6 +52,8 @@ services:
       # Painel /admin/infra (só leitura). Sem os tokens, cada bloco mostra na
       # tela o que falta configurar em vez de quebrar.
       COOLIFY_URL: ${COOLIFY_URL:-http://31.97.22.173:8000}
+      # O read-only é o que o painel usa; o root fica de fallback.
+      COOLIFY_API_TOKEN_GET: ${COOLIFY_API_TOKEN_GET:-}
       COOLIFY_TOKEN: ${COOLIFY_TOKEN:-}
       HOSTINGER_API_TOKEN: ${HOSTINGER_API_TOKEN:-}
       # Facebook Ads (preencher no .env do backend). Vazio = endpoints /facebook retornam 503.

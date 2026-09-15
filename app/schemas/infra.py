@@ -89,16 +89,38 @@ class CoolifyOut(BaseModel):
     fila_de_deploy: list[DeployOut] = []
 
 
+class AcaoVpsOut(BaseModel):
+    """Uma ação da Hostinger sobre a VPS (`ct_set_limits`, `ct_restart`…)."""
+
+    nome: Optional[str] = None
+    estado: Optional[str] = None
+    em: Optional[str] = None
+
+
+class LimitacaoCpuOut(BaseModel):
+    """`ct_set_limits` nas últimas 24 h — o sinal mais importante do painel.
+
+    A limitação é auto-sustentável: com o teto reduzido a carga rotineira já
+    satura a fração liberada, e a máquina não volta sozinha. Foi o que fez o
+    incidente de 11/09 durar ~20 h em vez de 11 minutos."""
+
+    ocorrencias_24h: int
+    ultima_em: str
+    explicacao: str
+
+
 class HostingerOut(BaseModel):
     configurado: bool
     erro: Optional[str] = None
     instrucao: Optional[str] = None
     vps: Optional[dict[str, Any]] = None
-    #: Forma tolerante de propósito: é o único bloco que não pôde ser
-    #: exercitado contra a API real (não há token ainda). Formato diferente do
-    #: esperado chega como `{"formato_inesperado": true}` em vez de derrubar
-    #: a resposta inteira na validação.
+    #: `cpu_usage`/`ram_usage`/`disk_space`/`uptime`, cada um com `atual`,
+    #: `pico`, `media` e `unidade` (`%`, `bytes`, `seconds`). Forma tolerante:
+    #: formato diferente do esperado chega como `{"formato_inesperado": true}`
+    #: em vez de derrubar a resposta inteira na validação.
     metricas: Optional[dict[str, Any]] = None
+    acoes: list[AcaoVpsOut] = []
+    limitacao_de_cpu: Optional[LimitacaoCpuOut] = None
 
 
 class PontaOut(BaseModel):

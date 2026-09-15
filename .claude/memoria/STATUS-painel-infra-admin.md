@@ -83,3 +83,53 @@ serve produção. Está serializado desde 12/09, mas o momento é escolha sua.
    inspect` exige SSH, e o classificador do Claude Code barra).
 3. **`REDIS_URL` do `docker-compose.yml` não levava a senha** e o serviço sobe
    com `--requirepass`: cache e fila locais falhavam em silêncio. Corrigido.
+
+---
+
+# Rodada 2 (15/09, tarde) — tokens chegaram, e a Hostinger contou o que ninguém sabia
+
+O João colou `COOLIFY_API_TOKEN_GET` (read-only) e `HOSTINGER_API_TOKEN` no
+`.env` e autorizou subir **só esta feature** para produção.
+
+| # | Etapa | O que está sendo feito | Quem executa | Código | API | Tela |
+|---|---|---|---|---|---|---|
+| 16 | Token read-only do Coolify | `coolify_token_leitura`: o GET vence, root é fallback | eu | ✅ | ✅ 3 endpoints 200 com o token novo | — |
+| 17 | Hostinger: formato REAL | `usage` é dict por epoch, não lista — meu palpite estava errado | eu | ✅ | ✅ 4 séries lidas | ✅ CPU/RAM/disco/uptime na tela |
+| 18 | Ações da VPS (`/actions`) | detector de `ct_set_limits` nas últimas 24h | eu | ✅ | ✅ 15 ações lidas | ✅ alerta vermelho |
+| 19 | Fix do alerta da sonda | `GH_REPO` global no monitor-producao.yml | eu | ✅ | — | — |
+| 20 | Testes | 42 (12 novos) | eu | ✅ | — | — |
+| 21 | Revalidação na tela | Playwright 1440 + 390, API × célula | eu | ✅ | ✅ | ✅ scrollWidth 390 |
+| 22 | Deploy em produção | cherry-pick em `main` dos 2 repos | **espera decisão** | ⬜ | ⬜ | ⬜ |
+
+**Bloqueio da linha 22 — e é sério:** a VPS está com **CPU em 93% (pico 100%)**
+e a Hostinger aplicou **`ct_set_limits` 2× hoje** (16:01 e 17:01). Subir agora
+significa rodar 2 builds Docker numa máquina já estrangulada — é a receita
+exata de 11/09. O certo é remover a limitação no painel da Hostinger primeiro.
+
+## O que a API da Hostinger revelou (e que não dava para saber antes)
+
+1. **A CPU deu um degrau às ~12:50 de hoje**: de ~9% (estável desde as 05h)
+   para 85%+, e está em 93-100% desde então. **Rede e memória não mudaram** —
+   tráfego igual ao das horas anteriores e RAM em 4,5 GB de 16 GB. Carga que
+   consome CPU sem rede e sem memória.
+2. **A Hostinger aplicou limitação de CPU 2× hoje.** `ct_set_limits` às 16:01 e
+   17:01. As anteriores foram 12/09 (durante o apagão) e nada entre 12 e 15/09.
+3. **Produção ficou 25 s inacessível hoje às 12:13** — a sonda externa DETECTOU
+   (`HTTP 000`, `25.0018s`, preflight sem `Access-Control-Allow-Origin`) e
+   **não avisou ninguém**: o passo `gh issue create` morre com
+   `fatal: not a git repository` porque o workflow não faz checkout e não havia
+   `GH_REPO`. Os passos de listar tinham `|| true` e escondiam; o de criar não
+   tinha e só pintou o run de vermelho. Corrigido na linha 19.
+4. **Não foi deploy nem sync.** Nenhum build hoje (último foi 13/09 23:58), e o
+   volume de `sync_runs` em produção é idêntico antes e depois do degrau
+   (~50 shopee + ~45 facebook por hora, 735 em 8h). A causa do consumo
+   continua **não identificada** — exige `docker stats` no host.
+
+## O que mudou no código por causa disso
+
+- `_resumir_serie` reescrita para o formato real (dict `epoch → valor`), com
+  "atual" = maior timestamp. O formato que eu havia suposto (lista de
+  `{date,value}`) devolveria `formato_inesperado` para sempre, em silêncio.
+- Janela das métricas: **12 h**, não 1 h — com uma hora o degrau some e sobra
+  um número alto sem história.
+- Bloco `ct_set_limits` com explicação do porquê ele não se resolve sozinho.

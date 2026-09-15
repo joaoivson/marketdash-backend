@@ -58,6 +58,10 @@ TIMEOUT_COOLIFY = 8.0
 TIMEOUT_PONTA = 6.0
 TIMEOUT_HOSTINGER = 10.0
 
+#: Janela das métricas do VPS. 12 h para o DEGRAU aparecer — ver
+#: `_metricas_hostinger`.
+JANELA_METRICAS_HORAS = 12
+
 #: Nome que o Coolify guarda é o que o deploy criou um dia — `celery:dsc8ko…`,
 #: `cerely-qs8480s…` (com o typo), `http://api.marketdash.com.br`. Ninguém
 #: consegue ler um painel assim, e adivinhar ambiente pelo nome erra: o
@@ -171,14 +175,15 @@ async def coletar_coolify() -> dict:
     puro (`4.0.0-beta.463`), não JSON — daí o `_coolify_get` olhar o
     content-type.
     """
-    if not settings.COOLIFY_TOKEN:
+    token = settings.coolify_token_leitura
+    if not token:
         return {
             "configurado": False,
             "erro": None,
             "instrucao": (
-                "Defina COOLIFY_TOKEN no ambiente da API. Recomendado: um token "
+                "Defina COOLIFY_API_TOKEN_GET no ambiente da API — um token "
                 "read-only criado em Coolify › Security › API tokens (o painel "
-                "só lê)."
+                "só lê). `COOLIFY_TOKEN`, que é root, serve de fallback."
             ),
             "url": settings.COOLIFY_URL,
             "versao": None,
@@ -188,7 +193,7 @@ async def coletar_coolify() -> dict:
         }
 
     base = settings.COOLIFY_URL.rstrip("/") + "/api/v1"
-    cabecalhos = {"Authorization": f"Bearer {settings.COOLIFY_TOKEN}"}
+    cabecalhos = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient(
             base_url=base, headers=cabecalhos, timeout=TIMEOUT_COOLIFY
@@ -500,12 +505,17 @@ def _nome_legivel_da_fila(nome: str) -> str:
 
 
 async def coletar_hostinger() -> dict:
-    """CPU/RAM/disco do VPS pela API da Hostinger.
+    """VPS, métricas e as AÇÕES da Hostinger sobre a máquina.
 
-    Único caminho para essas métricas: a API do Coolify não as expõe (404 em
+    Único caminho para CPU/RAM/disco: a API do Coolify não as expõe (404 em
     `/servers/{uuid}/metrics`, medido em 15/09/2026) e o Sentinel só alimenta
-    a UI. A "CPU limitation" que prolongou o apagão de 11/09 por ~20h se vê
-    aqui — e em nenhum outro bloco deste painel.
+    a UI dele.
+
+    O bloco de **ações** (`/actions`) é o achado de 15/09 e vale mais do que
+    parece: é ali que aparece o `ct_set_limits` — a "CPU limitation" que a
+    Hostinger aplica sozinha quando a máquina satura. Foi ela que transformou
+    um pico de 11 minutos em ~20 h de apagão em 11/09, e até hoje só dava para
+    saber pelo painel ou pelo e-mail deles.
     """
     bloco: dict[str, Any] = {
         "configurado": bool(settings.HOSTINGER_API_TOKEN),
@@ -517,6 +527,8 @@ async def coletar_hostinger() -> dict:
         ),
         "vps": None,
         "metricas": None,
+        "acoes": [],
+        "limitacao_de_cpu": None,
     }
     if not settings.HOSTINGER_API_TOKEN:
         return bloco
@@ -538,17 +550,26 @@ async def coletar_hostinger() -> dict:
                 return bloco
 
             vm = maquinas[0]
+            vm_id = vm.get("id")
             bloco["vps"] = {
-                "id": vm.get("id"),
+                "id": vm_id,
                 "hostname": vm.get("hostname"),
                 "estado": vm.get("state"),
                 "plano": vm.get("plan"),
                 "vcpus": vm.get("cpus"),
                 "memoria_mb": vm.get("memory"),
                 "disco_mb": vm.get("disk"),
+                "ip": (vm.get("ipv4") or [{}])[0].get("address"),
                 "criada_em": vm.get("created_at"),
             }
-            bloco["metricas"] = await _metricas_hostinger(client, base, vm.get("id"))
+            metricas, acoes = await asyncio.gather(
+                _metricas_hostinger(client, base, vm_id),
+                _acoes_hostinger(client, base, vm_id),
+                return_exceptions=True,
+            )
+            bloco["metricas"] = metricas if isinstance(metricas, dict) else None
+            bloco["acoes"] = acoes if isinstance(acoes, list) else []
+            bloco["limitacao_de_cpu"] = _limitacao_de_cpu(bloco["acoes"])
     except Exception as e:  # noqa: BLE001
         bloco["erro"] = f"{type(e).__name__}: {str(e)[:200]}"
     return bloco
@@ -557,17 +578,17 @@ async def coletar_hostinger() -> dict:
 async def _metricas_hostinger(
     client: httpx.AsyncClient, base: str, vm_id: Any
 ) -> Optional[dict]:
-    """Última hora de métricas, reduzida ao valor mais recente e ao pico.
+    """Últimas 12 h de métricas, reduzidas ao valor atual e ao pico.
 
-    Defensivo de propósito: este é o único bloco que não pude exercitar contra
-    a API real (não há token). Formato diferente do esperado devolve
-    `formato_inesperado` em vez de estourar — assim o resto do painel continua
-    servindo.
+    Janela de 12 h, não de 1 h: o que importa não é o instante, é ver o
+    **degrau**. Em 15/09 a CPU passou de ~9% para 85%+ entre 11:46 e 12:50 sem
+    mexer em rede nem em memória — com janela de uma hora esse degrau some e
+    sobra um número alto sem história.
     """
     if not vm_id:
         return None
     fim = datetime.now(timezone.utc)
-    inicio = fim - timedelta(hours=1)
+    inicio = fim - timedelta(hours=JANELA_METRICAS_HORAS)
     resp = await client.get(
         f"{base}/api/vps/v1/virtual-machines/{vm_id}/metrics",
         params={
@@ -577,15 +598,14 @@ async def _metricas_hostinger(
     )
     resp.raise_for_status()
     dados = resp.json()
-    if isinstance(dados, dict) and "data" in dados and isinstance(dados["data"], dict):
+    if isinstance(dados, dict) and isinstance(dados.get("data"), dict):
         dados = dados["data"]
     if not isinstance(dados, dict):
         return {"formato_inesperado": True}
 
-    saida: dict[str, Any] = {"janela_horas": 1}
+    saida: dict[str, Any] = {"janela_horas": JANELA_METRICAS_HORAS}
     for chave in ("cpu_usage", "ram_usage", "disk_space", "uptime"):
-        serie = dados.get(chave)
-        resumo = _resumir_serie(serie)
+        resumo = _resumir_serie(dados.get(chave))
         if resumo is not None:
             saida[chave] = resumo
     if len(saida) == 1:
@@ -594,21 +614,92 @@ async def _metricas_hostinger(
 
 
 def _resumir_serie(serie: Any) -> Optional[dict]:
+    """`{"unit": "%", "usage": {"<epoch>": valor, ...}}` → atual, pico e média.
+
+    O formato real (medido em 15/09 contra a API) é um **dicionário chaveado
+    por timestamp**, não uma lista ordenada — então "atual" é o maior
+    timestamp, nunca o último item iterado: dict de chave string não tem ordem
+    garantida de tempo e o "agora" sairia aleatório.
+    """
     if not isinstance(serie, dict):
         return None
-    pontos = serie.get("usage") or serie.get("values") or []
-    numeros = [
-        p.get("value")
-        for p in pontos
-        if isinstance(p, dict) and isinstance(p.get("value"), (int, float))
-    ]
+    pontos = serie.get("usage")
+    if not isinstance(pontos, dict):
+        return None
+    numeros: list[tuple[int, float]] = []
+    for t, v in pontos.items():
+        try:
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                numeros.append((int(t), float(v)))
+        except (TypeError, ValueError):
+            continue
     if not numeros:
         return None
+    numeros.sort()
+    valores = [v for _, v in numeros]
     return {
-        "atual": numeros[-1],
-        "pico": max(numeros),
+        "atual": round(valores[-1], 2),
+        "pico": round(max(valores), 2),
+        "media": round(sum(valores) / len(valores), 2),
         "unidade": serie.get("unit"),
-        "pontos": len(numeros),
+        "pontos": len(valores),
+        "medido_em": datetime.fromtimestamp(numeros[-1][0], timezone.utc).isoformat(),
+    }
+
+
+async def _acoes_hostinger(client: httpx.AsyncClient, base: str, vm_id: Any) -> list[dict]:
+    """Histórico de ações da Hostinger sobre a VPS (mais recentes primeiro)."""
+    if not vm_id:
+        return []
+    resp = await client.get(f"{base}/api/vps/v1/virtual-machines/{vm_id}/actions")
+    resp.raise_for_status()
+    dados = resp.json()
+    itens = dados.get("data") if isinstance(dados, dict) else dados
+    if not isinstance(itens, list):
+        return []
+    return [
+        {
+            "nome": it.get("name"),
+            "estado": it.get("state"),
+            "em": it.get("created_at"),
+        }
+        for it in itens[:10]
+        if isinstance(it, dict)
+    ]
+
+
+def _limitacao_de_cpu(acoes: list[dict]) -> Optional[dict]:
+    """`ct_set_limits` nas últimas 24 h — a "CPU limitation" da Hostinger.
+
+    Por que isso é o sinal mais importante do painel inteiro: a limitação é
+    **auto-sustentável**. Com o teto reduzido, a carga rotineira já satura a
+    fração liberada, o gráfico marca 100% para sempre e a máquina não se
+    recupera sozinha — depende de alguém remover no painel da Hostinger. Foi
+    isso que fez o incidente de 11/09 durar ~20 h em vez de 11 minutos.
+    """
+    recentes = []
+    limite = datetime.now(timezone.utc) - timedelta(hours=24)
+    for a in acoes:
+        if a.get("nome") != "ct_set_limits":
+            continue
+        try:
+            quando = datetime.fromisoformat((a.get("em") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if quando >= limite:
+            recentes.append(quando)
+    if not recentes:
+        return None
+    recentes.sort()
+    return {
+        "ocorrencias_24h": len(recentes),
+        "ultima_em": recentes[-1].isoformat(),
+        "explicacao": (
+            "A Hostinger aplicou limitação de CPU nesta VPS. Com o teto "
+            "reduzido, a carga normal já satura a fração liberada e a máquina "
+            "NÃO se recupera sozinha — é preciso remover a limitação no painel "
+            "da Hostinger. Foi o que prolongou o apagão de 11/09 por ~20 h."
+        ),
     }
 
 

@@ -11,6 +11,50 @@
 
 ---
 
+## 2026-09-15b — A API da Hostinger contou o que nem o painel nem eu sabíamos
+
+**O que mudou.** Token read-only do Coolify (`COOLIFY_API_TOKEN_GET`, com o
+root de fallback), bloco da Hostinger com CPU/RAM/disco/uptime, detector de
+`ct_set_limits` e correção do alerta da sonda externa. 42 testes.
+
+**Meu palpite sobre o formato da Hostinger estava errado**, e errado do jeito
+silencioso: supus `usage` como lista de `{date, value}` e o real é um
+**dicionário chaveado por epoch**. O código devolveria `formato_inesperado`
+para sempre sem erro nenhum — só apareceu porque o token chegou e eu rodei
+contra a API de verdade. Com o formato certo, "atual" passou a ser o **maior
+timestamp**, não o último item iterado: dict de chave string não garante ordem
+de tempo e o "agora" sairia aleatório (tem teste para isso).
+
+**E aí a medição contou três coisas que ninguém sabia.**
+
+1. **A CPU da VPS deu um degrau hoje às ~12:50**: de ~9%, estável desde as 05h,
+   para 85%+, chegando a 100% às 16:20 e 93% agora. **Rede e memória não
+   mudaram** (tráfego igual ao das horas anteriores, RAM em 4,5 de 16 GB) —
+   consumo de CPU puro.
+2. **A Hostinger aplicou limitação de CPU 2× hoje** (`ct_set_limits` 16:01 e
+   17:01). A anterior foi em 12/09, durante o apagão. É o mesmo mecanismo que
+   fez aquele incidente durar ~20 h: uma vez limitada, a carga normal satura a
+   fração liberada e **a máquina não se recupera sozinha**.
+3. **Produção ficou 25 s fora do ar às 12:13 e o alerta não saiu.** A sonda
+   detectou certo (`HTTP 000` após 25,0018 s, preflight sem ACAO) e o
+   `gh issue create` morreu com `fatal: not a git repository`: o workflow não
+   faz checkout e não tinha `GH_REPO`. Os passos de listar tinham `|| true` e
+   escondiam o mesmo defeito há dias. **Sonda que detecta e não avisa é pior
+   que sonda nenhuma** — dá sensação de cobertura.
+
+**O que eu descartei com evidência:** não foi deploy (nenhum build hoje; o
+último foi 13/09 23:58) e não foi o cron de sync (o volume de `sync_runs` em
+produção é idêntico antes e depois do degrau — ~50 shopee + ~45 facebook por
+hora, 735 em 8 h). **A causa do consumo continua não identificada** e exige
+`docker stats` no host.
+
+**Decisão que não é minha:** o João autorizou subir esta feature para produção,
+e eu parei antes do push. Subir agora são 2 builds Docker numa máquina já
+estrangulada — a receita literal de 11/09. O certo é remover a limitação no
+painel da Hostinger primeiro; o deploy leva 6 minutos depois disso.
+
+---
+
 ## 2026-09-15 — Painel de infraestrutura: o valor está na divergência, não no status
 
 **O que mudou.** `GET /admin/infra` (`infra_status_service.py`, ~450 linhas,
