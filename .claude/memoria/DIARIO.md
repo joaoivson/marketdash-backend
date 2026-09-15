@@ -11,6 +11,50 @@
 
 ---
 
+## 2026-09-15c — Subiu para produção, e a produção ensinou três coisas
+
+**O que mudou.** Painel em produção por cherry-pick (131 commits da develop
+ficaram para trás no backend, 73 no frontend) + alerta de queda por WhatsApp,
+pedido do João durante a rodada.
+
+**1. O Coolify injeta `COOLIFY_URL` em todo container que sobe**, com o FQDN da
+própria aplicação. Meu setting tinha esse nome, então em produção o painel
+consultou `https://api.marketdash.com.br/api/v1/applications` — ele mesmo — e
+colheu 404, com o bloco do Coolify inteiro vazio. **Nenhum teste pegaria**:
+local e hml passavam porque lá a variável é explícita. Quem pegou foi abrir a
+tela de produção depois do deploy. Renomeado para `COOLIFY_API_URL` com teste
+de regressão que falha se o nome antigo voltar.
+
+**2. Env explícita sem redeploy não vale.** Tentei consertar sem build gravando
+`COOLIFY_URL=<ip>` na aplicação e dando `restart` — o container voltou com o
+env antigo. **Restart não recarrega env; só redeploy.** A memória do projeto já
+dizia isso e eu tentei o atalho mesmo assim.
+
+**3. CI verde ≠ deploy feito, pela enésima vez.** O job "Deploy to Coolify"
+ficou `success` com todos os passos verdes enquanto
+`GET /deployments/<uuid>` dizia `failed`: o build morreu no meio do
+`pip install` (exit 255) com a VPS estrangulada. O marcador que não mente é o
+`last_online_at` do container — apontava para o deploy ANTERIOR. O rollback do
+Coolify funcionou e produção seguiu no ar o tempo todo.
+
+**O alerta por WhatsApp** mora em homologação de propósito: uma aplicação caída
+não avisa que caiu, e é lá que o WAHA está. O teste real falhou nos dois
+destinos até eu descobrir que o JID deles não tem o nono dígito — o WhatsApp
+entrega boa parte da base brasileira no formato histórico de 12 dígitos
+(1.752 de 2.499 medidos). Agora tenta as duas formas e diz qual funcionou.
+
+**Uma correção minha, de honestidade.** Eu havia escrito "a Hostinger aplicou
+limitação de CPU". O evento `ct_set_limits` não prova isso: ele se repete de
+hora em hora durante o episódio E aparece logo depois de a limitação ser
+REMOVIDA no painel. Virou "mexeu nos limites — confira no painel deles".
+Alarme que afirma demais vira alarme que se aprende a ignorar.
+
+**Continua aberto:** a CPU do VPS segue em ~82% sem causa identificada (degrau
+de ~9% para 85%+ às 12:50, sem variação de rede nem de memória). Fechar isso
+exige `docker stats` no host.
+
+---
+
 ## 2026-09-15b — A API da Hostinger contou o que nem o painel nem eu sabíamos
 
 **O que mudou.** Token read-only do Coolify (`COOLIFY_API_TOKEN_GET`, com o
