@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -728,6 +729,95 @@ def _limitacao_de_cpu(acoes: list[dict]) -> Optional[dict]:
     }
 
 
+# ─────────── a máquina vista de DENTRO (o sinal que a Hostinger esconde) ──────────
+
+
+#: Janela da amostra de CPU. 500 ms é o suficiente para um delta estável e
+#: barato — o painel inteiro não pode ficar meio segundo mais lento por isso.
+JANELA_CPU_MS = 500
+
+#: Acima disto, o provedor está tirando da máquina uma fatia que muda a vida do
+#: produto. 20% é conservador: num VPS compartilhado saudável o steal fica em
+#: 5-10% (medido nesta VPS: 8,4% num período calmo).
+STEAL_ALERTA = 20.0
+
+
+def _ler_proc_stat() -> Optional[list[int]]:
+    """Primeira linha de `/proc/stat` — os contadores agregados do kernel."""
+    try:
+        with open("/proc/stat") as f:
+            campos = f.readline().split()
+    except OSError:
+        return None
+    if not campos or campos[0] != "cpu":
+        return None
+    try:
+        return [int(v) for v in campos[1:9]]
+    except ValueError:
+        return None
+
+
+def medir_maquina() -> Optional[dict]:
+    """CPU real e **steal** do host, lidos de dentro do container.
+
+    Existe por causa do dia 15/09/2026. A Hostinger mostrava "CPU 100%" e a
+    leitura óbvia — "alguma coisa nossa está consumindo a máquina" — estava
+    errada: `vmstat` no host revelou **steal de 85-95%**, com a nossa
+    aplicação usando 4% de user e 2% de system. A máquina não estava ocupada,
+    estava **faminta**: o provedor é que não entregava a CPU contratada.
+
+    A diferença entre esses dois diagnósticos é a diferença entre caçar um
+    processo em loop (horas perdidas) e abrir um chamado no provedor.
+
+    Funciona porque o Docker **não isola `/proc/stat`**: de dentro do
+    container lê-se o contador do host. É por isso que este bloco vê o que a
+    API da Hostinger não conta — e sem os ~30 min de atraso da amostragem
+    dela.
+    """
+    antes = _ler_proc_stat()
+    if antes is None:
+        return None
+    time.sleep(JANELA_CPU_MS / 1000)
+    depois = _ler_proc_stat()
+    if depois is None:
+        return None
+
+    nomes = ("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
+    deltas = [max(0, d - a) for d, a in zip(depois, antes)]
+    total = sum(deltas)
+    if total <= 0:
+        return None
+    pct = {nome: round(100 * valor / total, 1) for nome, valor in zip(nomes, deltas)}
+
+    try:
+        with open("/proc/loadavg") as f:
+            carga = [float(v) for v in f.readline().split()[:3]]
+    except (OSError, ValueError):
+        carga = []
+
+    vcpus = os.cpu_count() or 0
+    steal = pct["steal"]
+    return {
+        "usado_pct": round(pct["user"] + pct["nice"] + pct["system"], 1),
+        "steal_pct": steal,
+        "iowait_pct": pct["iowait"],
+        "ocioso_pct": pct["idle"],
+        "carga": carga,
+        "vcpus": vcpus,
+        # Carga muito acima do número de vCPUs com CPU ociosa é fila de espera,
+        # não trabalho: foi assim que a máquina apareceu com load 28 usando 6%.
+        "carga_por_vcpu": round(carga[0] / vcpus, 2) if carga and vcpus else None,
+        "estrangulada": steal >= STEAL_ALERTA,
+        "explicacao_steal": (
+            f"O provedor não entregou {steal}% do tempo de CPU nesta amostra "
+            "(steal). Nesse estado a máquina não está ocupada — está faminta, "
+            "e a fila cresce mesmo com a aplicação usando quase nada. "
+            "Se persistir, é caso de remover a limitação no painel da "
+            "Hostinger ou abrir chamado com eles."
+        ) if steal >= STEAL_ALERTA else None,
+    }
+
+
 # ───────────────── cruzamento: onde o Coolify discorda de nós ────────────
 
 
@@ -814,10 +904,13 @@ async def coletar() -> dict:
     # Redis é síncrono e rápido (ping + LLEN); roda fora do loop para não
     # bloquear o event loop por mais do que o timeout do socket.
     filas = await asyncio.to_thread(coletar_filas)
+    # `medir_maquina` dorme 500 ms de propósito: vai para a thread também.
+    maquina = await asyncio.to_thread(medir_maquina)
     _cruzar(coolify["recursos"], pontas, filas)
     return {
         "gerado_em": datetime.now(timezone.utc).isoformat(),
         "somente_leitura": True,
+        "maquina": maquina,
         "coolify": coolify,
         "hostinger": hostinger,
         "pontas": pontas,

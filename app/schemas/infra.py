@@ -123,6 +123,29 @@ class HostingerOut(BaseModel):
     limitacao_de_cpu: Optional[LimitacaoCpuOut] = None
 
 
+class MaquinaOut(BaseModel):
+    """A CPU do host lida de DENTRO do container (`/proc/stat`, que o Docker
+    não isola).
+
+    `steal_pct` é o campo que justifica o bloco: em 15/09/2026 a Hostinger
+    mostrava "CPU 100%" e a leitura óbvia (algo nosso consumindo) estava
+    errada — o host tinha 85% de steal com a aplicação usando 6%. A máquina
+    não estava ocupada, estava faminta. Isso separa "caçar processo em loop"
+    de "abrir chamado no provedor"."""
+
+    usado_pct: float
+    steal_pct: float
+    iowait_pct: float
+    ocioso_pct: float
+    carga: list[float] = []
+    vcpus: int
+    #: Carga muito acima de 1,0 por vCPU **com CPU ociosa** é fila de espera,
+    #: não trabalho — foi o retrato de hoje: load 28 em 4 vCPU usando 6%.
+    carga_por_vcpu: Optional[float] = None
+    estrangulada: bool
+    explicacao_steal: Optional[str] = None
+
+
 class PontaOut(BaseModel):
     """`GET` na URL pública. O bloco que pega o modo de falha de 11/09:
     container de pé, rota do Traefik perdida, usuária sem acesso."""
@@ -162,6 +185,8 @@ class InfraOut(BaseModel):
     #: Constante `True`. Está na resposta para o painel poder dizer na tela que
     #: não há nada a apertar aqui — restart e deploy seguem no Coolify.
     somente_leitura: bool
+    #: `None` fora do Linux (ambiente de desenvolvimento em macOS, por ex.).
+    maquina: Optional[MaquinaOut] = None
     coolify: CoolifyOut
     hostinger: HostingerOut
     pontas: list[PontaOut]
