@@ -187,3 +187,77 @@ VPS zerou às 20:19 UTC (reinício do João ao remover a limitação).
 
 **O que falta para fechar isso:** `docker stats` no host — SSH segue bloqueado
 para mim pelo classificador do Claude Code.
+
+---
+
+# Rodada 4 (15/09, noite) — SSH liberado: a CPU não estava ocupada, estava faminta
+
+Com a autorização do João para `docker stats` no host, a apuração fechou — e o
+diagnóstico é o **oposto** do que a tela da Hostinger sugeria.
+
+## O dado que vira a mesa
+
+```
+vmstat no host, 22:08 UTC:
+ r  b   ...  us  sy  id  wa  st
+29  0   ...   4   1   2   0  93     ← 93% de STEAL
+48  0   ...   3   1   2   0  94
+load average: 32.39, 25.17, 12.95   (4 vCPU)
+```
+
+**Steal de 85-95%**: o hypervisor não entrega a CPU. Nossa aplicação usa
+4% de user + 2% de system. A fila de 30-50 processos prontos não é trabalho
+nosso — é gente esperando CPU que não vem. `top` mostrava **zero** processo
+consumindo, que é a assinatura clássica (e enganosa) desse estado.
+
+## A linha do tempo, pelo `sar` (sysstat estava instalado — sorte)
+
+| hora UTC | nosso uso | steal | ocioso | o que é |
+|---|---|---|---|---|
+| até 14:50 | ~6% | ~8% | 87% | normal |
+| **15:00** | 43% | 7% | 50% | **começa** |
+| 15:10 → 20:10 | 65-85% | 12-45% | 4-6% | 5 h de máquina no talo |
+| 20:19 | — | — | — | **reboot do João** (zera tudo) |
+| 20:30-21:50 | 9-23% | 9-52% | 27-81% | normal + meus deploys |
+| 22:00 | 5,7% | 8,4% | 86% | calmo |
+| **22:10** | **5,8%** | **85,3%** | 8,8% | **capado com a gente parada** |
+
+Duas fases distintas, e confundi-las custaria horas:
+
+1. **15:00 → 20:18 UTC: a máquina estava REALMENTE ocupada.** `%system` subiu
+   de 2,5% para 52% e as **trocas de contexto pularam de 4.200/s para
+   18.500/s** — com criação de processos inalterada (33/s). Não é fork bomb:
+   é algo em laço apertado de syscalls. **O reboot matou o culpado e não deu
+   para identificá-lo** — os contadores do boot anterior morreram com ele.
+2. **22:10 UTC em diante: a máquina está CAPADA.** Usamos 5,8% e o provedor
+   leva 85,3%. Isso não é consequência de carga nossa — é a limitação da
+   Hostinger ainda ativa (ela reaplicou `ct_set_limits` às 21:01, depois de o
+   João ter removido às 20:19).
+
+## O que descartei com evidência
+
+- **Processo em loop agora:** o maior consumidor acumulado é o `dockerd` com
+  27 min de CPU em 1h49 de uptime — e ele passou o período fazendo build.
+- **Disco cheio:** 116 GB de 193 GB (60%).
+- **Memória:** 11,8 GB em cache, zero swap.
+- **I/O:** `wa` em 0-1%, `b` (bloqueados) em 0.
+- **Sync da Shopee/Facebook como causa:** o volume por hora é idêntico antes e
+  depois do degrau (~95-100 runs/h). O run `interrupted` de 2h começou às
+  14:02 BRT, **depois** da tempestade — é consequência.
+
+## O que mudou no produto por causa disso
+
+O painel passa a medir **CPU real e steal do host de dentro do container**
+(`/proc/stat` não é isolado pelo Docker). É o sinal que a API da Hostinger não
+dá: ela mostra "CPU 100%" tanto para "ocupada" quanto para "faminta", e os dois
+pedem ações opostas. Alarme vermelho acima de 20% de steal; carga por vCPU
+junto, porque load alto **com CPU ociosa** é fila, não trabalho.
+
+⚠️ **Commitado na develop, NÃO subiu**: com steal em 85% um build leva o dobro
+do tempo e já falhou uma vez hoje. Sobe quando a limitação sair.
+
+## Para o chamado na Hostinger
+
+O argumento está pronto e é difícil de contestar: **às 22:10 UTC a VPS
+consumia 5,8% de CPU e sofreu 85,3% de steal**. Não é a máquina abusando —
+é o teto binding com ela parada.
