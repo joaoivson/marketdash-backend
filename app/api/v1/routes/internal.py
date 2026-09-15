@@ -42,6 +42,54 @@ def _validate_cron_secret(received: str | None, caller_ip: str | None) -> None:
         )
 
 
+@router.post("/alertas/producao")
+def alerta_de_producao(
+    payload: dict,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """Avisa por WhatsApp que a PRODUÇÃO caiu (ou voltou).
+
+    Chamado pela sonda externa (`.github/workflows/monitor-producao.yml`), que
+    roda no GitHub e portanto sobrevive à queda. Este endpoint vive em
+    **homologação**: é o ambiente que tem WhatsApp conectado e é outro
+    container — em 11/09, com produção 20 h fora, hml respondeu 200 o tempo
+    todo.
+
+    Responde 200 mesmo quando decide não enviar (incidente já avisado, por
+    exemplo): o corpo diz o que foi feito. Devolver erro faria a sonda ficar
+    vermelha no caminho em que ela está funcionando certo.
+    """
+    _validate_cron_secret(
+        _extract_secret(authorization, x_cron_secret),
+        request.client.host if request.client else None,
+    )
+    from app.services import alerta_producao_service
+
+    estado = str(payload.get("estado") or "").strip()
+    detalhe = str(payload.get("detalhe") or "")[:1500]
+    resultado = alerta_producao_service.registrar(estado, detalhe)
+    logger.info("Alerta de produção (%s): %s", estado, resultado)
+    return resultado
+
+
+@router.post("/alertas/producao/teste")
+def testar_alerta_de_producao(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """Manda uma mensagem de teste sem mexer no estado do incidente."""
+    _validate_cron_secret(
+        _extract_secret(authorization, x_cron_secret),
+        request.client.host if request.client else None,
+    )
+    from app.services import alerta_producao_service
+
+    return alerta_producao_service.testar()
+
+
 @router.post("/cron/shopee-sync", status_code=status.HTTP_202_ACCEPTED)
 async def cron_shopee_sync(
     request: Request,
