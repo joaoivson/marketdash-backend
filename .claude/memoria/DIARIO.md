@@ -11,6 +11,722 @@
 
 ---
 
+## 2026-09-15 — Painel de infraestrutura: o valor está na divergência, não no status
+
+**O que mudou.** `GET /admin/infra` (`infra_status_service.py`, ~450 linhas,
+36 testes) + tela `Admin › Infraestrutura`. Cinco blocos: pontas públicas,
+servidor/VPS, containers, fila de deploy e filas do Celery. Só leitura — o
+service emite exclusivamente `GET`.
+
+**Por quê.** O pedido do João foi "juntar os observable num menu do admin".
+O que existia depois do apagão de 11/09 (sonda no GitHub Actions, tetos de CPU,
+serialização de build, métricas do Sentinel) só era alcançável por quem tem
+terminal e token. Nada disso respondia "o que está no ar agora?" sem eu no meio.
+
+**A decisão de desenho que muda tudo: cruzar as fontes.** Repetir o status do
+Coolify seria construir uma segunda tela mentindo a mesma mentira — em 11/09
+ele mostrou `running:healthy` por ~20 h com a API inalcançável, porque o
+healthcheck do Dockerfile testa `localhost:8000/health` de dentro do container
+e não vê rota de Traefik quebrada. Então cada container é confrontado com o
+`GET` na URL pública, e a discordância aparece escrita na linha dele.
+
+**E o sentido inverso apareceu na primeira execução real**, que eu não havia
+previsto: o Coolify marcou as DUAS instâncias de Redis como `exited:unhealthy`
+enquanto o `/health` de produção e de homologação dizia `redis: connected` — e
+minutos depois voltaram a `running:healthy`. Sem a contraprova eu teria
+publicado um painel que pinta de vermelho um Redis que está servindo os dois
+ambientes. Isso ensina a ignorar o painel tão rápido quanto o falso verde.
+
+**Medições do dia (API do Coolify beta.463):**
+
+- **Não existe endpoint de métricas.** `/servers/{uuid}/metrics`, `/usage` e
+  `/applications/{uuid}/metrics` → 404. O Sentinel coleta CPU/memória por
+  container desde 12/09, mas só a UI lê. Logo, CPU/RAM/disco do VPS **só** pela
+  API da Hostinger — token que o João precisa gerar.
+- `/servers` e `/servers/{uuid}` são complementares e cada um **omite** o que o
+  outro tem: `is_reachable`/`is_usable` só na lista; proxy, Traefik e Sentinel
+  só no detalhe. Ler um só deixava metade do bloco em `null`, que na tela é
+  indistinguível de "o proxy caiu".
+- `/servers/{uuid}/resources` é a única fonte completa de status (inclui o que
+  não aparece em `/applications`), e é a mais fresca.
+- `git_commit_sha` vem literalmente `"HEAD"` — ruído com cara de informação.
+
+**Dois achados fora do escopo.** (1) Existem **duas** instâncias de Redis de
+pé e só uma é usada: conferi o `REDIS_URL` das três aplicações e todas apontam
+para `h0cw0…`; a `y4so…` não tem referência conhecida e queima memória do VPS
+que a Hostinger estrangulou em 11/09. (2) O `REDIS_URL` do `docker-compose.yml`
+não levava a senha e o serviço sobe com `--requirepass` — cache e fila locais
+falhavam em silêncio. Corrigido.
+
+**O que a tela derrubou, e `tsc` + lint + 1272 testes não diziam nada sobre:**
+o cartão de container esticava a página para **456 px** num viewport de 390.
+Causa: item de grid tem `min-width: auto`, e o nome cru do Coolify
+(`cerely-qs8480sgosccoc8go8wsg84s`) é uma palavra sem ponto de quebra — o
+`truncate` dos filhos não tinha largura de referência. `min-w-0` no cartão
+resolveu. Validado linha a linha no Playwright: as 10 linhas da tabela batem
+com os 10 recursos da API (status, teto e rótulo), e a divergência foi
+exercitada na tela adulterando a resposta real no caminho.
+
+**Pendente.** `HOSTINGER_API_TOKEN` (hPanel) e a decisão sobre o
+`COOLIFY_TOKEN` do ambiente da API — o recomendado é um token **read-only**
+novo, não o root do `.env`. Sem os dois, cada bloco mostra na tela o que falta
+configurar.
+
+---
+
+## 2026-09-09 — A mensagem de erro do login mentia, e mandava trocar senha certa
+
+**O que mudou.** `falha_de_indisponibilidade()` em `auth_service.py` separa
+"o Supabase não respondeu" de "a credencial/estado está errada". Indisponibilidade
+na Lazy Migration passa a devolver **503** dizendo que a senha está correta;
+erro de estado mantém o 401 "use 'Esqueci minha senha'". Log do passo 1 sobe de
+`info` para `warning` quando é infraestrutura. Dez testes novos.
+
+**Por quê.** No incidente de 08/09 o Supabase de produção degradou e o login
+devolveu a mensagem de "erro na migração" — a mesma de conta duplicada. A senha
+da aluna estava certa (o passo 2 já a conferiu contra o banco local). O conselho
+da tela era **ativamente errado**: trocar a senha não resolveria, e ainda gastaria
+o tempo dela num fluxo de recuperação durante uma queda.
+
+**O que quase me fez errar o diagnóstico.** Ia classificar por texto da exceção.
+Fui olhar a biblioteca antes e descobri que a `supabase-auth` **já classifica**:
+`handle_exception` devolve `AuthRetryableError` para 502/503/504/520-530 e para
+exceção de rede. Usar a semântica dela é mais robusto do que qualquer lista de
+substrings minha. O `grep` de texto ficou só como último recurso, e restrito.
+
+**O que só a medição real mostrou.** Apontei o cliente Supabase para um IP não
+roteável (10.255.255.1) e o timeout **não** veio embrulhado: veio como
+`httpx.ConnectTimeout` cru, sem passar pelo `handle_exception`. Ou seja, o caso
+mais comum de indisponibilidade escaparia se eu tivesse confiado só no
+`AuthRetryableError`. O ramo de `httpx` no classificador existe por causa dessa
+medição, não por precaução genérica.
+
+**O teste que vale mais que os outros nove.** O de controle: desliga o
+classificador com `patch` e confirma que o 401 antigo volta. Sem ele, os testes
+passariam mesmo que o 503 viesse de outro caminho do método — foi a mesma
+disciplina do experimento de controle do guard de tradução, ontem.
+
+**Promoção.** develop → hml (3 recursos `finished` no commit 589f0e8, os três
+caminhos de login conferidos no ar) → cherry-pick em `main` (`1463d8d`). O
+cherry-pick auto-mergeou de novo: `main` usa `settings.SUPABASE_KEY` /
+`SUPABASE_SERVICE_KEY` e a develop já usa os acessores novos
+(`supabase_chave_publica`/`admin`). O merge preservou o lado de `main`, que é o
+certo — mas, seguindo a lição de ontem, rodei a suíte **no worktree de `main`**
+(638 passam) em vez de confiar no cherry-pick limpo.
+
+**Pendente.** (1) Validação local de JWT por JWKS — **descartada pelo João**,
+registrada em `DECISOES.md` com custo e risco caso a decisão mude. (2) A causa
+do travamento do Supabase em si não foi determinada: os logs internos do projeto
+(painel → Logs → Postgres/Auth, janela ~17h30–18h40 de 08/09) não foram
+consultados. (3) `test_waha_servidores::test_cache_evita_uma_query_por_mensagem`
+falha na develop — pré-existente, confirmado com `git stash`, não é desta rodada.
+
+---
+
+## 2026-09-05b — Medição de grupos: o que o documento supunha e o que os dados disseram
+
+Terceiro documento delta do módulo, sobre a cadeia de medição: entrada, saída,
+evasão, leads, CPL, custo por entrada e por permanência. Migration 081.
+
+**O método mudou depois do erro de ontem.** Ontem eu declarei um bug fechado por
+inferência e a medição do dia seguinte me desmentiu. Hoje comecei medindo, e
+isso derrubou **três** diagnósticos do documento antes de qualquer linha de
+código:
+
+1. *"No #2 faltam 87 pessoas — leitura parcial ou paginação truncada."* Não é.
+   É **defasagem**: a lista vem do último sync e o contador anda pelo webhook. A
+   aritmética fecha exatamente — `lista + entradas − saídas após o sync =
+   contador − 1`, e o −1 é o nosso próprio número, excluído da lista de
+   propósito. Se eu tivesse "corrigido" a paginação, teria mexido em código
+   correto e o número continuaria divergindo.
+2. *"A captura funciona, a agregação não."* A agregação está certa: 7 dias do #2
+   = 181 entradas / 68 saídas. O #1 mostra 1 entrada porque **está cheio** — a
+   rotação manda todo mundo para o #2. O sintoma era o efeito pretendido.
+3. *"`custom_link` gravado como URL absoluta."* `campanha_links` sempre guardou
+   só o slug. O domínio errado era a `FRONTEND_URL`, corrigida de manhã.
+
+O que sobrou de bug real era outra coisa em cada caso.
+
+### O override de "cheio" — e uma decisão minha revogada em 24h
+
+O relato do Luiz: dois grupos marcados "Cheio = Sim" à mão voltaram para "Não"
+depois de um sync. Fui procurar no sync e não achei — porque o sync nunca tocou
+em `cheio_override`.
+
+**Quem apagava era a decisão que eu tomei ontem.** Eu tinha feito o override
+"limpar sozinho quando a escolha bate com o automático", para o campo não ficar
+pegajoso. O efeito colateral: marcar "Sim" num grupo **já cheio pela ocupação**
+gravava `null` — nada era persistido, a assinatura não mudava, "Salvar ordem"
+nem acendia, nenhum PUT saía. Depois o sync baixava a contagem e o grupo voltava
+para "Não". Da tela, é indistinguível de "o sync apagou".
+
+A correção não é desfazer a de ontem: o problema que ela resolvia (grupo que
+esvazia e nunca volta à rotação) é real. A saída é o **terceiro estado
+explícito** — Automático / Sim / Não. Agora nada limpa o override sozinho, e
+"Automático" é a porta de volta. O Select passa a mostrar a **intenção**; o
+resultado continua na coluna Ocupação, onde sempre esteve.
+
+### "Vagas esgotadas" era CPC jogado fora
+
+Com todos os grupos cheios, o clique caía numa página que não convertia — e o
+anúncio continua rodando e cobrando. Agora o link manda para o primeiro grupo da
+ordem, sem tela intermediária: sempre há gente saindo.
+
+Duas escolhas do fallback que não são óbvias:
+
+- Ele ignora `aberto`, `cheio` e o limite da campanha, mas **respeita a
+  `capacidade` do WhatsApp** — acima dela o convite falha do lado deles, e
+  mandar para lá seria trocar uma página inútil por um erro.
+- Ele **não usa `FOR UPDATE SKIP LOCKED`**, que a rotação normal usa. Ali o lock
+  distribui vagas; no fallback não há vaga a distribuir — todos vão para o mesmo
+  destino. Com o lock, dois cliques simultâneos fariam o segundo cair em "vagas
+  esgotadas" sem motivo, justamente o que o fallback existe para evitar.
+
+E o clique **conta**, marcado `resultado='fallback_lotado'`. Sem marcar, o gasto
+existiria no Meta e o clique não existiria aqui — a taxa de entrada melhoraria
+artificialmente justo quando a operação está pior.
+
+### Pausar não pausava nada
+
+`status='pausada'` era um select sem efeito: `rotear()` só bloqueava `arquivada`
+e o motor de roteiros nem lia o status. O documento pedia para **promover** esse
+controle a toggle no cabeçalho — o que teria dado destaque a um interruptor que
+não desliga. Fiz na ordem inversa: primeiro o efeito (link responde "campanha
+pausada", roteiro para), depois o destaque.
+
+### Evasão de 900%
+
+Saídas ÷ entradas do período: 9 ÷ 1. A base virou `participantes + saídas` —
+todo mundo que esteve dentro em algum momento da janela. É o único denominador
+que garante saídas ≤ base, e portanto evasão ≤ 100%. Aplicado também na Visão
+geral: bases diferentes fariam a mesma campanha mostrar duas evasões na mesma
+sessão.
+
+### "Leads" era clique
+
+1.348 leads ao lado de 53 entradas, CPL de R$0,97 ao lado de R$24,64 de custo
+por entrada, nada dizendo que não eram a mesma coisa. O pixel dispara no
+carregamento do `/g/`, antes do redirect — é clique qualificado. Renomeado.
+
+O critério de "sem medição" foi o que mais errei: comecei por "o grupo tem
+`sub_id`?", e todo grupo tem — ele nasce na ativação. Só conta como medição
+vínculo manual de Sub ID ou sub_id de grupo que **trouxe pedido de verdade**.
+
+### A validação na tela pegou o que a suíte não pegava
+
+Depois do deploy, os screenshots em homologação mostraram dois defeitos que
+nenhum teste apanharia:
+
+- **"Custo por entrada R$ 0,00 · 141 entradas"** com nenhum anúncio vinculado.
+  Eu tinha corrigido comissão/lucro/ROAS para "—" e deixado os custos com o
+  guard antigo, que olhava só o denominador. O resultado é o pior formato
+  possível: quatro cards honestos e dois mentindo, um do lado do outro, o que
+  faz os corrigidos parecerem os errados.
+- **Os dois chips de filtro da Atividade eram idênticos** — "Promos da Beatriz
+  …" duas vezes. O `truncate` corta o fim, e o fim (`#1`/`#2`) é justamente o
+  discriminador. Eu tinha *acabado* de mexer nessa linha por causa do
+  vazamento dos chips, e olhei se eles cabiam, não se davam para ler.
+
+E revisando o documento contra o que foi feito, achei um item 🟢 que ficou de
+fora: o **aviso ao tirar o último grupo da rotação**. Ele só passou a importar
+por causa desta mesma rodada — antes, fechar tudo levava a "vagas esgotadas",
+que é autoexplicativo; agora manda para o primeiro da ordem em silêncio, e sem
+o aviso ela fecharia tudo achando que parou a entrada.
+
+### A revisão adversarial pegou o que a tela não pegava
+
+Depois dos screenshots, rodei uma revisão do diff inteiro com 6 lentes
+independentes, cada achado passando por 3 refutadores com instrução de refutar
+na dúvida. 25 achados brutos → 10 sobreviveram → **5 defeitos distintos, todos
+em código que eu tinha escrito hoje**.
+
+O padrão dos cinco é o mesmo, e é o que vale guardar: **cada um nasceu de uma
+melhoria desta rodada, não de descuido isolado.**
+
+- O "Salvar só acende quando algo mudou" transformou uma falha inofensiva
+  (`GET /link` falha, o switch some) numa aba editável-e-não-salvável.
+- O toggle de status no cabeçalho — que só existe porque hoje `pausada` passou
+  a ter efeito — virou o primeiro controle FORA da aba capaz de trocar a
+  campanha com o formulário preenchido, e apagava as edições.
+- A guarda de resposta obsoleta que eu criei para o `carregar` não foi aplicada
+  ao `carregarMais` do mesmo componente.
+- O guard de campanha pausada no motor de roteiros era o único caminho de
+  parada da fatia que não movia a execução de estado — e a assinatura que ele
+  deixava (`enviando` + `iniciado_em` velho) é exatamente a que o tick procura
+  para resgatar worker morto. Cada 5 minutos, para sempre.
+- Os chips da Atividade vinham do rascunho não salvo. O `ExportarLeadsModal`
+  logo abaixo, no mesmo arquivo, já documentava a regra oposta com o motivo
+  escrito — e eu escrevi o inverso a 100 linhas de distância.
+
+Nenhum dos cinco apareceria em `tsc`, lint, pytest ou screenshot: quatro
+exigem uma falha de rede ou uma sequência de cliques específica, e o quinto só
+se manifesta 30 minutos depois, no cron.
+
+### E um item que eu tinha dado por feito duas vezes
+
+No fecho, o João perguntou se todos os pontos foram aplicados e pediu uma
+**tabela** — não um resumo. Auditando linha a linha contra o documento,
+apareceu uma sub-cláusula pulada: o parágrafo do texto da Atividade termina com
+"Some depois de 30 dias.", e eu implementei só a metade da frente.
+
+Vale menos pelo tamanho do item e mais pelo modo de falha: **eu tinha escrito
+dois resumos afirmando que a Atividade estava completa**, e os dois estavam
+errados no mesmo ponto. Prosa bem escrita soa completa; a tabela obriga a olhar
+cada linha do documento e dizer o estado dela.
+
+Virou `.claude/rules/entrega-de-rodada.md` nos dois repos, com a regra de
+verificar **no código** — auditar de memória é exatamente como o item se
+perdeu.
+
+### Pendências
+
+- **Migration 081 pendente em produção**, junto com 074–080. Ela é `ALTER TABLE`
+  pura e sem bloqueio jurídico, mas sem ela `campanha_link_eventos.resultado`
+  não existe e **todo** clique quebra, não só o fallback
+- O telefone continua dependendo de **número conectado + sync** em hml — o Luiz
+  precisa reconectar para a coluna sair preenchida
+- Os Sub IDs antigos (`wgea`) convivem com os novos (`grupobeatriz2k7f`)
+  permanentemente, por decisão
+
+---
+
+## 2026-09-05 — O telefone NÃO estava no payload; e o link de hml apontava para produção
+
+Retifica a entrada de ontem no título e na conclusão. O que mudou hoje: janela de
+30 dias na busca de Sub ID, `frontend_url` derivado do BANCO, e o telefone
+resolvido pelo REST do WAHA em vez do webhook.
+
+**A entrada de ontem estava errada onde importa.** Ela dizia "o telefone estava
+no payload o tempo todo, no campo ao lado" — a leitura do webhook realmente
+estava errada e a correção era necessária, mas ela **não** era suficiente, e eu
+declarei vitória sem medir depois do deploy. A medida chegou hoje: dos eventos
+gravados em homologação **depois** daquele deploy, **191 continuaram todos
+`identificador_tipo='lid'`**. Zero telefone.
+
+Ou seja: o evento `group.v2.participants` do WAHA **não manda `PhoneNumber`**. O
+recon tinha marcado isso explicitamente como "NÃO ESTÁ PROVADO que o payload
+carrega o telefone — a prova que existe é do payload REST de `/groups`, não do
+webhook", e eu tratei a inferência como fato porque ela explicava o sintoma bem
+demais. Explicar o sintoma não é o mesmo que ser a causa.
+
+A leitura no webhook **fica**, com comentário dizendo por quê: ela cobre o dia em
+que o WAHA passar a mandar o campo, e apagá-la por parecer inútil faria o
+telefone ser descartado de novo. Quem resolve hoje é o payload REST, que
+sabidamente traz `PhoneNumber` — é o que `_identidades` já lia para descobrir se
+somos admin. O sync passou a preencher os eventos que só tinham o LID, casando
+pelo `identificador_hash`, que é estável por construção; o hash não muda, só a
+coluna exportável. É idempotente e depende de **número conectado**: sem sync não
+há payload REST, e sem ele não há telefone.
+
+**O link do grupo: quase repeti o erro que o repo já documenta.** O sintoma
+chegou como "a página do grupo continua não funcionando", com 404 no celular. Não
+era a rota: a tela de homologação mostrava `https://marketdash.com.br/g/8496c6c7`
+— domínio de **produção**, onde o módulo não existe. `FRONTEND_URL` estava setada
+como produção nos dois recursos de hml no Coolify, e o `.env` ainda tinha a
+variável **duplicada**, com produção na última linha (o `python-dotenv` monta um
+dict e a última vence).
+
+A primeira correção que escrevi derivava a base de `ENVIRONMENT`. Só descobri o
+problema ao medir a API depois do deploy: `/health` reporta
+`"environment":"development"` em **homologação**. É a mesma armadilha que o
+`CLAUDE.md` e o `celery_app` documentam há tempo — os dois ambientes reportam
+`development` — e ela quase entrou de novo, agora com consequência pior: sem a
+env explícita, **produção** iria para `localhost:8080`. Refeito com
+`app/core/ambiente.identidade_do_banco`, a ref do projeto Supabase, que é a
+fonte que o projeto já usa para isso.
+
+Lição para a próxima: quando existir um helper de "que ambiente é este", usar
+ele. A tentação de ler `ENVIRONMENT` é grande porque o nome promete exatamente
+isso — e é justamente o que não cumpre aqui.
+
+**O que sobrou de menor.** A busca de Sub ID agregava `dataset_rows_v2` sem
+recorte de período a cada abertura do modal; o tempo crescia com a conta, então
+quem vende mais esperava mais — justamente quem mais usa a tela. Janela de 30
+dias, com o escopo dito na tela (sem isso a afiliada vê a comissão cair e acha
+que perdeu venda). E um teste que eu mesmo escrevi ontem era flaky: comparava
+LISTAS de um `query().all()` sem `ORDER BY`, e o Postgres não garante ordem.
+
+Pendente: reconectar um número em hml e rodar o sync — é o que faltava para o
+telefone existir de fato, na lista de participantes e nos eventos.
+
+---
+
+## 2026-09-04b — O telefone estava no payload o tempo todo, no campo ao lado
+
+O que mudou: migration **080** (`campanha_grupos.cheio_override`,
+`grupo_participantes`, `campanha_sub_ids`), correção do webhook de participantes,
+fim do rateio de gasto por grupo, Leads/CPL na tela de Anúncios, soft-delete e
+duplicação de campanha. Aplicada em **hml**; produção continua sem o módulo.
+
+**O bug que a rodada anterior não fechou — e por quê.** A 079 criou
+`grupo_eventos.identificador`, o service passou a preenchê-lo, o repository a
+gravá-lo, e mesmo assim a exportação saiu com telefone vazio em 8 de 8 linhas. A
+tentação era procurar o defeito na cadeia nova. Ele estava numa linha que ninguém
+tocou, no webhook:
+
+```python
+campo(p, "id", "JID", "PhoneNumber", "LID")
+```
+
+`campo()` devolve o **primeiro** nome presente. E em grupo com endereçamento LID
+o `JID` não é uma alternativa ao telefone — ele **é** o `…@lid`, com o telefone
+num campo separado, ao lado. O próprio repo já documentava isso em
+`whatsapp_grupo_sync_service._identidades`, escrito para resolver exatamente essa
+confusão no sync. A informação existia; o webhook não a usava.
+
+Medido antes de mexer: dos 49 eventos gravados depois do deploy da 079,
+**49 eram `identificador_tipo='lid'` e zero eram `telefone`**. Não é "às vezes o
+WhatsApp não manda o número" — é 100%, que é assinatura de defeito, não de
+privacidade de usuário.
+
+**A lição de teste.** Havia três casos parametrizados para esse payload:
+`{id}`, `{JID}` e `{PhoneNumber}`. Os três assumiam formas **mutuamente
+exclusivas**, e o comentário de um deles dizia "endereçamento LID: sem `id`, só
+telefone" — a premissa errada, escrita com confiança. O caso real
+(`{JID: "…@lid", PhoneNumber: "…"}`, os dois juntos) não existia em teste nenhum.
+Cobertura que enumera variantes de um formato precisa incluir a combinação, não
+só as alternativas.
+
+**Por que a identidade NÃO mudou de precedência.** A correção mais curta seria
+inverter a ordem para `PhoneNumber` primeiro. Não serve: essa string vira
+`identificador_hash`, a chave que casa entrada com saída. Trocá-la invalidaria o
+pareamento de todos os eventos já gravados — "entraram e ficaram" quebraria em
+silêncio. Identidade e telefone passaram a ser **dois campos**, e só o segundo
+mudou de fonte.
+
+**A lista de participantes: a segunda inversão de LGPD em dois dias.** O
+documento pede "exporta quem está no grupo agora". Não havia fonte: o WAHA
+entrega a lista e o código a descartava de propósito (`listar_grupos` afirmava
+que os membros "nunca são persistidos"). Sem persistir, o único caminho seria
+derivar de `grupo_eventos` — e dos 946 membros do grupo 281, só 472 têm evento.
+CSV incompleto sem dizer que está incompleto é pior que CSV nenhum.
+
+O recorte é o mínimo que atende: **só grupo ativado**. Grupo que a afiliada
+apenas tem no WhatsApp e nunca ligou continua sendo contagem e nada mais. Isso
+mantém a promessa para o caso geral e a quebra só onde ela pediu a
+funcionalidade. `PrivacyPolicy.tsx` reescrita no mesmo commit.
+
+**"Cheio" não existia como estado — só como cor.** A rotação sempre respeitou o
+limite (`TETO_SQL`, com teste dedicado desde a 079). O que faltava era o grupo
+ser **marcado**: `aberto` só virava `false` no ramo em que a campanha inteira
+esgotava, e só com `reabertura_automatica=false`, cujo default é `true`.
+Resultado: 946/900 com a linha amarela e o toggle "Aberto" ligado para sempre. A
+usuária lê isso como "a regra não funciona" — e o diagnóstico dela vira "o limite
+não tira o grupo da rotação", que é falso e manda o próximo dev procurar o bug na
+query certa.
+
+A varredura de esgotamento passou a gravar `cheio_override` em vez de escrever
+`aberto=False`. Escrever `aberto` desfazia a escolha da usuária por baixo, o que
+é o mesmo tipo de erro: o sistema mexendo num eixo que é dela.
+
+**O rateio produzia a métrica de destaque a partir de nada.** `_gasto_atribuido`
+distribuía o gasto da campanha entre os grupos — proporcional às entradas do
+período e, quando **ninguém** entrava, em partes iguais. R$1.223,05 virou
+R$611,52 em dois grupos de tamanhos completamente diferentes, e daí saiu "Lucro
+por pessoa −R$0,65 / −R$0,92". Ela lê e conclui que os dois grupos dão prejuízo,
+quando não há informação para afirmar nada sobre nenhum dos dois. Gasto, lucro e
+ROAS passaram a existir só no nível da **campanha**, com o investimento inteiro
+entrando uma vez — o que `/resumo` já fazia desde 03/09.
+
+**A Visão geral zerada era a janela, não a escrita.** A suspeita registrada era
+"a série foi cortada na troca de número". Descartada estruturalmente
+(`grupo_eventos` e `grupo_snapshots` só têm `grupo_id`, nunca `instancia_id`) e
+depois nos dados: 100% dos eventos daquela campanha eram do próprio dia, e a
+janela fechava no último dia FECHADO em Brasília. O corte existia para não pôr um
+ponto pela metade na ponta do gráfico. O preço era maior: campanha nova aparecia
+inteira em zero com movimento acontecendo, e zero é uma afirmação — faz a
+afiliada concluir que o link não está funcionando. Hoje entra, marcado `parcial`.
+
+**Soft-delete porque o anúncio não para junto.** Hard-delete levaria
+`campanha_links` no CASCADE, o slug deixaria de existir e `/g/{slug}` só poderia
+responder 404 — enquanto o anúncio já veiculando continua mandando tráfego por
+dias. O Meta trata destino 404 como quebrado. Agora responde 200 com "campanha
+encerrada". O `excluir()` também cancela as execuções pendentes (não há revoke de
+Celery aqui: o cancelamento é por estado, e os dois guards do
+`RoteiroEnvioService` já leem isso) e desliga monitoramentos que apontavam para a
+campanha — o FK é `SET NULL` e eles continuariam capturando e replicando para
+lugar nenhum, em silêncio.
+
+**Cinco itens do documento não eram bugs.** Contador de grupos (cache do
+Zustand), bloqueio de remoção de número (implementado desde a 079 — faltava o
+frontend reverter após o 409), modal com radio (é Checkbox; o círculo é
+`--radius: 0.75rem` com `rounded-sm` numa caixa de 16px, e o defeito é global),
+prévia "card verde flutuante" (já era bolha, numa coluna sticky), e `/g/{slug}`
+com 404 (funciona em hml; produção não tem o módulo e devolve **200** servindo o
+SPA). Investigar antes de corrigir economizou cinco mudanças desnecessárias — e
+duas delas teriam introduzido regressão.
+
+Pendente: a **080 tem o mesmo bloqueio jurídico da 079**, e mais forte — publicar
+a política antes de aplicá-la em produção. E o checkbox redondo é global: o
+`CheckboxQuadrado` foi aplicado só ao módulo de grupos.
+
+---
+
+## 2026-09-04 — Campanhas de grupos: o número do lead, os Números da campanha e o teto
+
+O que mudou: migration **079** (`campanha_numeros` + `campanhas.limite_participantes`
++ `grupo_eventos.identificador`/`identificador_tipo`), aba Números, Visão geral
+como painel de leitura, limite de participantes, e a aba Anúncios com gasto,
+veiculação real e paginação. Aplicada em **hml**; produção não tem o módulo.
+
+**Por que o identificador tinha prazo.** `grupo_eventos` guardava só o HMAC — e
+hash não volta a ser número. A exportação de leads existia e entregava data,
+grupo e origem: nada com que falar com quem entrou. Cada dia de campanha rodando
+antes da correção era lead perdido para sempre. Como o módulo nunca foi para
+produção, deu tempo — mas a decisão de privacidade **inverteu**, e os três
+docstrings que prometiam "o número nunca toca o banco" foram reescritos. A
+política de privacidade ainda promete o contrário: é bloqueio de promoção.
+
+**O LID.** O WhatsApp manda `84729130@lid` no lugar do telefone quando a pessoa
+tem privacidade ativa. Guardar o tipo numa coluna (em vez de adivinhar pelo
+sufixo a cada leitura) é o que permite o CSV sair com `telefone` **vazio** nesses
+casos. Preencher com o LID daria uma lista de contatos que não existe — e a
+afiliada tentaria discar. Célula em branco é a verdade.
+
+**Por que a aba Números não é conforto.** "Adicionar grupos" listava grupos de
+todos os números conectados. Grupo do número A numa campanha que dispara pelo B
+faz o envio **falhar** — B não participa daquele grupo. A validação do escopo
+ficou também no `PUT /grupos` (422): só na tela, o endpoint seguiria aceitando
+exatamente o vínculo que quebra o envio.
+
+**A regra de lotação vive num lugar só.** `LEAST(capacidade, COALESCE(limite,
+capacidade))` é lida por três queries (escolher grupo, abrir o próximo, fechar os
+lotados) e pelo contador "Cheios" da Visão geral. Deixar cópias é como uma delas
+fica para trás e o grupo passa a receber gente depois de "cheio", em silêncio —
+por isso `TETO_SQL`/`teto_efetivo()` no repository, e um teste que compara o
+contador da tela com a decisão da rotação.
+
+**Achado ao aplicar a migration:** hml tem um event trigger `ensure_rls` que liga
+RLS em toda tabela nova. Foi ele que protegeu `campanha_numeros`, que o
+`create_all` já tinha criado antes da migration chegar. **Não confirmado em
+produção** — o runbook de promoção continua valendo por inteiro.
+
+**Achado na validação visual:** o modal de exportar leads cortava em ontem, como
+os atalhos do produto. Para lead isso é errado: não é métrica comparável, é
+contato, e quem entrou hoje de manhã é quem ela quer chamar agora. Passou a
+incluir o dia corrente.
+
+Pendente: política de privacidade antes de `develop→main`; `WHATSAPP_HASH_SALT`
+definida antes do primeiro evento em produção.
+
+---
+
+## 2026-09-04 — Primeira promoção para produção por cherry-pick, e o que ela ensinou
+
+O que mudou: a performance do dashboard entrou em produção (`8ffb6f9` backend,
+`8e4092f` frontend) **sem merge da develop**. O procedimento virou a seção 9 do
+`docs/PROMOCAO_PARA_PRODUCAO.md` e a seção "Branches e deploy" do `CLAUDE.md`
+da raiz, que não tinha nada sobre deploy.
+
+**Por que não foi merge.** `git log origin/main..origin/develop` deu **83
+commits** no backend e **50** no frontend: módulo de Grupos inteiro, automação
+em story, isolamento das filas, duas rodadas de Configurações. Com as migrations
+não aplicadas, o merge faria o `create_all` do boot criar as ~20 tabelas do
+módulo **sem RLS** em produção — a seção 0 deste runbook descreve exatamente
+isso. O pedido era subir um fix, não o backlog.
+
+**Worktree, não `checkout`.** A cópia de trabalho da develop tem 28 arquivos
+modificados que não são meus (Campanhas/Grupos em andamento). `git worktree add`
+isola o cherry-pick sem tocar neles.
+
+**A armadilha do teste no worktree.** 25 erros de coleção + 18 falhas assustam,
+e não são do commit: o worktree não tem `.env` (gitignored) e o `.env` da
+develop tem 15 chaves que o `Settings` da main rejeita (`extra_forbidden`). O
+que decide é o **controle**: `HEAD~1` deu `18 failed, 369 passed, 25 errors` e
+o fix deu `18 failed, 373 passed, 25 errors` — mesma falha dos dois lados, +4
+testes novos.
+
+**Confirmação de deploy pelo estado real.** O job verde só diz que o webhook do
+Coolify foi aceito. O que vale é `status: finished` **com o SHA empurrado** na
+API de deployments (o token está no `.env`, ao contrário do que a memória antiga
+dizia) e o hash do bundle do frontend mudando. Medido em produção depois:
+`/datasets/all/rows` com o período pedindo **1,84 MB em 2,6 s** (era ~30 MB sem
+filtro), KPIs na tela em 3,7 s, cache de 1.782 KB **gravado** — antes nunca
+persistia. Números conferidos contra SQL: R$ 8.840,60 e 3.306 pedidos na tela e
+no banco.
+
+Pendente: o SHA em `main` é outro, então o merge futuro da develop reconflita em
+`datasetStore.ts`, `clicksStore.ts`, `Dashboard.tsx`, `Reports.tsx`,
+`ShopeeIntegrationSettings.tsx` e `dataset_row_repository.py` — manter o lado da
+develop.
+
+## 2026-09-04 — `list_by_user` consulta colunas, porque o dashboard pedia 67 mil linhas
+
+O que mudou: `DatasetRowRepository.list_by_user` passou a consultar as 19
+colunas que a API expõe em vez da entidade `DatasetRow`. **Nenhuma migration**,
+nenhuma mudança de contrato — `serialize_row` só lê atributos, e a Row nomeada
+responde igual.
+
+**Por que agora.** O dashboard chamava `/datasets/all/rows` sem período: 67.631
+linhas na conta do Luiz para exibir 3.882. Com o filtro de data a consulta cai
+de **2.018 ms para 14 ms** (`idx_dataset_rows_v2_user_date`, que já existia).
+Corrigido o principal no frontend, sobrou o custo por linha do backend — e
+materializar 67 mil entidades ORM (identity map, tracking de estado) para
+serializar e descartar é o gasto mais fácil de eliminar.
+
+**O que NÃO fiz, e por quê.** Tirar o `response_model=List[DatasetRowResponse]`
+economizaria uma revalidação Pydantic por linha, mas o schema tem
+`field_serializer` que formata a data como **DD-MM-YYYY** — o formato que o
+frontend parseia. Sem o response_model a data sairia ISO e a tela quebraria em
+silêncio. Economia pequena, risco desproporcional.
+
+Pendente: o caminho definitivo é **agregar no backend**. Os KPIs que a aluna vê
+são calculados no cliente (`get_kpis` não é o que a tela usa), então hoje não há
+como responder "comissão do período" sem mandar as linhas.
+
+## 2026-09-04 — Estorno do pedido antigo renomeava a conta de volta e barrava quem tinha acabado de pagar
+
+O que mudou: `find_or_create_user()` ganhou `allow_email_update`; Kiwify e Cakto
+passam `action == "activate"`. Regressão em
+`tests/unit/test_webhook_rename_email_por_cpf.py`. **Nenhuma migration.**
+
+**O bug não estava na assinatura — estava na identidade.** A aluna Anne comprou
+com o e-mail digitado errado (`anne.jesus@hormail.com`), recomprou com o certo
+(`annejesus592@gmail.com`) e o pedido velho foi estornado. Os webhooks chegaram
+nesta ordem: `order_approved` (errado) → `order_approved` (certo, renomeia por
+CPF) → `order_refunded` do pedido 1 → `subscription_canceled` do pedido 1. Os
+dois últimos trazem o e-mail do **pedido antigo**, e o rename por CPF era
+incondicional: a conta paga voltou para o e-mail errado. No login com o e-mail
+certo a lazy migration não achou ninguém e criou uma **segunda conta, sem
+assinatura** — e o gate mostrou "Assinatura Necessária" para quem tinha pago 3h
+antes.
+
+**Por que ninguém viu.** Não há erro em lugar nenhum: a assinatura existe, está
+ativa, paga e válida até 03/10 — só que pendurada em outro `user_id`. Log de
+assinatura, painel admin e `subscription_events` mostram tudo certo. O único
+rastro é `users.updated_at` bater com o horário do **estorno**, não com o da
+compra. Diagnóstico de "paguei e o app pede assinatura" tem que começar
+procurando **duas linhas em `users`** para a mesma pessoa (por CPF, e por
+`subscription_events.customer_cpf`), não pela `subscriptions` do usuário logado.
+
+**Por que a flag é `activate` e não "não renomeie em cancelamento".** O critério
+não é o nome do evento, é a direção: só evento que **libera** acesso carrega a
+identidade atual do cliente. Estorno, cancelamento e cobrança atrasada falam
+sempre de um pedido que já existia — e podem chegar em qualquer ordem, inclusive
+depois da recompra, que foi exatamente o que aconteceu aqui.
+
+Varredura no banco de produção: **só a Anne** foi afetada (nenhuma outra conta
+sem assinatura tem `subscription_event` com o próprio e-mail sob outro
+`user_id`). Dados corrigidos à mão em produção pelo João em 04/09 — troca de
+e-mail entre as contas 75 e 76 e telemetria repontada, sem apagar linha.
+Pendente: a correção de código ainda **não está em produção** (sobe com a leva
+da `develop`); até lá o caso se repete em qualquer recompra que corrija e-mail.
+
+## 2026-09-04 — Módulo em beta vira flag de runtime, nome do Facebook se auto-cura e pareamento sem QR
+
+O que mudou: `feature_flags.modulos_beta_liberados()` + `modulos` no contexto
+de plano; `ad_accounts_names_json` passa a guardar nome **e moeda**, com
+`POST /facebook/ad-accounts/resolver-nomes` novo; `codigo_de_pareamento` no
+`WahaClient`, no service e em `POST /instancias/{id}/codigo-pareamento`.
+**Nenhuma migration** — a coluna da 075 já existia e a mudança é de formato do
+JSON dentro dela.
+
+**Por que a flag mora aqui e não no frontend.** O gate por hostname é
+build-time: liberar o módulo de disparo em grupo para uma conta de teste em
+produção exigia rebuild + redeploy. Aqui é `feature-flags.json` + a env
+`MODULOS_BETA` (csv, que **manda sobre o arquivo**) — Coolify + restart. A
+distinção "definida e vazia" (fecha tudo) × "não definida" (cai no arquivo) é
+proposital: sem ela não haveria como recolher um beta só pelo ambiente. E o
+default é **fechado**: módulo ausente do JSON não aparece, porque o default
+oposto abriria o módulo para a base inteira por um typo.
+
+**Formato do metadado da conta de anúncio mudou sem migration de dado.** A
+coluna passa a aceitar `{"act_1": {"name":..., "currency":...}}` **e** o
+formato antigo `{"act_1": "Nome"}`. Reescrever tudo exigiria migration; leitura
+estrita apagaria o nome de quem já estava conectada. A tolerância custa um
+`isinstance` e evita as duas coisas.
+
+**Resolver nome ficou FORA do `/status` de propósito.** A rodada anterior tirou
+a Graph API do carregamento da tela (era o custo que travava conta com muitos
+ad accounts) — devolver a Graph para lá agora desfaria isso. Endpoint separado,
+chamado uma vez pela tela, depois do primeiro paint e só quando falta nome. E
+ele faz **merge**: conta que sumiu da Graph (deixou de ser compartilhada com o
+app) continua selecionada e perderia o nome já gravado se o dict fosse
+substituído inteiro.
+
+**Pareamento por código: `auth/request-code` do WAHA, com a sessão viva.** O
+código só sai com a sessão em `SCAN_QR_CODE`; sessão parada é religada e o
+código fica para o toque seguinte — devolver "erro" ali seria mentir sobre algo
+que a afiliada não tem como resolver. Número inválido falha **antes** de
+qualquer chamada ao WAHA (`NumeroInvalido` → 422), senão "(11) 3222-4444" viria
+como `erro: sessao`.
+
+**A sync Shopee não estava quebrada — foi desligada.** Os 24
+`shopee-sync-*` estavam `active = false`; o último `job_run_details` é
+`succeeded` em 05/08 15:00 UTC e `sync_runs` não tem `cron_incremental` nenhum
+depois. Todo o resto do pg_cron do projeto continuava ativo, então não é a
+extensão. E o relatório dizia "parada desde 20/08" porque as duas contas com
+data recente tinham rodado sync **manual** — a parada real é 05/08, 29 dias.
+Produção religada em 04/09 (24/24); hml fica desligada, com só o Luiz (user 9)
+agendado pela `078`.
+
+Gotcha do Supabase que vale para toda migration de pg_cron: **`UPDATE cron.job`
+dá `42501: permission denied`** (RLS + DML não liberado ao papel do SQL Editor).
+Use `cron.alter_job()` ou recrie pelo nome com `cron.schedule`, que faz upsert.
+E `SELECT` em `cron.job` pode vir **vazio em vez de erro**, porque a RLS filtra
+por `username = current_user` — vazio não significa "não existe job".
+
+---
+
+## 2026-09-03 — Rodada Configurações: dois eixos de "ativo" e o tier que não podia cair
+
+O que mudou: coluna `whatsapp_grupos.ativado` (074) com PATCH próprio, e o
+`sub_id`/`custom_link` do grupo migraram do sync para o momento da ATIVAÇÃO;
+`rebuild_ad_spend_from_meta` passou a filtrar por conta de anúncio e o
+FacebookIntegration ganhou dicionário de nomes (075); colunas `pending_*` em
+subscriptions para "maior tier vence" (076); Resumo diário e Blacklist
+removidos por inteiro (077 desagenda o cron e derruba as tabelas); janela de
+envio nasce DESLIGADA e a regra de borda passou a valer por execução.
+
+Por quê assim:
+
+**`ativo` vs `ativado` não podiam ser a mesma coluna.** `ativo` é lifecycle do
+sync — some do WhatsApp vira FALSE, reaparece vira TRUE, incondicionalmente,
+todo dia. Se o toggle da usuária morasse ali, o sync da madrugada desfaria a
+escolha dela e ninguém entenderia por quê. São perguntas diferentes ("o grupo
+existe?" e "eu quero operar nele?") e por isso são duas colunas.
+
+**Atribuição nasce na ativação, e isso não é detalhe de implementação.** O
+`sub_id` é o que liga comissão ao grupo. Nascendo no primeiro envio ou na
+criação da campanha, todo o tráfego que entrou antes disso perde atribuição de
+forma permanente — não dá pra reprocessar. Ativar já entrega o link de entrada
+pronto pra anúncio, antes de existir qualquer campanha. Como o sync deixou de
+criar (e de backfillar), a invariante "ativado ⇒ tem sub_id" ficou dependendo
+de um ponto só; por isso o motor de envio auto-cura quem chegar sem ela, e o
+backfill da 074 inclui grupo de monitoramento — não só de campanha, senão
+monitoramento vivo morreria calado no deploy.
+
+**"Maior tier vence" num schema de uma linha por usuário.** `user_id` é UNIQUE,
+então duas assinaturas simultâneas nunca existiram no estado — o último webhook
+sobrescrevia. Quem tinha Max até dezembro e assinasse Pro hoje perdia o Max
+pago na hora. A saída foi pendurar a compra menor em `pending_*` e promovê-la
+quando a principal expira, na LEITURA (sem depender de webhook novo). O detalhe
+que quase passou: `provider_offer_name` continuava apontando pro plano antigo, e
+a revalidação de 30 dias reescreve `plan` a partir dele — o downgrade voltaria
+um mês depois, longe da causa.
+
+**Tirar a Graph API do mount cobrou um preço escondido.** `GET /ad-accounts`
+era, sem que ninguém tivesse decidido isso, o detector de token morto do
+Facebook: ao falhar, marcava a integração desconectada. Com a chamada movida
+pro modal, o sync virou o único lugar que ainda toca a Graph com regularidade —
+e ele engolia o erro e seguia pra próxima conta. Sem mexer nisso, a tela diria
+"Conectado" enquanto o gasto parava de entrar.
+
+Migrations 074-077 **aplicadas em homologação em 03/09** (colunas conferidas
+uma a uma, 3 tabelas derrubadas, cron desagendado, API religada limpa) e
+**pendentes em produção**. A 077 é a que não pode ser esquecida lá: o
+`whatsapp-resumo-9am-brt` está agendado em produção e o código que ele chama
+deixou de existir. Ela também descarta os opt-ins reais das alunas — em hml
+eram 1 opt-in e 6 envios de teste, em produção é dado de gente.
+
+Outras pendências: Contas do Facebook selecionadas antes da 075 não têm nome gravado —
+mostram o id até a afiliada re-salvar a seleção no modal. Quem nunca abriu a
+aba Envio tinha 08–22 implícito e passa a enviar sem trava de horário: não há
+backfill, e vale avisar antes do deploy (risco anti-ban). Pausa por dia já
+salva continua no banco, invisível na tela, até a usuária salvar de novo.
+
+---
+
 ## 2026-09-02 (noite) — Rodada 9 do painel admin: as 3 causas eram outras
 
 O que mudou: MRR mensaliza sempre ("annually" entrou nos apelidos de
