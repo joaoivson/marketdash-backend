@@ -227,10 +227,14 @@ async def coletar_coolify() -> dict:
                 # "o proxy caiu".
                 servidor = {**servidor, **{k: v for k, v in detalhe.items() if v is not None}}
     except Exception as e:  # noqa: BLE001 — bloco degrada, painel não cai
-        logger.warning("Painel de infra: Coolify indisponível (%s)", e)
+        logger.warning("Painel de infra: Coolify indisponível (%r)", e)
+        # `str(e)` de um timeout do httpx é VAZIO: o erro chegaria na tela como
+        # "ReadTimeout: " e não diria nada. Com a VPS estrangulada esse é
+        # justamente o erro mais provável.
+        detalhe = str(e)[:200] or f"sem detalhe (timeout de {TIMEOUT_COOLIFY}s?)"
         return {
             "configurado": True,
-            "erro": f"{type(e).__name__}: {str(e)[:200]}",
+            "erro": f"{type(e).__name__}: {detalhe}",
             "instrucao": None,
             "url": settings.COOLIFY_API_URL,
             "versao": None,
@@ -894,8 +898,34 @@ def _cruzar(recursos: list[dict], pontas: list[dict], filas: dict) -> None:
 # ────────────────────────────── orquestração ─────────────────────────────
 
 
-async def coletar() -> dict:
+#: Cache do painel inteiro. Existe por um motivo medido, não por elegância:
+#: cada coleta são 6 chamadas à API do Coolify (Laravel) mais 2 à Hostinger, e
+#: em 15/09 — com o VPS limitado a 20% de CPU — o container `coolify` e o
+#: `coolify-db` juntos consumiam mais que o teto inteiro da máquina. Dois
+#: admins com a tela aberta, ou um F5 nervoso durante o incidente, não podem
+#: multiplicar isso.
+#:
+#: 30 s é curto o bastante para a tela continuar servindo para diagnóstico —
+#: quem investiga aperta "Atualizar" e recebe dado de no máximo meio minuto.
+TTL_CACHE_S = 30.0
+_cache: tuple[float, dict] | None = None
+
+
+async def coletar(forcar: bool = False) -> dict:
     """O painel inteiro. Bloco que falhar leva o erro dele, e só ele."""
+    global _cache
+
+    if not forcar and _cache is not None:
+        nascido_em, payload = _cache
+        if time.monotonic() - nascido_em < TTL_CACHE_S:
+            return {**payload, "do_cache": True}
+
+    payload = await _coletar_agora()
+    _cache = (time.monotonic(), payload)
+    return payload
+
+
+async def _coletar_agora() -> dict:
     coolify, hostinger, pontas = await asyncio.gather(
         coletar_coolify(),
         coletar_hostinger(),
@@ -910,6 +940,7 @@ async def coletar() -> dict:
     return {
         "gerado_em": datetime.now(timezone.utc).isoformat(),
         "somente_leitura": True,
+        "do_cache": False,
         "maquina": maquina,
         "coolify": coolify,
         "hostinger": hostinger,
