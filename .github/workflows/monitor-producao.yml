@@ -38,6 +38,19 @@ concurrency:
 permissions:
   issues: write
 
+# GH_REPO é OBRIGATÓRIO aqui, e a falta dele custou o alerta de 15/09/2026.
+#
+# O workflow não faz `actions/checkout` (não precisa de código para dar um
+# curl), então o `gh` não tem repositório git de onde inferir o alvo e morre
+# com `failed to run git: fatal: not a git repository`. Nos passos de LISTAR
+# havia `|| true`, que escondeu o problema; o `gh issue create` não tinha, e
+# então: produção ficou 25s fora do ar às 12:13, a sonda DETECTOU certo, e o
+# alerta não foi criado — o run só ficou vermelho no Actions, onde ninguém
+# olha. Sonda que detecta e não avisa é pior que sonda nenhuma, porque dá a
+# sensação de cobertura.
+env:
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   probe:
     name: Sondar produção de fora

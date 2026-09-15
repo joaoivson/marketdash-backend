@@ -67,15 +67,34 @@ O painel a mostra com esse rótulo; remover é decisão de operação.
 sobe com `--requirepass` — todo acesso a cache e fila no ambiente local tomava
 `AuthenticationError` em silêncio.
 
-### Pendente de ação manual
+### Bloco da Hostinger: CPU, RAM, disco — e a limitação que a máquina não desfaz
 
-- **CPU/RAM/disco do VPS** exigem `HOSTINGER_API_TOKEN` (hPanel › VPS › API).
-  Sem ele o bloco mostra a instrução na tela, e não há alternativa: a API do
-  Coolify beta.463 **não expõe métricas** (`/servers/{uuid}/metrics` → 404;
-  o Sentinel coleta, mas só a UI dele lê).
-- **`COOLIFY_TOKEN` no ambiente da API.** O recomendado é criar um token
-  read-only (Coolify › Security › API tokens — o default já é read-only), e
-  não reusar o token root do `.env`.
+Com o `HOSTINGER_API_TOKEN` configurado, o painel mostra CPU, memória, disco e
+uptime do VPS (valor de agora, pico e média de 12 h), além das últimas ações da
+Hostinger sobre a máquina.
+
+A que importa é **`ct_set_limits`**: a "CPU limitation" que a Hostinger aplica
+sozinha quando a máquina satura. Ela é auto-sustentável — com o teto reduzido,
+a carga rotineira já satura a fração liberada, o gráfico marca 100% para sempre
+e **nada volta ao normal até alguém remover no painel da Hostinger**. Foi ela
+que transformou um pico de 11 minutos em ~20 h de apagão em 11/09, e até aqui
+só dava para saber pelo painel ou pelo e-mail deles. Agora grita na tela.
+
+O token usado é o **read-only** (`COOLIFY_API_TOKEN_GET`); `COOLIFY_TOKEN`, que
+é root, fica só de fallback.
+
+### Correção: a sonda de produção detectava e não avisava
+
+Em 15/09 às 12:13 a produção ficou **25 segundos** sem responder (`/health` em
+`HTTP 000` após 25 s, preflight sem `Access-Control-Allow-Origin`). A sonda
+externa detectou corretamente — e **não abriu issue nenhuma**: o workflow não
+faz `actions/checkout`, então o `gh` não tem repositório de onde inferir o alvo
+e o `gh issue create` morre com `fatal: not a git repository`. Os passos de
+listar tinham `|| true` e escondiam o problema; o de criar não tinha, e o run
+apenas ficou vermelho no Actions.
+
+Sonda que detecta e não avisa é pior do que sonda nenhuma, porque dá sensação
+de cobertura. Corrigido com `GH_REPO` no `env` global do workflow.
 
 ## [Não versionado] - 2026-09-12 (Produção 16h fora do ar: o CORS que não era CORS)
 

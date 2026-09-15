@@ -133,7 +133,16 @@ class Settings(BaseSettings):
     # A URL é IP:porta de propósito: `coolify.marketdash.com.br` redireciona
     # para HTTPS com certificado que não valida (ver reference do Coolify).
     COOLIFY_URL: str = "http://31.97.22.173:8000"
+    #: Token **read-only** (Coolify › Security › API tokens). É o que o painel
+    #: usa quando existe — `COOLIFY_TOKEN` é root e fica como fallback, para o
+    #: painel não morrer em ambiente que ainda não tem o par novo.
+    COOLIFY_API_TOKEN_GET: Optional[str] = None
     COOLIFY_TOKEN: Optional[str] = None
+
+    @property
+    def coolify_token_leitura(self) -> Optional[str]:
+        """O token que o painel usa: o read-only primeiro, sempre."""
+        return self.COOLIFY_API_TOKEN_GET or self.COOLIFY_TOKEN
 
     # API da Hostinger (developers.hostinger.com) — CPU/RAM/disco do VPS.
     # É a ÚNICA fonte dessas métricas: a API do Coolify não expõe métricas

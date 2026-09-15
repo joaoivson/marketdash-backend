@@ -144,6 +144,7 @@ class TestFilaLegivel:
 
 class TestDegradacaoSemToken:
     def test_coolify_sem_token_instrui_em_vez_de_quebrar(self, monkeypatch):
+        monkeypatch.setattr(infra.settings, "COOLIFY_API_TOKEN_GET", None)
         monkeypatch.setattr(infra.settings, "COOLIFY_TOKEN", None)
         bloco = asyncio.run(infra.coletar_coolify())
         assert bloco["configurado"] is False
@@ -158,6 +159,16 @@ class TestDegradacaoSemToken:
         assert bloco["erro"] is None
         assert "hPanel" in bloco["instrucao"]
 
+    def test_token_read_only_tem_precedencia(self, monkeypatch):
+        """O painel só faz GET; o token root do `.env` existe por legado e é
+        fallback. Se a precedência inverter, o painel passa a rodar com
+        permissão de escrita sem ninguém perceber."""
+        monkeypatch.setattr(infra.settings, "COOLIFY_API_TOKEN_GET", "so-leitura")
+        monkeypatch.setattr(infra.settings, "COOLIFY_TOKEN", "root")
+        assert infra.settings.coolify_token_leitura == "so-leitura"
+        monkeypatch.setattr(infra.settings, "COOLIFY_API_TOKEN_GET", None)
+        assert infra.settings.coolify_token_leitura == "root"
+
     def test_filas_sem_redis_nao_estoura(self, monkeypatch):
         monkeypatch.setattr(infra.settings, "REDIS_URL", None)
         bloco = infra.coletar_filas()
@@ -166,18 +177,58 @@ class TestDegradacaoSemToken:
 
 
 class TestResumirSerie:
+    """Formato REAL da API da Hostinger, medido em 15/09: `usage` é um
+    dicionário chaveado por epoch, não uma lista ordenada."""
+
     def test_serie_da_hostinger(self):
-        serie = {"unit": "percent", "usage": [{"value": 10}, {"value": 92}, {"value": 26}]}
-        assert infra._resumir_serie(serie) == {
-            "atual": 26, "pico": 92, "unidade": "percent", "pontos": 3,
-        }
+        serie = {"unit": "%", "usage": {"1789500007": 8.9, "1789501681": 93.3, "1789495000": 100}}
+        r = infra._resumir_serie(serie)
+        assert r["atual"] == 93.3      # maior timestamp, não "o último do dict"
+        assert r["pico"] == 100.0
+        assert r["pontos"] == 3
+        assert r["unidade"] == "%"
+
+    def test_atual_nao_depende_da_ordem_do_dict(self):
+        """Dict de chave string não tem ordem de tempo garantida — pegar o
+        último item iterado faria o 'agora' sair aleatório."""
+        crescente = {"unit": "%", "usage": {"100": 1, "200": 2, "300": 3}}
+        embaralhado = {"unit": "%", "usage": {"300": 3, "100": 1, "200": 2}}
+        assert infra._resumir_serie(crescente)["atual"] == infra._resumir_serie(embaralhado)["atual"] == 3.0
 
     def test_formato_estranho_devolve_none(self):
-        """Bloco que não pude exercitar contra a API real (não há token): o
-        desenho é devolver ausência, nunca estourar e levar o painel com ele."""
         assert infra._resumir_serie(None) is None
-        assert infra._resumir_serie({"usage": []}) is None
-        assert infra._resumir_serie({"usage": [{"sem_value": 1}]}) is None
+        assert infra._resumir_serie({"usage": {}}) is None
+        assert infra._resumir_serie({"usage": [{"value": 1}]}) is None   # o formato que eu SUPUS
+        assert infra._resumir_serie({"usage": {"100": "texto"}}) is None
+
+
+class TestLimitacaoDeCpu:
+    """O sinal mais importante do painel: a limitação não se desfaz sozinha."""
+
+    def _acao(self, nome, horas_atras):
+        from datetime import datetime, timedelta, timezone
+
+        quando = datetime.now(timezone.utc) - timedelta(hours=horas_atras)
+        return {"nome": nome, "estado": "success", "em": quando.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def test_detecta_limitacao_recente(self):
+        acoes = [self._acao("ct_set_limits", 1), self._acao("ct_set_limits", 2)]
+        r = infra._limitacao_de_cpu(acoes)
+        assert r["ocorrencias_24h"] == 2
+        assert "painel da Hostinger" in r["explicacao"]
+
+    def test_limitacao_antiga_nao_alarma(self):
+        """A de 12/09 foi resolvida — repetir o alarme dela por semanas
+        ensinaria a ignorar o vermelho."""
+        assert infra._limitacao_de_cpu([self._acao("ct_set_limits", 72)]) is None
+
+    def test_outras_acoes_nao_alarmam(self):
+        assert infra._limitacao_de_cpu([self._acao("ct_restart", 1)]) is None
+
+    def test_data_ilegivel_nao_estoura(self):
+        assert infra._limitacao_de_cpu([{"nome": "ct_set_limits", "em": "ontem"}]) is None
+        assert infra._limitacao_de_cpu([]) is None
+
 
 
 class TestSaudeInterna:
