@@ -185,6 +185,10 @@ class InfraOut(BaseModel):
     #: Constante `True`. Está na resposta para o painel poder dizer na tela que
     #: não há nada a apertar aqui — restart e deploy seguem no Coolify.
     somente_leitura: bool
+    #: `True` quando a resposta veio do cache de 30 s — o painel consulta o
+    #: Coolify 6× por coleta e não pode ser multiplicado por quem está com a
+    #: tela aberta durante um incidente.
+    do_cache: bool = False
     #: `None` fora do Linux (ambiente de desenvolvimento em macOS, por ex.).
     maquina: Optional[MaquinaOut] = None
     coolify: CoolifyOut

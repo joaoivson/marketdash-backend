@@ -407,3 +407,55 @@ class TestMedirMaquina:
         monkeypatch.setattr(infra, "_ler_proc_stat", lambda: leituras.pop(0))
         monkeypatch.setattr(infra.time, "sleep", lambda s: None)
         assert infra.medir_maquina() is None
+
+
+class TestCacheDoPainel:
+    """Um painel de diagnóstico não pode piorar o que está diagnosticando."""
+
+    def _zerar(self):
+        infra._cache = None
+
+    def test_segunda_leitura_em_30s_nao_bate_no_coolify(self, monkeypatch):
+        self._zerar()
+        chamadas = []
+
+        async def _falso():
+            chamadas.append(1)
+            return {"gerado_em": "agora", "somente_leitura": True, "do_cache": False}
+
+        monkeypatch.setattr(infra, "_coletar_agora", _falso)
+        primeira = asyncio.run(infra.coletar())
+        segunda = asyncio.run(infra.coletar())
+        assert len(chamadas) == 1          # a segunda não custou nada
+        assert primeira["do_cache"] is False
+        assert segunda["do_cache"] is True
+
+    def test_botao_atualizar_fura_o_cache(self, monkeypatch):
+        """Gesto humano deliberado durante um incidente merece dado fresco."""
+        self._zerar()
+        chamadas = []
+
+        async def _falso():
+            chamadas.append(1)
+            return {"gerado_em": "agora", "somente_leitura": True, "do_cache": False}
+
+        monkeypatch.setattr(infra, "_coletar_agora", _falso)
+        asyncio.run(infra.coletar())
+        asyncio.run(infra.coletar(forcar=True))
+        assert len(chamadas) == 2
+
+    def test_cache_vencido_recoleta(self, monkeypatch):
+        self._zerar()
+        chamadas = []
+
+        async def _falso():
+            chamadas.append(1)
+            return {"gerado_em": "agora", "somente_leitura": True, "do_cache": False}
+
+        monkeypatch.setattr(infra, "_coletar_agora", _falso)
+        asyncio.run(infra.coletar())
+        # envelhece o cache à força
+        nascido, payload = infra._cache
+        infra._cache = (nascido - infra.TTL_CACHE_S - 1, payload)
+        asyncio.run(infra.coletar())
+        assert len(chamadas) == 2
