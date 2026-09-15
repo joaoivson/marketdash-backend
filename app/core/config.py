@@ -219,6 +219,28 @@ class Settings(BaseSettings):
     # Gerar com: openssl rand -hex 32. Quando None, o endpoint /internal/cron/* retorna 503.
     CRON_SECRET: Optional[str] = None
 
+    # ── Painel de infraestrutura do admin (/admin/infra) ────────────────────
+    #
+    # O painel é SÓ LEITURA: o service só emite GET. Mesmo assim, o token do
+    # Coolify dentro da API é poder de sobra (ele lê e escreve env var e
+    # dispara deploy), então o valor recomendado aqui é um token
+    # **read-only** criado em Coolify › Security › API tokens — o default da
+    # UI já é read-only. Sem token, o painel mostra "não configurado" em vez
+    # de quebrar.
+    #
+    # A URL é IP:porta de propósito: `coolify.marketdash.com.br` redireciona
+    # para HTTPS com certificado que não valida (ver reference do Coolify).
+    COOLIFY_URL: str = "http://31.97.22.173:8000"
+    COOLIFY_TOKEN: Optional[str] = None
+
+    # API da Hostinger (developers.hostinger.com) — CPU/RAM/disco do VPS.
+    # É a ÚNICA fonte dessas métricas: a API do Coolify não expõe métricas
+    # (`/servers/{uuid}/metrics` → 404); o Sentinel coleta, mas só a UI lê.
+    # Token gerado em hPanel › VPS › API. Sem ele o bloco do host fica vazio
+    # com a instrução na tela.
+    HOSTINGER_API_TOKEN: Optional[str] = None
+    HOSTINGER_API_URL: str = "https://developers.hostinger.com"
+
     # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
     DEBUG_LOG_PATH: Optional[str] = None
 

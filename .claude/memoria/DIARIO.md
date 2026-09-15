@@ -11,6 +11,69 @@
 
 ---
 
+## 2026-09-15 — Painel de infraestrutura: o valor está na divergência, não no status
+
+**O que mudou.** `GET /admin/infra` (`infra_status_service.py`, ~450 linhas,
+36 testes) + tela `Admin › Infraestrutura`. Cinco blocos: pontas públicas,
+servidor/VPS, containers, fila de deploy e filas do Celery. Só leitura — o
+service emite exclusivamente `GET`.
+
+**Por quê.** O pedido do João foi "juntar os observable num menu do admin".
+O que existia depois do apagão de 11/09 (sonda no GitHub Actions, tetos de CPU,
+serialização de build, métricas do Sentinel) só era alcançável por quem tem
+terminal e token. Nada disso respondia "o que está no ar agora?" sem eu no meio.
+
+**A decisão de desenho que muda tudo: cruzar as fontes.** Repetir o status do
+Coolify seria construir uma segunda tela mentindo a mesma mentira — em 11/09
+ele mostrou `running:healthy` por ~20 h com a API inalcançável, porque o
+healthcheck do Dockerfile testa `localhost:8000/health` de dentro do container
+e não vê rota de Traefik quebrada. Então cada container é confrontado com o
+`GET` na URL pública, e a discordância aparece escrita na linha dele.
+
+**E o sentido inverso apareceu na primeira execução real**, que eu não havia
+previsto: o Coolify marcou as DUAS instâncias de Redis como `exited:unhealthy`
+enquanto o `/health` de produção e de homologação dizia `redis: connected` — e
+minutos depois voltaram a `running:healthy`. Sem a contraprova eu teria
+publicado um painel que pinta de vermelho um Redis que está servindo os dois
+ambientes. Isso ensina a ignorar o painel tão rápido quanto o falso verde.
+
+**Medições do dia (API do Coolify beta.463):**
+
+- **Não existe endpoint de métricas.** `/servers/{uuid}/metrics`, `/usage` e
+  `/applications/{uuid}/metrics` → 404. O Sentinel coleta CPU/memória por
+  container desde 12/09, mas só a UI lê. Logo, CPU/RAM/disco do VPS **só** pela
+  API da Hostinger — token que o João precisa gerar.
+- `/servers` e `/servers/{uuid}` são complementares e cada um **omite** o que o
+  outro tem: `is_reachable`/`is_usable` só na lista; proxy, Traefik e Sentinel
+  só no detalhe. Ler um só deixava metade do bloco em `null`, que na tela é
+  indistinguível de "o proxy caiu".
+- `/servers/{uuid}/resources` é a única fonte completa de status (inclui o que
+  não aparece em `/applications`), e é a mais fresca.
+- `git_commit_sha` vem literalmente `"HEAD"` — ruído com cara de informação.
+
+**Dois achados fora do escopo.** (1) Existem **duas** instâncias de Redis de
+pé e só uma é usada: conferi o `REDIS_URL` das três aplicações e todas apontam
+para `h0cw0…`; a `y4so…` não tem referência conhecida e queima memória do VPS
+que a Hostinger estrangulou em 11/09. (2) O `REDIS_URL` do `docker-compose.yml`
+não levava a senha e o serviço sobe com `--requirepass` — cache e fila locais
+falhavam em silêncio. Corrigido.
+
+**O que a tela derrubou, e `tsc` + lint + 1272 testes não diziam nada sobre:**
+o cartão de container esticava a página para **456 px** num viewport de 390.
+Causa: item de grid tem `min-width: auto`, e o nome cru do Coolify
+(`cerely-qs8480sgosccoc8go8wsg84s`) é uma palavra sem ponto de quebra — o
+`truncate` dos filhos não tinha largura de referência. `min-w-0` no cartão
+resolveu. Validado linha a linha no Playwright: as 10 linhas da tabela batem
+com os 10 recursos da API (status, teto e rótulo), e a divergência foi
+exercitada na tela adulterando a resposta real no caminho.
+
+**Pendente.** `HOSTINGER_API_TOKEN` (hPanel) e a decisão sobre o
+`COOLIFY_TOKEN` do ambiente da API — o recomendado é um token **read-only**
+novo, não o root do `.env`. Sem os dois, cada bloco mostra na tela o que falta
+configurar.
+
+---
+
 ## 2026-09-09 — A mensagem de erro do login mentia, e mandava trocar senha certa
 
 **O que mudou.** `falha_de_indisponibilidade()` em `auth_service.py` separa

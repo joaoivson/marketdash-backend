@@ -11,6 +11,72 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-15 (Painel de infraestrutura no admin)
+
+Menu novo em **Admin › Infraestrutura** (`/admin/infraestrutura`), só para
+admin e **só leitura**. Junta num lugar o que até aqui existia espalhado em
+ferramentas que só o dev alcança: Coolify, containers, VPS, as URLs públicas e
+as filas do Celery.
+
+### Os cinco blocos, na ordem em que aparecem
+
+1. **Pontas públicas** — `GET` em `api.marketdash.com.br/health`,
+   `marketdash.com.br`, e os dois equivalentes de homologação, com latência.
+   Verde aqui **não é HTTP 200**: exige a nossa resposta no corpo (`healthy`
+   para a API, `div#root` para o frontend).
+2. **Servidor (VPS)** — proxy Traefik e versão, alcançabilidade, builds
+   simultâneos permitidos, idade das métricas do Sentinel, alerta de disco.
+   CPU/RAM/disco entram quando houver token da Hostinger (ver "Pendente").
+3. **Containers** — os 10 recursos do servidor com status do Docker, teto de
+   CPU/memória, branch, contagem de reinícios e último deploy.
+4. **Deploy agora** — o que o Coolify está construindo neste instante.
+5. **Filas do Celery** — comprimento de cada fila lido do Redis, com o nome de
+   prioridade traduzido (o Celery usa dois bytes de controle invisíveis).
+
+### O bloco que justifica o painel: a divergência
+
+Cada container é confrontado com a medição, e a discordância aparece escrita na
+linha dele. Nos **dois** sentidos:
+
+- **Coolify verde com a URL pública fora** — foi o apagão de 11/09. O
+  healthcheck do Dockerfile testa `localhost:8000/health` de dentro do
+  container; rota de Traefik quebrada é invisível para ele, e o painel do
+  Coolify mostrou `running:healthy` durante ~20 h de indisponibilidade.
+- **Coolify vermelho com o serviço respondendo** — apareceu na primeira
+  execução real: as duas instâncias de Redis apareceram como
+  `exited:unhealthy` enquanto o `/health` de produção **e** de homologação
+  dizia `redis: connected` (e voltaram a `running:healthy` minutos depois).
+  Pintar de vermelho o que está funcionando também ensina a ignorar o painel.
+
+### O que o painel NÃO faz, de propósito
+
+Não tem botão de restart nem de deploy, e o service só emite `GET`. Restart e
+deploy seguem no Coolify, com a autenticação do Coolify.
+
+### Achado de bônus: existem duas instâncias de Redis
+
+Só uma é usada. Conferido pelo `REDIS_URL` das três aplicações (API de
+produção, worker de produção e API de homologação): todas apontam para
+`h0cw0…`. A `y4so…`, criada um dia antes, não tem referência conhecida e
+continua consumindo memória do mesmo VPS que a Hostinger estrangulou em 11/09.
+O painel a mostra com esse rótulo; remover é decisão de operação.
+
+### Correção local (não afeta produção)
+
+`REDIS_URL` do `docker-compose.yml` não levava a senha, e o serviço `redis`
+sobe com `--requirepass` — todo acesso a cache e fila no ambiente local tomava
+`AuthenticationError` em silêncio.
+
+### Pendente de ação manual
+
+- **CPU/RAM/disco do VPS** exigem `HOSTINGER_API_TOKEN` (hPanel › VPS › API).
+  Sem ele o bloco mostra a instrução na tela, e não há alternativa: a API do
+  Coolify beta.463 **não expõe métricas** (`/servers/{uuid}/metrics` → 404;
+  o Sentinel coleta, mas só a UI dele lê).
+- **`COOLIFY_TOKEN` no ambiente da API.** O recomendado é criar um token
+  read-only (Coolify › Security › API tokens — o default já é read-only), e
+  não reusar o token root do `.env`.
+
 ## [Não versionado] - 2026-09-12 (Produção 16h fora do ar: o CORS que não era CORS)
 
 Infra e CI, sem mudança de código de aplicação e sem migration.

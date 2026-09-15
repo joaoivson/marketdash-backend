@@ -34,7 +34,10 @@ services:
       # LOCAL PostgreSQL (desenvolvimento)
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: marketdash-secret-dev-32chars
-      REDIS_URL: redis://redis:6379/0
+      # A senha ENTRA na URL: o serviço `redis` abaixo sobe com
+      # `--requirepass`, e sem credencial na URL o app tomava
+      # `AuthenticationError` em todo acesso a cache/fila — local só.
+      REDIS_URL: redis://:${REDIS_PASSWORD:-marketdash_local}@redis:6379/0
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
       # Upload de arquivos grandes: grava em disco e envia só o caminho ao Celery
       UPLOAD_TEMP_DIR: /app/uploads
@@ -46,6 +49,11 @@ services:
       S3_REGION: us-east-2
       SHOPEE_ENCRYPTION_KEY: ${SHOPEE_ENCRYPTION_KEY}
       CRON_SECRET: ${CRON_SECRET}
+      # Painel /admin/infra (só leitura). Sem os tokens, cada bloco mostra na
+      # tela o que falta configurar em vez de quebrar.
+      COOLIFY_URL: ${COOLIFY_URL:-http://31.97.22.173:8000}
+      COOLIFY_TOKEN: ${COOLIFY_TOKEN:-}
+      HOSTINGER_API_TOKEN: ${HOSTINGER_API_TOKEN:-}
       # Facebook Ads (preencher no .env do backend). Vazio = endpoints /facebook retornam 503.
       FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
       FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
