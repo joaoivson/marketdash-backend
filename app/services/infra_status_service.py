@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 #: lugar do dado — nunca derruba os outros.
 TIMEOUT_COOLIFY = 8.0
 TIMEOUT_PONTA = 6.0
-TIMEOUT_HOSTINGER = 10.0
+TIMEOUT_HOSTINGER = 15.0
 
 #: Janela das métricas do VPS. 12 h para o DEGRAU aparecer — ver
 #: `_metricas_hostinger`.
@@ -567,6 +567,20 @@ async def coletar_hostinger() -> dict:
                 _acoes_hostinger(client, base, vm_id),
                 return_exceptions=True,
             )
+            # Falha de UMA das duas não derruba a outra — mas também não some.
+            # `return_exceptions` engolindo o motivo deixaria a tela sem
+            # métrica e sem explicação, que é indistinguível de "a VPS não
+            # reporta CPU". Visto na prática: a chamada de métricas estourou o
+            # timeout uma vez e o bloco veio vazio, calado.
+            falhas = []
+            if isinstance(metricas, BaseException):
+                falhas.append(f"métricas ({type(metricas).__name__})")
+                metricas = None
+            if isinstance(acoes, BaseException):
+                falhas.append(f"ações ({type(acoes).__name__})")
+                acoes = []
+            if falhas:
+                bloco["erro"] = "Não vieram desta vez: " + ", ".join(falhas) + "."
             bloco["metricas"] = metricas if isinstance(metricas, dict) else None
             bloco["acoes"] = acoes if isinstance(acoes, list) else []
             bloco["limitacao_de_cpu"] = _limitacao_de_cpu(bloco["acoes"])

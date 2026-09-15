@@ -299,3 +299,37 @@ class TestCruzar:
         )
         infra._cruzar(recursos, [_ponta("producao", "api", ok=False)], {"ping_ms": None})
         assert recursos[0]["contradicao"] is None
+
+
+class TestHostingerParcial:
+    """Falha de uma das duas chamadas não pode sumir em silêncio."""
+
+    def test_metricas_que_estouram_viram_erro_na_tela(self, monkeypatch):
+        import httpx
+
+        monkeypatch.setattr(infra.settings, "HOSTINGER_API_TOKEN", "token-de-teste")
+
+        async def _vms(self, url, **kw):
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "hostname": "h", "state": "running", "cpus": 4,
+                       "memory": 16384, "disk": 204800, "plan": "KVM 4", "ipv4": [{"address": "1.2.3.4"}]}],
+                request=httpx.Request("GET", url),
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", _vms)
+
+        async def _explode(client, base, vm_id):
+            raise httpx.ReadTimeout("demorou")
+
+        async def _acoes(client, base, vm_id):
+            return [{"nome": "ct_restart", "estado": "success", "em": "2026-09-15T20:00:00Z"}]
+
+        monkeypatch.setattr(infra, "_metricas_hostinger", _explode)
+        monkeypatch.setattr(infra, "_acoes_hostinger", _acoes)
+
+        bloco = asyncio.run(infra.coletar_hostinger())
+        assert bloco["vps"]["plano"] == "KVM 4"      # o que deu certo continua
+        assert bloco["metricas"] is None
+        assert "métricas" in bloco["erro"]            # e o que falhou é dito
+        assert bloco["acoes"][0]["nome"] == "ct_restart"
