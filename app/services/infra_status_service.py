@@ -185,14 +185,14 @@ async def coletar_coolify() -> dict:
                 "read-only criado em Coolify › Security › API tokens (o painel "
                 "só lê). `COOLIFY_TOKEN`, que é root, serve de fallback."
             ),
-            "url": settings.COOLIFY_URL,
+            "url": settings.COOLIFY_API_URL,
             "versao": None,
             "servidor": None,
             "recursos": [],
             "fila_de_deploy": [],
         }
 
-    base = settings.COOLIFY_URL.rstrip("/") + "/api/v1"
+    base = settings.COOLIFY_API_URL.rstrip("/") + "/api/v1"
     cabecalhos = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient(
@@ -231,7 +231,7 @@ async def coletar_coolify() -> dict:
             "configurado": True,
             "erro": f"{type(e).__name__}: {str(e)[:200]}",
             "instrucao": None,
-            "url": settings.COOLIFY_URL,
+            "url": settings.COOLIFY_API_URL,
             "versao": None,
             "servidor": None,
             "recursos": [],
@@ -242,7 +242,7 @@ async def coletar_coolify() -> dict:
         "configurado": True,
         "erro": None,
         "instrucao": None,
-        "url": settings.COOLIFY_URL,
+        "url": settings.COOLIFY_API_URL,
         "versao": versao if isinstance(versao, str) else None,
         "servidor": _montar_servidor(servidor),
         "recursos": _montar_recursos(apps or [], bancos or [], recursos_do_servidor or []),

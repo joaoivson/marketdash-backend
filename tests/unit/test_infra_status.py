@@ -333,3 +333,20 @@ class TestHostingerParcial:
         assert bloco["metricas"] is None
         assert "métricas" in bloco["erro"]            # e o que falhou é dito
         assert bloco["acoes"][0]["nome"] == "ct_restart"
+
+
+class TestNomeDaVariavelDoCoolify:
+    def test_o_painel_nao_usa_COOLIFY_URL(self):
+        """Regressão de 15/09, achada em PRODUÇÃO minutos depois do deploy.
+
+        O Coolify injeta `COOLIFY_URL` em todo container que sobe, com o FQDN
+        da própria aplicação. Chamar a variável assim fez o painel consultar
+        `https://api.marketdash.com.br/api/v1/applications` — ele mesmo — e
+        colher 404, com o bloco inteiro do Coolify vazio na tela.
+        """
+        import inspect
+
+        fonte = inspect.getsource(infra)
+        assert "settings.COOLIFY_URL" not in fonte
+        assert "settings.COOLIFY_API_URL" in fonte
+        assert not hasattr(infra.settings, "COOLIFY_URL")

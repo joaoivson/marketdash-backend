@@ -132,7 +132,13 @@ class Settings(BaseSettings):
     #
     # A URL é IP:porta de propósito: `coolify.marketdash.com.br` redireciona
     # para HTTPS com certificado que não valida (ver reference do Coolify).
-    COOLIFY_URL: str = "http://31.97.22.173:8000"
+    #
+    # ⚠️ O nome é `COOLIFY_API_URL` e NÃO pode voltar a ser `COOLIFY_URL`: o
+    # próprio Coolify **injeta** `COOLIFY_URL` em todo container que ele sobe,
+    # com o FQDN da aplicação. Em produção isso fez o painel consultar
+    # `https://api.marketdash.com.br/api/v1/applications` — ele mesmo — e
+    # colher 404. Medido em 15/09/2026, no ar, minutos depois do deploy.
+    COOLIFY_API_URL: str = "http://31.97.22.173:8000"
     #: Token **read-only** (Coolify › Security › API tokens). É o que o painel
     #: usa quando existe — `COOLIFY_TOKEN` é root e fica como fallback, para o
     #: painel não morrer em ambiente que ainda não tem o par novo.
@@ -151,6 +157,17 @@ class Settings(BaseSettings):
     # com a instrução na tela.
     HOSTINGER_API_TOKEN: Optional[str] = None
     HOSTINGER_API_URL: str = "https://developers.hostinger.com"
+
+    # ── Alerta de queda de produção por WhatsApp ────────────────────────────
+    #
+    # Mora em HOMOLOGAÇÃO de propósito: uma aplicação caída não avisa que caiu,
+    # e o WhatsApp (WAHA) só existe lá. Ver o cabeçalho de
+    # `app/services/alerta_producao_service.py`.
+    #
+    # Sessão do WAHA que ENVIA (o número do suporte) e a lista de quem RECEBE,
+    # em csv. Vazios = o endpoint responde "não configurado" em vez de falhar.
+    ALERTA_WHATSAPP_SESSAO: Optional[str] = None
+    ALERTA_WHATSAPP_NUMEROS: Optional[str] = None
 
     # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
     DEBUG_LOG_PATH: Optional[str] = None
