@@ -359,3 +359,51 @@ class TestNomeDaVariavelDoCoolify:
         assert "settings.COOLIFY_URL" not in fonte
         assert "settings.COOLIFY_API_URL" in fonte
         assert not hasattr(infra.settings, "COOLIFY_URL")
+
+
+class TestMedirMaquina:
+    """O bloco que separa 'máquina ocupada' de 'máquina faminta'."""
+
+    def _stat(self, user=0, system=0, idle=0, steal=0, iowait=0):
+        # user nice system idle iowait irq softirq steal
+        return [user, 0, system, idle, iowait, 0, 0, steal]
+
+    def test_maquina_estrangulada_pelo_provedor(self, monkeypatch):
+        """O retrato de 15/09: aplicação usando ~6% e o provedor levando 85%."""
+        leituras = [self._stat(), self._stat(user=40, system=20, idle=80, steal=860)]
+        monkeypatch.setattr(infra, "_ler_proc_stat", lambda: leituras.pop(0))
+        monkeypatch.setattr(infra.time, "sleep", lambda s: None)
+        r = infra.medir_maquina()
+        assert r["steal_pct"] == 86.0
+        assert r["usado_pct"] == 6.0
+        assert r["estrangulada"] is True
+        assert "provedor" in r["explicacao_steal"]
+
+    def test_maquina_ocupada_de_verdade_nao_e_estrangulada(self, monkeypatch):
+        """Mesma CPU no talo, diagnóstico oposto: aqui o trabalho é nosso."""
+        leituras = [self._stat(), self._stat(user=600, system=300, idle=50, steal=50)]
+        monkeypatch.setattr(infra, "_ler_proc_stat", lambda: leituras.pop(0))
+        monkeypatch.setattr(infra.time, "sleep", lambda s: None)
+        r = infra.medir_maquina()
+        assert r["usado_pct"] == 90.0
+        assert r["estrangulada"] is False
+        assert r["explicacao_steal"] is None
+
+    def test_steal_normal_de_vps_compartilhada_nao_alarma(self, monkeypatch):
+        """8% é o normal medido nesta VPS num período calmo — alarmar aqui
+        deixaria o painel vermelho todo dia."""
+        leituras = [self._stat(), self._stat(user=50, system=20, idle=850, steal=80)]
+        monkeypatch.setattr(infra, "_ler_proc_stat", lambda: leituras.pop(0))
+        monkeypatch.setattr(infra.time, "sleep", lambda s: None)
+        assert infra.medir_maquina()["estrangulada"] is False
+
+    def test_fora_do_linux_devolve_none(self, monkeypatch):
+        """macOS não tem /proc — o painel some com o bloco, não quebra."""
+        monkeypatch.setattr(infra, "_ler_proc_stat", lambda: None)
+        assert infra.medir_maquina() is None
+
+    def test_contador_sem_avanco_nao_divide_por_zero(self, monkeypatch):
+        leituras = [self._stat(user=10), self._stat(user=10)]
+        monkeypatch.setattr(infra, "_ler_proc_stat", lambda: leituras.pop(0))
+        monkeypatch.setattr(infra.time, "sleep", lambda s: None)
+        assert infra.medir_maquina() is None
