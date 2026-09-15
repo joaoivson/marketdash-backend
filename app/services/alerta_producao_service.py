@@ -102,6 +102,26 @@ def _minutos_desde(iso: Optional[str]) -> Optional[int]:
     return max(0, int((datetime.now(timezone.utc) - inicio).total_seconds() // 60))
 
 
+def _variantes(numero: str) -> list[str]:
+    """As duas formas do celular brasileiro, na ordem de tentativa.
+
+    O WhatsApp entrega boa parte da base brasileira no formato **histórico**,
+    sem o nono dígito: medido em homologação, 1.752 de 2.499 números vieram
+    com 12 dígitos (55 + DDD + 8) contra 747 com 13 — ver
+    `normalizar_celular_br` no `waha_client`.
+
+    Isto não é teoria: o primeiro teste real deste alerta (15/09) falhou nos
+    DOIS destinos porque só tentava a forma de 13 dígitos, e o JID de verdade
+    dos dois números tem 12.
+    """
+    variantes = [numero]
+    if len(numero) == 13 and numero.startswith("55") and numero[4] == "9":
+        variantes.append(numero[:4] + numero[5:])       # tira o nono dígito
+    elif len(numero) == 12 and numero.startswith("55"):
+        variantes.append(numero[:4] + "9" + numero[4:])  # acrescenta o nono
+    return variantes
+
+
 def _enviar(texto: str) -> dict:
     """Manda para todos os destinos. Falha em um número não impede os outros."""
     cliente = _cliente()
@@ -114,15 +134,23 @@ def _enviar(texto: str) -> dict:
 
     entregues, falhas = [], []
     for numero in destinos:
-        try:
-            cliente.enviar_texto(f"{numero}@c.us", texto)
-            entregues.append(numero[-4:])
-        except ErroWhatsapp as e:
-            logger.error("Alerta de produção não entregue para …%s: %s", numero[-4:], e)
-            falhas.append({"numero": numero[-4:], "motivo": e.motivo})
-        except Exception as e:  # noqa: BLE001
-            logger.error("Alerta de produção falhou para …%s: %s", numero[-4:], e)
-            falhas.append({"numero": numero[-4:], "motivo": type(e).__name__})
+        erro_final = None
+        for variante in _variantes(numero):
+            try:
+                cliente.enviar_texto(f"{variante}@c.us", texto)
+                entregues.append({"numero": variante[-4:], "forma": len(variante)})
+                erro_final = None
+                break
+            except ErroWhatsapp as e:
+                erro_final = {"numero": variante[-4:], "motivo": e.motivo,
+                              "detalhe": (e.detalhe or "")[:120]}
+            except Exception as e:  # noqa: BLE001
+                erro_final = {"numero": variante[-4:], "motivo": type(e).__name__,
+                              "detalhe": str(e)[:120]}
+        if erro_final:
+            logger.error("Alerta de produção não entregue para …%s: %s",
+                         numero[-4:], erro_final)
+            falhas.append(erro_final)
     return {"enviado": bool(entregues), "entregues": entregues, "falhas": falhas}
 
 

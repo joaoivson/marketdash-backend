@@ -97,7 +97,9 @@ class TestDeduplicacao:
 
 class TestEntrega:
     def test_falha_em_um_numero_nao_impede_o_outro(self, monkeypatch):
-        cliente = ClienteFalso(falhar_para=("5534998937753",))
+        # "8937753" casa com as DUAS formas desse número (13 e 12 dígitos), o
+        # que simula um destino realmente inalcançável.
+        cliente = ClienteFalso(falhar_para=("8937753",))
         _montar(monkeypatch, cliente=cliente)
         r = alerta.registrar("caiu", "x")
         assert r["enviado"] is True
@@ -110,6 +112,18 @@ class TestEntrega:
         assert [c for c, _ in cliente.enviadas] == [
             "5534998557753@c.us",
             "5534998937753@c.us",
+        ]
+
+    def test_cai_para_a_forma_de_12_digitos_quando_a_de_13_falha(self, monkeypatch):
+        """O JID real de boa parte da base brasileira não tem o nono dígito —
+        o primeiro teste real deste alerta falhou nos dois destinos por isso."""
+        cliente = ClienteFalso(falhar_para=("5534998557753", "5534998937753"))
+        _montar(monkeypatch, cliente=cliente)
+        r = alerta.registrar("caiu", "x")
+        assert r["enviado"] is True
+        assert [c for c, _ in cliente.enviadas] == [
+            "553498557753@c.us",
+            "553498937753@c.us",
         ]
 
     def test_numero_invalido_no_env_nao_derruba_os_validos(self, monkeypatch):
