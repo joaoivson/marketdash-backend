@@ -1,5 +1,14 @@
 name: Deploy to Homologation
 
+# Gêmeo do deploy-production.yml, com duas diferenças de propósito:
+#   - sem gate de aprovação (homologação é para testar, e travar aqui só
+#     ensinaria a ignorar o gate de produção);
+#   - três recursos em vez de dois (o worker dedicado ao envio em grupos só
+#     existe em hml).
+#
+# O build da imagem acontece no runner. Ver o cabeçalho do deploy-production.yml
+# para o porquê.
+
 on:
   push:
     branches:
@@ -9,16 +18,32 @@ on:
       - '.github/**'
       - '.gitignore'
       - 'README.md'
-  # Redeploy sob demanda. Mudança de variável de ambiente no Coolify não
-  # reinicia o container sozinho, e sem este gatilho a única forma de aplicar
-  # era um commit vazio só para acordar o CI.
+  # Mudança de variável de ambiente no Coolify não reinicia o container
+  # sozinho: o disparo manual é como se aplica sem precisar de commit vazio.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'SHA já publicado no GHCR (rollback ou redeploy). Vazio = constrói este commit.'
+        required: false
+        default: ''
+
+concurrency:
+  group: deploy-backend-hml
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGEM_API: ghcr.io/joaoivson/marketdash-backend
+  IMAGEM_WORKER: ghcr.io/joaoivson/marketdash-backend-worker
 
 jobs:
   validate:
     name: Validate Code
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -34,9 +59,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Duplicata do Finder ("campaign 2.py") não é importável e ainda quebrava
-      # o py_compile abaixo com um "No such file or directory" enigmático.
-      # Falha aqui com o nome do arquivo na cara.
       - name: Check for duplicate/invalid Python filenames
         run: |
           dups=$(find . -type f -name "*.py" -not -path "./.git/*" -name "* *")
@@ -57,38 +79,103 @@ jobs:
         run: |
           python -c "import app; import app.main; import app.core.config; import app.core.security"
 
-      - name: Check for common issues
-        run: |
-          python -c "import sys; sys.exit(0)" || exit 1
-
-  deploy:
-    name: Deploy to Coolify
+  build:
+    name: Build e publicar imagens
     runs-on: ubuntu-latest
     needs: validate
-    if: github.ref == 'refs/heads/develop'
-    
+    if: ${{ inputs.tag == '' }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Trigger Coolify deployment (API)
-        env:
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-        run: |
-          chmod +x .github/scripts/trigger-deploy.sh
-          .github/scripts/trigger-deploy.sh api "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_HML }}"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # Ver comentário no deploy-production.yml: o worker Celery é um recurso
-      # separado no Coolify e precisa do próprio disparo.
-      - name: Trigger Coolify deployment (Celery worker)
-        env:
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
-        run: |
-          .github/scripts/trigger-deploy.sh worker "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_HML }}"
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Deployment status
+      # Mesmo `scope` de cache que produção: as camadas de dependências são as
+      # mesmas, então um deploy de hml esquenta o cache do de prod e vice-versa.
+      - name: Build e push da API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: api
+          push: true
+          provenance: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGEM_API }}:${{ github.sha }}
+            ${{ env.IMAGEM_API }}:develop
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build e push do worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          push: true
+          provenance: false
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGEM_WORKER }}:${{ github.sha }}
+            ${{ env.IMAGEM_WORKER }}:develop
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+  deploy:
+    name: Deploy em homologação
+    runs-on: ubuntu-latest
+    needs: [validate, build]
+    if: |
+      always()
+      && needs.validate.result == 'success'
+      && (needs.build.result == 'success' || needs.build.result == 'skipped')
+
+    env:
+      COOLIFY_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+      TAG: ${{ inputs.tag || github.sha }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy da API
         run: |
-          echo "✅ API + worker atualizados em homologação (branch develop)"
-          echo "Repository: ${{ github.repository }}"
-          echo "Commit: ${{ github.sha }}"
-          echo "Branch: ${{ github.ref }}"
+          chmod +x .github/scripts/deploy-imagem.sh
+          .github/scripts/deploy-imagem.sh api \
+            "${{ secrets.COOLIFY_DEPLOY_URL_BACKEND_HML }}" \
+            "$IMAGEM_API" "$TAG"
+
+      - name: Confirmar a versão no ar
+        run: |
+          chmod +x .github/scripts/confirmar-versao.sh
+          .github/scripts/confirmar-versao.sh https://api.hml.marketdash.com.br/health "$TAG"
+
+      - name: Deploy do worker Celery
+        run: |
+          .github/scripts/deploy-imagem.sh worker \
+            "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_HML }}" \
+            "$IMAGEM_WORKER" "$TAG"
+
+      # Worker DEDICADO à fila de envio em grupos. Mesma imagem do worker comum
+      # (só muda a env CELERY_PAPEL), mas é um terceiro recurso no Coolify e
+      # precisa do próprio deploy: worker de envio com código velho manda
+      # mensagem com a lógica errada, o que é pior que um deploy vermelho.
+      - name: Deploy do worker de WhatsApp
+        run: |
+          .github/scripts/deploy-imagem.sh worker-whatsapp \
+            "${{ secrets.COOLIFY_DEPLOY_URL_WORKER_WHATSAPP_HML }}" \
+            "$IMAGEM_WORKER" "$TAG"
+
+      - name: Resumo
+        run: |
+          echo "✅ API e workers de homologação em $TAG"

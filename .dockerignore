@@ -6,6 +6,11 @@ __pycache__
 env/
 venv/
 .venv
+.venv*
+# O build agora roda no runner, mas alguém pode buildar da máquina: .venv312
+# tem 561 MB e entraria no contexto (só `.venv` estava listado).
+.github
+.claude
 .env
 .env.local
 .env.*.local

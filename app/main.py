@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Backend SaaS para análise de dados com ingestão de CSV",
-    version="1.0.0",
+    version=settings.APP_VERSION,
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -76,7 +76,7 @@ def root():
     """Root endpoint."""
     return {
         "message": "MarketDash Backend API",
-        "version": "1.0.0",
+        "version": settings.APP_VERSION,
         "docs": "/docs",
         "environment": settings.ENVIRONMENT
     }
@@ -162,6 +162,10 @@ def health_check():
     """
     health_status = {
         "status": "healthy",
+        # SHA da imagem em execução. É o que o CI compara com o commit
+        # empurrado para PROVAR que o deploy trocou o container — "webhook
+        # aceito" já mentiu três vezes aqui.
+        "version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
         "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         "database": "unknown",

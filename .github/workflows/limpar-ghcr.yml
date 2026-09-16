@@ -1,0 +1,35 @@
+name: Limpar imagens antigas do GHCR
+
+# Cada deploy publica uma imagem nova com a tag do SHA. Sem poda, o registry
+# cresce para sempre — e, se um dia os repositórios virarem privados, a cota
+# do plano Free (500 MB) bloqueia o `push` no meio do mês, derrubando o deploy
+# por um motivo que não tem nada a ver com o código.
+#
+# Mantém as 15 últimas versões de cada pacote: cobre semanas de rollback, que é
+# o único motivo de guardar imagem velha.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # segunda, 06:00 UTC (03:00 BRT — fora do expediente)
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  limpar:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pacote: [marketdash-backend, marketdash-backend-worker]
+
+    steps:
+      - name: Apagar versões além das 15 últimas
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ matrix.pacote }}
+          package-type: container
+          min-versions-to-keep: 15
+          # As tags móveis apontam para a versão corrente de cada branch;
+          # apagá-las quebraria qualquer `docker pull …:main` feito à mão.
+          ignore-versions-including-tags: 'main,develop'
