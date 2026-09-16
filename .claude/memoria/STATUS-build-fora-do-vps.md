@@ -34,6 +34,35 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 **Bloqueio da linha 15:** benchmark de CPU no host precisa voltar a < 1,8 s
 (agora: 3,3-4,9 s). Etapas 1-14 não dependem disso.
 
+## Cherry-pick da etapa 14 — o conjunto exato (levantado em 16/09)
+
+A `develop` tem **149 commits** à frente da `main` no backend e **83** no
+frontend. Promover por merge levaria tudo isso junto — e `create_all()` no boot
+criaria em produção toda tabela de model novo, sem RLS. O conjunto do pipeline
+é pequeno e isolado:
+
+**Backend** (`git cherry-pick` nesta ordem, a partir de `origin/main`):
+```
+e7ae85a  feat(deploy): o build sai do VPS — Actions constrói, GHCR guarda, Coolify puxa
+d80970f  fix(ci): erro de rede no deploy precisa dizer o que aconteceu
+e1a409c  fix(ci): token sem permissão não pode parecer 'app em modo build'
+```
+
+**Frontend:**
+```
+e5edadd  feat(deploy): o build sai do VPS — Actions constrói, GHCR guarda, Coolify puxa
+cd1aa5f  fix(ci): erro de rede no deploy precisa dizer o que aconteceu
+3e61f37  fix(ci): token sem permissão não pode parecer 'app em modo build'
+115a4ab  chore(ci): baseline de tipos por branch (develop 25, main 26)
+```
+
+⚠️ `115a4ab` **não é opcional**: a `main` tem 26 erros de tipo pré-existentes e
+a `develop` 25. Sem ele, o job `validate` da main reprova com "o número
+aumentou" num commit que não mexeu em tipo nenhum.
+
+Os scripts de infra (`limites-coolify.sh`, `teto_hostinger.py`) e o fix da
+thumbnail do Instagram **não entram** neste cherry-pick — são rodadas próprias.
+
 ## Ordem operacional acordada (16/09, com o suporte da Hostinger)
 
 Enquanto o teto estiver ativo: **nenhum build, nenhuma alteração em produção,
