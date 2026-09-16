@@ -29,9 +29,27 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 | 14 | Promover para `main` (cherry-pick) | 131/73 commits da develop NÃO vão junto | eu | ⬜ | ⬜ | — |
 | 15 | Migrar prod + deploy aprovado | **só com o teto da Hostinger removido** | João aprova | ⬜ | ⬜ | ⬜ |
 | 16 | Docs, CHANGELOG, memória, limpeza | scripts antigos, Dockerfile.worker, Redis nº 2 | eu | ⬜ | — | — |
+| 17 | Tetos de recurso em hml | `limites-coolify.sh`: cpus/memória/shares 256 + `CELERY_CONCURRENCY=2` | eu | ✅ trava de ambiente, ensaio por padrão | ⬜ espera o Coolify | — |
 
 **Bloqueio da linha 15:** benchmark de CPU no host precisa voltar a < 1,8 s
 (agora: 3,3-4,9 s). Etapas 1-14 não dependem disso.
+
+## ⚠️ Não subir o Coolify enquanto o teto estiver ativo
+
+Medido em 16/09: **com o Coolify de pé a demanda do VPS é 1,55 vCPU contra os
+~0,8 que o teto de 20% libera**. Ou seja, subir o Coolify agora para aplicar a
+etapa 17 produziria exatamente a lentidão que se quer evitar — o painel de
+deploy competindo com produção pelo pouco de CPU que sobrou.
+
+A etapa 17 não tem pressa: hml está **parada**, então o peso que ela teria já é
+zero hoje. Os tetos existem para quando hml voltar.
+
+**E produção parecer rápida não prova que o teto saiu.** Com a máquina ociosa,
+um teto de 20% é invisível: ele só aparece quando se pede CPU. Foi assim que eu
+errei uma vez, confiando em medição ociosa e disparando um deploy cedo demais.
+A leitura confiável é o painel da Hostinger; benchmark no host é o plano B, e
+tem de ser leve (1 núcleo, ~5 s) — carga pesada pode reiniciar o relógio das 3 h
+que a Hostinger leva para soltar o teto depois que o uso normaliza.
 
 ## Ações que dependem do João
 - GitHub Environment `production` nos 2 repos (revisor obrigatório).
