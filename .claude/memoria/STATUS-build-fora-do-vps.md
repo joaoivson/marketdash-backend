@@ -23,7 +23,7 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 | 8 | Frontend: workflows | Variables por ambiente, hash exato do bundle | eu | ✅ tsc 25 (baseline), YAML ok | ⬜ | — |
 | 9 | Retenção no GHCR | workflow semanal, mantém 15 versões | eu | ✅ nos 2 repos | — | — |
 | 10 | Pré-verificações no Coolify | Auto Deploy OFF, ports_mappings, healthcheck | eu | — | ⬜ | — |
-| 11 | Push em `develop` (etapa 1 do rollout) | imagens publicadas; deploy barrado pela trava | eu | ⬜ | ⬜ | — |
+| 11 | Push em `develop` (etapa 1 do rollout) | imagens publicadas; deploy barrado pela trava | eu | ✅ | ✅ **FEITA 16/09 14:47/14:53** | — |
 | 12 | Migrar as 5 apps de hml para Docker Image | PATCH ou B2 (SQL) com pg_dump antes | eu | ⬜ | ⬜ | — |
 | 13 | Deploy de hml pela imagem + validação | `version == sha`, login, bundle, carga do host | eu | ⬜ | ⬜ | ⬜ |
 | 14 | Promover para `main` (cherry-pick) | 131/73 commits da develop NÃO vão junto | eu | ⬜ | ⬜ | — |
@@ -33,6 +33,28 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 
 **Bloqueio da linha 15:** benchmark de CPU no host precisa voltar a < 1,8 s
 (agora: 3,3-4,9 s). Etapas 1-14 não dependem disso.
+
+## Etapa 11 — prova de que foi feita (16/09)
+
+Push real na `develop` nos dois repos:
+
+| repo | run | evento | validate | build | deploy |
+|---|---|---|---|---|---|
+| backend | 35110954264 (14:47) | `push` | ✅ | ✅ | ❌ barrado |
+| frontend | 35111648001 (14:53) | `push` | ✅ | ✅ | ❌ barrado |
+
+As três imagens estão no GHCR e são **públicas, puxáveis anonimamente** —
+testado pelo caminho que o VPS usa (`ghcr.io/token?scope=…:pull` sem
+credencial), não pela API do GitHub. Sem `docker login` no host.
+
+Os dois runs seguintes (15:17 e 15:21) são `workflow_dispatch` **com tag**, com
+`build: skipped` — é o caminho de ROLLBACK funcionando como projetado: reusa a
+imagem já publicada em vez de reconstruir.
+
+Pré-requisitos conferidos no mesmo dia: 9 Variables no frontend com os valores
+certos (HML→`ytjpdvj…`, PROD→`iprdyorx…`, **não trocadas**), todos os secrets
+`COOLIFY_DEPLOY_URL_*`, e o Environment `production` com revisor obrigatório
+`joaoivson` **nos dois repos**.
 
 ## Cherry-pick da etapa 14 — o conjunto exato (levantado em 16/09)
 
