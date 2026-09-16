@@ -11,6 +11,36 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-16 (Thumbnail das automações expirava e virava 403)
+
+A tela **Automações** despejava uma parede de `403 (Forbidden)` no console, em
+URLs de `scontent-gru*.cdninstagram.com`. Não era a nossa infraestrutura: o
+navegador busca essas imagens **direto no CDN da Meta**, sem passar pela nossa
+API.
+
+### A causa
+
+O `thumbnail_url` que a Graph API devolve é uma URL **assinada e temporária** —
+`oh=` é a assinatura e `oe=` é a validade, em epoch hexadecimal. Guardávamos
+essa URL em `instagram_automations.media_thumbnail_url` como um retrato do
+instante da criação da automação, e **nada mais escrevia nesse campo depois**.
+Passada a validade, o CDN recusa a imagem para qualquer um. As URLs do relato
+estavam vencidas havia de **3 a 9 dias**.
+
+### O que mudou
+
+- `app/services/instagram_media_url.py` (novo) lê o `oe=` e responde "essa URL
+  ainda vale?" **sem nenhuma chamada de rede**.
+- Ao listar automações, a thumbnail vencida é **apagada** (ausência tem
+  placeholder na tela; quebrada só tem o 403) e **renovada** pela Graph API, em
+  paralelo, no máximo 12 por carga e com orçamento de 8 s. Falhou a renovação,
+  fica vazia — a listagem nunca quebra por causa disso.
+- Erro da Meta aqui **nunca** aciona `handle_token_invalido`: ele pausa todas as
+  automações da conta, e esse efeito não pode nascer de alguém abrir uma tela.
+- Frontend: `MiniaturaInstagram` centraliza a miniatura e cai no **mesmo
+  placeholder** do caso "sem imagem" quando a imagem quebra. Antes o `onError`
+  escondia o `<img>` e deixava um quadrado vazio, com cara de defeito de layout.
+
 ## [Não versionado] - 2026-09-15 (Painel de infraestrutura no admin)
 
 Menu novo em **Admin › Infraestrutura** (`/admin/infraestrutura`), só para

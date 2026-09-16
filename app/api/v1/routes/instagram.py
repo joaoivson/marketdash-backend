@@ -139,11 +139,11 @@ async def listar_midias(
 
 
 @router.get("/automations", response_model=list[InstagramAutomationResponse])
-def listar_automacoes(
+async def listar_automacoes(
     current_user: User = Depends(exige_plano_max),
     db: Session = Depends(get_db),
 ):
-    return _automacoes(db).listar(current_user.id)
+    return await _automacoes(db).listar(current_user.id)
 
 
 @router.post(
