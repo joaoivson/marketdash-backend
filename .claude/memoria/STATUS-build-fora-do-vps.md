@@ -28,7 +28,8 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 | 13 | Deploy de hml pela imagem + validação | `version == sha`, login, bundle, carga do host | eu | ⬜ | ⬜ | ⬜ |
 | 14 | Promover para `main` (cherry-pick) | 131/73 commits da develop NÃO vão junto | eu | ⬜ | ⬜ | — |
 | 15 | Migrar prod + deploy aprovado | **só com o teto da Hostinger removido** | João aprova | ⬜ | ⬜ | ⬜ |
-| 16 | Docs, CHANGELOG, memória, limpeza | scripts antigos, Dockerfile.worker, Redis nº 2 | eu | ⬜ | — | — |
+| 16a | **Docs + CHANGELOG** | runbook §10 + §5/§9 corrigidas, 2 `.github/README.md`, `README-DEPLOY.md`, CHANGELOG | eu | ✅ **16/09** | — | — |
+| 16b | Limpeza | apagar `aguardar-build.sh`/`trigger-deploy.sh`/`Dockerfile.worker`, Redis nº 2 | eu | ⬜ só depois da 15 | — | — |
 | 17 | Tetos de recurso em hml | `limites-coolify.sh`: cpus/memória/shares 256 + `CELERY_CONCURRENCY=2` | eu | ✅ trava de ambiente, ensaio por padrão | ⬜ espera o Coolify | — |
 
 **Bloqueio da linha 15:** benchmark de CPU no host precisa voltar a < 1,8 s
