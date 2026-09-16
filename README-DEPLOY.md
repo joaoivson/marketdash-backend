@@ -29,16 +29,30 @@ ENVIRONMENT=production
 
 ### Configuração no Coolify
 
-1. **Source**: Git Repository
-   - URL: `https://github.com/joaoivson/dash`
-   - Branch: `main`
+> ⚠️ **Desde 16/09/2026 o Coolify NÃO constrói mais.** Quem constrói é o GitHub
+> Actions; o VPS só puxa a imagem pronta do GHCR. O motivo está em
+> `docs/PROMOCAO_PARA_PRODUCAO.md` §10 — build dentro do servidor que serve
+> produção derrubou produção duas vezes em cinco dias.
 
-2. **Build Pack**: Dockerfile
-   - Dockerfile Location: `Dockerfile` (raiz do projeto)
+1. **Source**: **Docker Image** (não Git Repository)
+   - Image: `ghcr.io/joaoivson/marketdash-backend` (API) ou
+     `…/marketdash-backend-worker` (worker Celery)
+   - Tag: o **SHA completo** do commit — quem grava é o CI, não a mão
+   - Imagens públicas: o host não precisa de `docker login`
 
-3. **Port**: `8000`
+2. **Build Pack**: `dockerimage`
+   - Se estiver `dockerfile`, o `deploy-imagem.sh` **recusa disparar** o deploy:
+     um POST nesse estado mandaria o VPS compilar
+   - A API do Coolify recusa trocar isso por PATCH (422); a migração foi por
+     `UPDATE` direto no `coolify-db`, com `pg_dump` antes
 
-4. **Domain**: `api.marketdash.com.br` (produção)
+3. **Auto Deploy: DESLIGADO.** Ligado, o webhook do GitHub App dispara build no
+   VPS pelas costas do CI — e foi assim que 5 builds simultâneos derrubaram
+   produção em 11/09.
+
+4. **Port**: `8000`
+
+5. **Domain**: `api.marketdash.com.br` (produção)
    - **SSL: Enabled (Let's Encrypt)** - ⚠️ **IMPORTANTE**: Certifique-se de que SSL está habilitado
    - Coolify gerencia certificados SSL automaticamente via Let's Encrypt
    - Certificados são renovados automaticamente a cada 90 dias
@@ -91,8 +105,13 @@ O endpoint `/health` está disponível para verificação:
 
 ```bash
 curl https://api.marketdash.com.br/health
-# Deve retornar: {"status": "healthy"}
+# {"status":"healthy","database":"connected","version":"<sha do commit no ar>"}
 ```
+
+O campo `version` vem de `APP_VERSION`, gravado na imagem em build-time
+(`ARG GIT_SHA`). É a prova de QUAL commit está servindo — o CI compara esse
+valor com o SHA empurrado antes de ficar verde. `{"status":"healthy"}` sozinho
+diz que o processo subiu, não que o código novo está no ar.
 
 ### Configuração de SSL/HTTPS
 

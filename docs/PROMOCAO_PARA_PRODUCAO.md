@@ -444,8 +444,11 @@ da Meta.
 10. **Crons**: agendar `061`/`064`/`069` em produção e **desagendar em hml no mesmo ato**
 11. Observar 48h (seção 6)
 
-> **CI verde ≠ deployado.** E o `tsc --noEmit` do CI **não valida `src/`** — a
-> verificação real é `npx tsc -b`, com baseline de **26 erros** que não pode subir.
+> **CI verde ≠ deployado** — mas só para app ainda **não** migrada para Docker
+> Image. Nas migradas, o job prova a versão no ar antes de ficar verde (§10).
+> E o `tsc --noEmit` do CI **não valida `src/`** — a verificação real é
+> `npx tsc -b`, com baseline de **26 erros na `main`** (25 na `develop`) que não
+> pode subir.
 
 ---
 
@@ -887,25 +890,36 @@ Em 04/09: controle `18 failed, 369 passed, 25 errors`; com o fix `18 failed,
 autoriza empurrar. No frontend, `tsc -p tsconfig.app.json --noEmit` (o
 `tsc --noEmit` da raiz **não valida nada**: `files: []`) + `npm run build`.
 
-**4. Empurre direto para `main`.**
+**4. Empurre direto para `main` — e aprove o gate.**
 
 ```bash
 git push origin prod-<assunto>-<ddmm>:main
 ```
 
-**5. Confirme o deploy pelo estado real, não pelo CI.**
+Desde 16/09/2026 o push dispara `validate` → `build` (no GitHub, publica no
+GHCR) e o job `deploy` **para e espera aprovação** (`environment: production`,
+revisor `joaoivson`). Aprove pelo Actions ou pela notificação. Enquanto ninguém
+aprova, produção não muda — o que também torna o push seguro de fazer fora de
+hora. Ver §10.
+
+**5. Confirme o deploy — o CI agora prova sozinho.**
+
+Com o pipeline de §10 o job só fica verde depois de: o deployment chegar a
+`finished`, a tag gravada bater com o SHA, e o código novo **responder** na URL
+real. Não é mais preciso caçar `deployment_uuid` no log.
+
+Se quiser conferir à mão, a prova é de uma linha:
 
 ```bash
-TOKEN=$(grep '^COOLIFY_TOKEN=' .env | cut -d= -f2-)
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "http://31.97.22.173:8000/api/v1/deployments/<deployment_uuid>"   # status + commit
+curl -s https://api.marketdash.com.br/health | jq -r .version      # == o SHA empurrado
+curl -s https://marketdash.com.br/version.json | jq -r .version    # == o SHA empurrado
 ```
 
-O `deployment_uuid` sai do log do job (`gh run view <id> --log`). Espere
-`finished` **com o SHA que você empurrou** — `queued`/`in_progress` não é deploy
-feito, e o job verde só diz que o webhook foi aceito. No frontend o marcador é o
-hash do bundle: `curl -s https://marketdash.com.br/ | grep -o 'assets/index-[^"]*\.js'`
-tem que mudar.
+⚠️ O aviso histórico "**CI verde ≠ deployado**" valia para o pipeline ANTIGO,
+que ficava verde ao ver o webhook aceito — e o deploy falhava minutos depois, em
+silêncio, três vezes. Ele continua valendo para qualquer app que ainda **não**
+tenha migrado para Docker Image; nessas, o `deploy-imagem.sh` recusa disparar
+(§10) e o job fica vermelho, que é o comportamento certo.
 
 **6. Valide na tela, em produção.** Login com a conta admin, screenshot, e os
 números conferidos contra SQL. Em 04/09 o dashboard mostrou R$ 8.840,60 e 3.306
@@ -917,3 +931,102 @@ develop: o merge futuro **vai** reconflitar nesses arquivos. Anote na 8.5 e no
 recente).
 
 **8. Limpe.** `git worktree remove --force /tmp/wt-main && git branch -D prod-<assunto>-<ddmm>`.
+
+---
+
+## 10. O pipeline novo (desde 16/09/2026): o Actions constrói, o VPS só puxa
+
+**Leia esta seção antes das 5 e 9** — ela muda como o deploy acontece e como se
+prova que aconteceu.
+
+### O que mudou, e por quê
+
+Até 16/09 o Coolify rodava `docker build` **dentro do VPS que serve produção**.
+Isso derrubou produção duas vezes em cinco dias: 11/09 (~20 h fora) e 16/09
+(07:40-08:20 BRT). O mecanismo é sempre o mesmo — o build satura a CPU, a
+Hostinger aplica um teto de 20% na VPS inteira, e o teto é **auto-sustentável**:
+com a fatia reduzida, a carga rotineira já satura o que sobrou.
+
+Agora: **GitHub Actions constrói e publica no GHCR; o Coolify só puxa a imagem
+pronta.** Nenhum `docker build` roda no VPS, nunca mais.
+
+### As três travas que sustentam isso
+
+1. **`build_pack` tem de ser `dockerimage`.** `deploy-imagem.sh` lê a aplicação
+   e **recusa disparar** se ela ainda estiver em `dockerfile` — um POST nesse
+   estado mandaria o VPS compilar. Vale principalmente na janela de migração,
+   com algumas apps já convertidas e outras não.
+2. **Auto Deploy do Coolify DESLIGADO** em todas as apps. Ligado, o webhook do
+   GitHub App dispara build no VPS pelas costas do CI.
+3. **Gate de aprovação em produção.** O job `deploy` do workflow de produção tem
+   `environment: production`, com revisor obrigatório `joaoivson` nos dois
+   repos. A troca do container espera um clique.
+
+### CI verde AGORA significa deployado
+
+Esta é a mudança prática mais importante, e ela **inverte** o aviso que aparece
+em §5 e §9. Antes, o job ficava verde ao ver o webhook aceito — e o deploy podia
+falhar minutos depois, em silêncio. Aconteceu três vezes.
+
+O `deploy-imagem.sh` faz o caminho inteiro e só sai 0 no fim:
+
+```
+GET  /applications/{uuid}     → trava: build_pack == dockerimage?
+PATCH /applications/{uuid}    → aponta a tag (o SHA do commit)
+POST /deploy?uuid=…           → dispara
+GET  /deployments/{uuid}      → poll de 10s até `finished` (um `failed` imprime o log)
+GET  /applications/{uuid}     → confere a tag gravada e o status `running`
+```
+
+E depois disso ainda vem a prova de que o código novo está **servindo**:
+
+| alvo | prova | onde |
+|---|---|---|
+| backend | `curl …/health \| jq -r .version` == SHA | `confirmar-versao.sh` |
+| frontend | hash do bundle **exato** + `/version.json` == SHA | `confirmar-bundle.sh` |
+| worker | linha `versão <sha>` no log de boot | log do container |
+
+O hash do bundle virou prova exata porque o CI parou de construir um bundle
+paralelo só para testar: o artefato conferido é o **mesmo** que foi publicado.
+Antes o CI construía com outras variáveis e o hash nunca batia — havia até um
+caminho de "⚠️ trocou, mas com outro hash".
+
+### Rollback: segundos, não um build
+
+```bash
+gh workflow run deploy-production.yml -f tag=<sha-anterior>
+```
+
+O input `tag` faz o job `build` ser **pulado**: reaponta a imagem já publicada e
+redeploya. As 15 últimas tags ficam no GHCR (`limpar-ghcr.yml` poda o resto,
+semanalmente). Pelo terminal, sem o GitHub:
+
+```bash
+COOLIFY_TOKEN=… .github/scripts/deploy-imagem.sh api   "$COOLIFY_DEPLOY_URL_BACKEND_PROD" ghcr.io/joaoivson/marketdash-backend <sha>
+```
+
+### Falha de pull não derruba produção
+
+O Coolify puxa a imagem **antes** de parar o container antigo. Pull que falha =
+deployment `failed` + job vermelho, com produção ainda na versão anterior.
+
+### Imagens
+
+`ghcr.io/joaoivson/marketdash-backend`, `…-backend-worker` e `…-frontend`, todas
+**públicas** — o VPS puxa sem `docker login`. Não há segredo em build-time: o
+que o frontend embute (`VITE_SUPABASE_ANON_KEY`) é a chave `anon`, feita para
+viver no navegador e já pública no bundle. O que **não** pode entrar é a
+`service_role`.
+
+⚠️ **Uma imagem por ambiente no frontend.** O Vite grava as `VITE_*` inline no
+bundle; não há como trocá-las depois sem reconstruir. Por isso `prod-<sha>` e
+`hml-<sha>` são artefatos diferentes, e subir o de um ambiente no outro dá 401
+em toda chamada autenticada.
+
+### O que ficou para trás
+
+`aguardar-build.sh` e `trigger-deploy.sh` (nos dois repos) existiam só para
+serializar builds dentro do VPS. **Nenhum workflow os chama mais.** Ficam no
+disco até produção migrar — se for preciso reverter o pipeline, o `git revert`
+os traz de volta junto.
+

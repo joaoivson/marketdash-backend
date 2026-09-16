@@ -1,89 +1,90 @@
-# GitHub Actions Workflows - Backend
+# CI/CD — o Actions constrói, o VPS só puxa
 
-Este diretório contém os workflows do GitHub Actions para deploy automático do backend MarketDash.
+**Desde 16/09/2026.** Antes, o Coolify rodava `docker build` **dentro do VPS que
+serve produção**. Isso derrubou produção duas vezes em cinco dias — 11/09 (~20 h
+fora do ar) e 16/09 (07:40-08:20 BRT) — sempre pelo mesmo mecanismo: o build
+satura a CPU, a Hostinger aplica um teto de 20% na VPS inteira, e o teto é
+auto-sustentável (com a fatia reduzida, a carga rotineira já satura o que
+sobrou).
 
-## Workflows Disponíveis
+Agora nenhum `docker build` roda no VPS.
 
-### 1. Deploy to Production (`deploy-production.yml`)
+```
+push na develop ─► validate ─► build (runner) ─► GHCR ─► deploy: Coolify PUXA ─► prova
+push na main    ─► validate ─► build (runner) ─► GHCR ─► [APROVAÇÃO] ─► deploy ─► prova
+```
 
-**Trigger**: Push para a branch `main`
+## Workflows
 
-**Processo**:
-1. **Validação**: 
-   - Verifica sintaxe Python
-   - Valida imports principais
-   - Verifica dependências
-2. **Deploy**: 
-   - Aciona webhook do Coolify para deploy em produção
-   - Aplicação: `marketdash-backend:main`
-   - Domínio: `api.marketdash.com.br`
+| arquivo | dispara em | gate |
+|---|---|---|
+| `deploy-homologation.yml` | push na `develop`, ou dispatch | não |
+| `deploy-production.yml` | push na `main`, ou dispatch | **sim** — `environment: production`, revisor `joaoivson` |
+| `monitor-producao.yml` | cron | — sonda externa, avisa no WhatsApp |
+| `limpar-ghcr.yml` | cron semanal | — mantém as 15 últimas versões |
 
-### 2. Deploy to Homologation (`deploy-homologation.yml`)
+Os dois de deploy têm `paths-ignore` para `**.md`: commit só de documentação não
+deploya.
 
-**Trigger**: Push para a branch `develop`
+## Imagens
 
-**Processo**:
-1. **Validação**: 
-   - Verifica sintaxe Python
-   - Valida imports principais
-   - Verifica dependências
-2. **Deploy**: 
-   - Aciona webhook do Coolify para deploy em homologação
-   - Aplicação: `marketdash-backend-hml`
-   - Domínio: `api.hml.marketdash.com.br`
+`ghcr.io/joaoivson/marketdash-backend` (target `api`) e `…-backend-worker`
+(target `worker`), **públicas** — o VPS puxa sem `docker login`.
 
-## Configuração de Secrets
+Tag imutável = **SHA completo** do commit; `main`/`develop` são tags móveis, de
+conveniência. É a tag do SHA que identifica a versão.
 
-Configure os seguintes secrets no GitHub:
+## Scripts
 
-1. Acesse: `https://github.com/joaoivson/marketdash-backend/settings/secrets/actions`
-2. Adicione:
-   - **Name**: `COOLIFY_API_TOKEN`
-     - **Value**: Token de API do Coolify (criar em Settings → Keys & Tokens)
-   - **Name**: `COOLIFY_DEPLOY_URL_BACKEND_HML`
-     - **Value**: `http://31.97.22.173:8000/api/v1/deploy?uuid={UUID_BACKEND_HML}&force=false`
-     - Substitua `{UUID_BACKEND_HML}` pelo UUID da aplicação de homologação (encontre em Webhooks)
-   - **Name**: `COOLIFY_DEPLOY_URL_BACKEND_PROD`
-     - **Value**: `http://31.97.22.173:8000/api/v1/deploy?uuid={UUID_BACKEND_PROD}&force=false`
-     - Substitua `{UUID_BACKEND_PROD}` pelo UUID da aplicação de produção (encontre em Webhooks)
+| script | o que faz |
+|---|---|
+| `deploy-imagem.sh <alvo> <url> <imagem> <tag>` | trava `build_pack` → PATCH da tag → dispara → **poll até `finished`** → confere tag e status |
+| `confirmar-versao.sh <url-health> <sha>` | poll do `/health` até `.version == sha` |
+| ~~`aguardar-build.sh`~~, ~~`trigger-deploy.sh`~~ | mortos: serializavam builds no VPS. Nenhum workflow chama. Ficam até produção migrar (o `git revert` do pipeline precisaria deles) |
 
-**Documentação completa**: Veja `GUIA_CONFIGURACAO_DEPLOY_WEBHOOK_AUTENTICADO.md` na raiz do projeto.
+## As três travas
 
-## Validações Implementadas
+1. **`build_pack` tem de ser `dockerimage`.** `deploy-imagem.sh` **recusa
+   disparar** numa app ainda em `dockerfile` — um POST nesse estado mandaria o
+   VPS compilar. É a trava que importa durante a migração.
+2. **Auto Deploy do Coolify DESLIGADO** em todas as apps. Ligado, o webhook do
+   GitHub App dispara build no VPS pelas costas do CI.
+3. **Gate de aprovação** no deploy de produção.
 
-- ✅ Verificação de sintaxe Python (`python -m py_compile`)
-- ✅ Validação de imports principais (`app`, `app.main`, `app.core.config`, `app.core.security`)
-- ✅ Verificação de dependências instaladas
+## CI verde agora significa deployado
 
-## Próximas Melhorias
+Isto **inverte** o aviso antigo. O job só sai 0 depois do deployment chegar a
+`finished`, da tag gravada bater, e do código novo responder na URL real:
 
-- [ ] Adicionar testes unitários com `pytest`
-- [ ] Adicionar verificação de formatação com `black` ou `ruff`
-- [ ] Adicionar verificação de segurança com `bandit`
-- [ ] Adicionar notificações (Slack, Discord, Email)
+```bash
+curl -s https://api.marketdash.com.br/health | jq -r .version   # == o SHA empurrado
+```
 
-## Troubleshooting
+O aviso "CI verde ≠ deployado" continua valendo para app **não migrada** — mas
+nessas o script recusa disparar e o job fica vermelho, que é o certo.
 
-### Workflow não executa
+## Rollback — segundos, sem build
 
-- Verifique se o push foi feito para a branch correta (`main` ou `develop`)
-- Verifique se os arquivos modificados não estão em `paths-ignore`
+```bash
+gh workflow run deploy-production.yml -f tag=<sha-anterior>
+```
 
-### Validação falha
+O input `tag` **pula** o job `build`: reaponta a imagem já publicada e redeploya.
 
-- Verifique os logs do job `validate` para identificar o erro
-- Execute as validações localmente antes de fazer push
+## Quando o `build` fica vermelho com `denied`
 
-### Deploy não é acionado
+É permissão de `packages: write` ou o pacote ficou privado. Confira se a imagem
+continua pública pelo caminho que o VPS usa:
 
-- Verifique se os secrets `COOLIFY_API_TOKEN` e `COOLIFY_DEPLOY_URL_BACKEND_{ENV}` estão configurados corretamente
-- Verifique se o UUID na URL do webhook corresponde ao UUID da aplicação no Coolify
-- Verifique se o token de API tem permissões de deploy
-- Verifique se o Coolify está acessível e funcionando
-- Verifique os logs do job `deploy` para identificar erros (status HTTP do curl)
+```bash
+tok=$(curl -s "https://ghcr.io/token?scope=repository:joaoivson/marketdash-backend:pull&service=ghcr.io" | jq -r .token)
+curl -s -H "Authorization: Bearer $tok" https://ghcr.io/v2/joaoivson/marketdash-backend/tags/list
+```
 
-## Referências
+Sem token de usuário: se isso responde, o VPS consegue puxar.
 
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Coolify Documentation](https://coolify.io/docs)
-- [WEBHOOKS_SSL_CONFIG.md](../../WEBHOOKS_SSL_CONFIG.md)
+## Secrets e variáveis
+
+`COOLIFY_API_TOKEN` (token **raiz** — o de leitura não faz PATCH),
+`COOLIFY_DEPLOY_URL_*` (base e uuid saem da própria URL), `ALERTA_API_BASE` e
+`CRON_SECRET` para a sonda.

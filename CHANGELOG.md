@@ -11,6 +11,55 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-16 (Deploy: o build sai do VPS)
+
+O Coolify rodava `docker build` **dentro do servidor que serve produção**. Isso
+derrubou produção duas vezes em cinco dias, sempre pelo mesmo mecanismo: o build
+satura a CPU → a Hostinger aplica um teto de 20% na VPS inteira → e o teto é
+**auto-sustentável**, porque com a fatia reduzida a carga rotineira já satura o
+que sobrou.
+
+| quando | o que | consequência |
+|---|---|---|
+| 11/09 | `develop` e `main` empurradas com 21 s de diferença → 5 builds simultâneos | ~20 h de API inalcançável |
+| 15/09 20:49 UTC | deploy sob o teto | `pip install` morre (exit 255) após 16 min |
+| 16/09 03:1x UTC | redeploy sob o teto | `TimeoutExceededException` da fila do Coolify após 35 min |
+| 16/09 07:40-08:20 BRT | deploy do frontend sob o teto | `npm ci` cai com `ECONNRESET`; load 32, steal 94% — produção inutilizável |
+
+### Agora
+
+**GitHub Actions constrói e publica no GHCR; o Coolify só puxa.** Nenhum
+`docker build` roda no VPS.
+
+- **Backend**: `Dockerfile` multi-stage com targets `worker` e `api` (`api` por
+  último, para o build legado sem `--target` continuar funcionando durante a
+  transição). Imagem de 1,37 GB → 1,13 GB.
+- **`version` no `/health`, na raiz e no log de boot do worker** (`ARG GIT_SHA` →
+  `ENV APP_VERSION`). É a prova de QUAL commit está servindo.
+- **Frontend**: as `VITE_*` passam a vir de **GitHub Variables**, não do painel
+  do Coolify. Antes o CI construía um bundle paralelo com outros valores só para
+  testar — por isso o hash nunca batia. Agora o artefato conferido é o mesmo que
+  foi publicado, e o hash tem de bater **exatamente**. Imagem: 98 MB.
+- **Guarda contra tela branca**: o build falha de propósito se
+  `VITE_SUPABASE_URL`/`ANON_KEY` chegarem vazias — `supabase.ts` lança no import,
+  o app não renderiza nada e o container sobe "saudável".
+- **Gate de aprovação em produção**: `environment: production` com revisor
+  obrigatório. A troca do container espera um clique.
+- **Rollback em segundos**: `workflow_dispatch` com `tag=<sha-anterior>` pula o
+  build e reaponta a imagem já publicada. As 15 últimas ficam no GHCR.
+
+### CI verde agora significa deployado
+
+É a mudança prática mais importante, e ela **inverte** o aviso antigo. Antes o
+job ficava verde ao ver o webhook aceito, e o deploy podia falhar minutos depois
+em silêncio — aconteceu três vezes. Agora `deploy-imagem.sh` faz poll até
+`finished`, confere a tag gravada, e só então a prova da versão no ar corre
+(`/health.version` e `/version.json`).
+
+E a trava que fecha o ciclo: se a aplicação ainda estiver em
+`build_pack: dockerfile`, o script **recusa disparar** — um POST nesse estado
+mandaria o VPS compilar, que é exatamente o que se está eliminando.
+
 ## [Não versionado] - 2026-09-16 (Thumbnail das automações expirava e virava 403)
 
 A tela **Automações** despejava uma parede de `403 (Forbidden)` no console, em
