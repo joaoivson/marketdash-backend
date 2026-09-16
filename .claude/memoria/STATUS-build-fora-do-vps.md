@@ -86,6 +86,32 @@ aumentou" num commit que não mexeu em tipo nenhum.
 Os scripts de infra (`limites-coolify.sh`, `teto_hostinger.py`) e o fix da
 thumbnail do Instagram **não entram** neste cherry-pick — são rodadas próprias.
 
+## O benchmark de comparação — o comando EXATO
+
+"Comparar com o mesmo benchmark" só vale se for literalmente o mesmo comando.
+Este é o que produziu os números de 16/09 (laço Python puro, determinístico,
+sem dependência de disco ou rede):
+
+```bash
+ssh root@31.97.22.173 'python3 -c "
+import time
+t=time.perf_counter()
+x=0
+for i in range(5000000): x+=i*i
+print(f\"{time.perf_counter()-t:.2f}\")"'
+```
+
+| referência | valor |
+|---|---|
+| saudável | **1,0–1,5 s** |
+| critério de "voltou ao normal" | **< 1,8 s** |
+| **16/09 sob o teto** (100 execuções, 06:56–18:53 UTC) | mín **3,00 s** · mediana **4,70 s** · máx **17,00 s** |
+
+🚫 **NÃO rodar antes das 22:00 UTC de 16/09.** Ele gera carga e contamina a
+janela limpa acordada com o suporte. Depois da janela, é a medição que fecha o
+diagnóstico. Exige SSH — é comando do João ou do suporte, não meu (o SSH daqui
+está bloqueado pelo classificador).
+
 ## Estado real de produção sob o teto (medido, 16/09)
 
 100 amostras do `/health` entre 06:56 e 18:53 UTC, a cada ~7 min:
