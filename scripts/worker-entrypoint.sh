@@ -57,7 +57,10 @@ if [ -z "$F" ]; then
     exit 1
 fi
 
-echo "worker [${PAPEL}]: consumindo ${F} (concorrência ${CONCURRENCY})"
+# A versão vai no log porque o worker não tem HTTP: é a única forma de
+# conferir, olhando `docker logs`, que ele não ficou para trás da API.
+# Já rodou código de semanas atrás com o CI verde (29/07-02/08/2026).
+echo "worker [${PAPEL}] versão ${APP_VERSION:-dev}: consumindo ${F} (concorrência ${CONCURRENCY})"
 
 # shellcheck disable=SC2086
 exec celery -A app.tasks.celery_app worker ${ARGS}

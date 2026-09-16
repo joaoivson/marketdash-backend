@@ -267,6 +267,15 @@ class Settings(BaseSettings):
     ALERTA_WHATSAPP_SESSAO: Optional[str] = None
     ALERTA_WHATSAPP_NUMEROS: Optional[str] = None
 
+    # SHA do commit que gerou a imagem, gravado em build-time pelo Dockerfile
+    # (`ARG GIT_SHA` → `ENV APP_VERSION`). Devolvido por `/` e `/health`.
+    #
+    # Existe porque "CI verde" nunca foi prova de deploy: três vezes o webhook
+    # do Coolify foi aceito e o código novo NÃO subiu, em silêncio. Com isto, o
+    # CI compara `/health.version` com o SHA que acabou de empurrar e sabe a
+    # diferença entre "deployado" e "aceito". `dev` é o valor fora do Docker.
+    APP_VERSION: str = "dev"
+
     # Debug: caminho do arquivo de log NDJSON (agent debug). Em Docker use ex.: /app/.cursor/debug.log
     DEBUG_LOG_PATH: Optional[str] = None
 
