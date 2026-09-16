@@ -83,7 +83,16 @@ if ! jq -e . >/dev/null 2>&1 <<<"$app"; then
   echo "$app" | head -c 300
   exit 1
 fi
-build_pack="$(jq -r '.build_pack // "?"' <<<"$app")"
+# Resposta de ERRO do Coolify (401, 429, 404) também é JSON válido — e sem
+# `build_pack`. Sem esta checagem, "token sem permissão" chegava ao log
+# disfarçado de "a app está em modo build", mandando investigar o lugar errado.
+if ! jq -e 'has("build_pack")' >/dev/null 2>&1 <<<"$app"; then
+  echo "::error::o Coolify respondeu sem o campo 'build_pack' ao ler '$alvo'."
+  echo "::error::Quase sempre é o COOLIFY_API_TOKEN sem permissão de leitura. Resposta:"
+  jq -c 'if type=="object" then (.message // .error // .) else . end' <<<"$app" 2>/dev/null | head -c 300
+  exit 1
+fi
+build_pack="$(jq -r '.build_pack' <<<"$app")"
 if [ "$build_pack" != "dockerimage" ]; then
   echo "::error::'$alvo' está com build_pack='$build_pack' e não 'dockerimage'."
   echo "::error::Disparar assim faria o VPS COMPILAR a imagem — a causa dos apagões de 11/09 e 16/09."
