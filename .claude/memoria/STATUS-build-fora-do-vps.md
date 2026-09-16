@@ -86,6 +86,27 @@ aumentou" num commit que não mexeu em tipo nenhum.
 Os scripts de infra (`limites-coolify.sh`, `teto_hostinger.py`) e o fix da
 thumbnail do Instagram **não entram** neste cherry-pick — são rodadas próprias.
 
+## Estado real de produção sob o teto (medido, 16/09)
+
+100 amostras do `/health` entre 06:56 e 18:53 UTC, a cada ~7 min:
+
+| | |
+|---|---|
+| mediana | 0,58 s |
+| acima de 1 s | **27%** |
+| acima de 3 s | 11 |
+| timeouts de 20 s | **3** (11:59, 12:21 e 18:32 UTC) |
+
+Benchmark de CPU no host: mediana **4,70 s** contra 1,0-1,5 s saudável, pico 17 s.
+
+⚠️ Spot check de 3 requisições dizia "0,16-0,43 s, saudável" — e estava errado.
+Ver [[medicao-pontual-engana]].
+
+⚠️ **Esse mesmo probe rodava benchmark no host a cada ~7 min, 100 vezes, entre
+06:56 e 18:53 UTC.** Sobra da estratégia anterior; parado às **19:00 UTC**.
+Declarado no chamado, porque se o critério de liberação automática olha PICO de
+CPU, pode ter sido o que impedia. A janela limpa começa em 19:00 UTC de 16/09.
+
 ## Ordem operacional acordada (16/09, com o suporte da Hostinger)
 
 Enquanto o teto estiver ativo: **nenhum build, nenhuma alteração em produção,
