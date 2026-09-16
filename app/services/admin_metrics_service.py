@@ -535,6 +535,9 @@ def _uso_links_paginas_30d(db: Session, user_id: int) -> Dict[str, int]:
 class AdminMetricsService:
     def __init__(self, db: Session):
         self.db = db
+        #: Memos por INSTÂNCIA. Ver `_all_events` e `_indices_de_pagos`.
+        self._eventos_memo: Optional[List[SubscriptionEvent]] = None
+        self._pagos_memo: Optional[tuple] = None
 
     def _all_events(self) -> List[SubscriptionEvent]:
         # id como desempate: dois eventos com o MESMO received_at (caso real do
@@ -542,11 +545,29 @@ class AdminMetricsService:
         # ficariam em ordem não-determinística só com received_at, e
         # _latest_by_subscriber() decidiria "o estado atual" ao acaso a cada
         # query. id crescente = ordem de inserção, desempate estável.
-        return (
-            self.db.query(SubscriptionEvent)
-            .order_by(SubscriptionEvent.received_at.asc(), SubscriptionEvent.id.asc())
-            .all()
-        )
+        #
+        # MEMOIZADO POR INSTÂNCIA, e isso vale explicar porque é a diferença
+        # entre o painel abrir e o painel estourar o tempo do navegador.
+        #
+        # `dashboard()` chamava esta função **28 vezes na mesma requisição** —
+        # `series_12m` percorre 12 meses, `churn_for_month` roda 16 vezes,
+        # cada uma relendo a tabela inteira. Perfilado em produção (16/09/2026):
+        # 381 consultas SQL, ~49 ms de ida e volta cada, **26 segundos** de
+        # requisição com a API usando 0,04 vCPU — ela não estava calculando,
+        # estava esperando a rede, 381 vezes.
+        #
+        # O memo é seguro por construção: este service **não escreve nada**
+        # (zero `db.add`/`commit`/`delete`) e é instanciado por requisição
+        # (`AdminMetricsService(db).dashboard(...)` na rota), então o cache
+        # nasce e morre dentro de uma leitura. Nenhum chamador altera a lista
+        # devolvida — todos iteram ou passam para funções puras.
+        if self._eventos_memo is None:
+            self._eventos_memo = (
+                self.db.query(SubscriptionEvent)
+                .order_by(SubscriptionEvent.received_at.asc(), SubscriptionEvent.id.asc())
+                .all()
+            )
+        return self._eventos_memo
 
     def active_subscribers(self, as_of: Optional[date] = None) -> List[SubscriptionEvent]:
         today = as_of or datetime.now(timezone.utc).date()
@@ -611,15 +632,43 @@ class AdminMetricsService:
             gross_frac += cobrindo["gross_cents"] / cobrindo["divisor"]
         return {"net": int(round(net_frac)), "gross": int(round(gross_frac))}
 
+    def _indices_de_pagos(self) -> tuple[Dict[Any, SubscriptionEvent], Dict[str, SubscriptionEvent]]:
+        """Último evento PAGO por assinatura e por e-mail, em memória.
+
+        Construído uma vez a partir de `_all_events()`, que já vem ordenado por
+        `(received_at, id)` — então a última gravação no dicionário é o evento
+        mais recente, que é exatamente o que o `ORDER BY received_at DESC
+        LIMIT 1` devolvia. O `id` como desempate torna o resultado
+        determinístico onde o SQL escolhia ao acaso entre dois eventos no mesmo
+        instante (caso real do import histórico).
+        """
+        if self._pagos_memo is None:
+            por_assinatura: Dict[Any, SubscriptionEvent] = {}
+            por_email: Dict[str, SubscriptionEvent] = {}
+            for ev in self._all_events():
+                if ev.event_type not in PAID_EVENTS:
+                    continue
+                if ev.subscription_id:
+                    por_assinatura[ev.subscription_id] = ev
+                if ev.customer_email:
+                    por_email[ev.customer_email] = ev
+            self._pagos_memo = (por_assinatura, por_email)
+        return self._pagos_memo
+
     def _last_paid_for(self, ev: SubscriptionEvent) -> Optional[SubscriptionEvent]:
-        q = self.db.query(SubscriptionEvent).filter(SubscriptionEvent.event_type.in_(PAID_EVENTS))
+        """Último pagamento da assinatura de `ev`.
+
+        Era uma consulta ao banco POR ASSINANTE: perfilado em produção
+        (16/09/2026), **132 chamadas = 132 idas ao banco = 3,6 s** numa única
+        renderização do painel. Os dados já estão inteiros na memória desde
+        `_all_events()` — 221 linhas —, então isto virou busca em dicionário.
+        """
+        por_assinatura, por_email = self._indices_de_pagos()
         if ev.subscription_id:
-            q = q.filter(SubscriptionEvent.subscription_id == ev.subscription_id)
-        elif ev.customer_email:
-            q = q.filter(SubscriptionEvent.customer_email == ev.customer_email)
-        else:
-            return None
-        return q.order_by(SubscriptionEvent.received_at.desc()).first()
+            return por_assinatura.get(ev.subscription_id)
+        if ev.customer_email:
+            return por_email.get(ev.customer_email)
+        return None
 
     def revenue_for_month(self, year: int, month: int) -> Dict[str, int]:
         start, end = _month_bounds(year, month)
