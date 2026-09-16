@@ -39,8 +39,17 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 Enquanto o teto estiver ativo: **nenhum build, nenhuma alteração em produção,
 nenhum benchmark**. Carga artificial pode reiniciar o relógio das ~3 h.
 
-1. **Remover o teto** — só a Hostinger pode: o reset semanal já foi usado.
-   Chamado escrito com o par controlado 12/09 → 13/09.
+1. **Remover o teto** — 🔄 **chamado ABERTO com a Hostinger em 16/09**, com
+   quatro itens registrados: remover o limite de 20% da VPS 1239939; preservar
+   produção, hml e Coolify sem alterações; rodar o scanner de malware só depois
+   da remoção; revisar o consumo quando a CPU voltar ao normal. Evidência
+   principal: o par controlado 12/09 (58,4%) → 13/09 (8,7%) e os 59,3% atuais
+   com carga reduzida.
+
+   ⚠️ **"Preservar sem alterações" = manter hml e Coolify PARADOS.** Foi eu que
+   os parei em 16/09 para salvar produção; o estado a preservar é este, não o
+   de antes. Subir qualquer um deles "para restaurar" recolocaria ~2,6 GB e a
+   disputa de CPU de volta na máquina estrangulada.
 2. **Medir de novo, com produção intacta** — `python3 scripts/teto_hostinger.py`.
    Passa quando a média diária volta à faixa do baseline (~8%) **e** o painel
    disser "CPU Limitations: No".
