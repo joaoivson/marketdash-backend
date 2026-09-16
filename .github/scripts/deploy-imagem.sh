@@ -72,9 +72,14 @@ api() {  # api <método> <caminho> [corpo-json]
 echo "→ $alvo: $imagem:$tag  (app $uuid)"
 
 # ── 1. Trava: a app precisa estar em modo imagem ─────────────────────────────
-app="$(api GET "/api/v1/applications/$uuid")"
+# `|| true` de propósito: sob `set -e`, um curl que estoura o tempo mataria o
+# script AQUI, com "exit code 28" e nada mais. A mensagem útil ("o Coolify não
+# respondeu") tem que chegar ao log — foi o que faltou na primeira execução
+# real, com o Coolify parado.
+app="$(api GET "/api/v1/applications/$uuid" || true)"
 if ! jq -e . >/dev/null 2>&1 <<<"$app"; then
-  echo "::error::resposta inválida do Coolify ao ler a aplicação '$alvo' (rede? token?)."
+  echo "::error::o Coolify não respondeu ao ler a aplicação '$alvo' ($base)."
+  echo "::error::Ele está de pé? (\`docker ps | grep coolify\`). Resposta recebida:"
   echo "$app" | head -c 300
   exit 1
 fi
@@ -89,7 +94,7 @@ fi
 # ── 2. Aponta para a tag desta execução ──────────────────────────────────────
 patch="$(jq -nc --arg n "$imagem" --arg t "$tag" \
   '{docker_registry_image_name: $n, docker_registry_image_tag: $t}')"
-resposta="$(api PATCH "/api/v1/applications/$uuid" "$patch")"
+resposta="$(api PATCH "/api/v1/applications/$uuid" "$patch" || true)"
 if jq -e '.errors // .message | select(. != null)' >/dev/null 2>&1 <<<"$resposta"; then
   # `message` sozinho pode ser sucesso ("Application updated"); só reclama se houver errors.
   if jq -e '.errors' >/dev/null 2>&1 <<<"$resposta"; then
@@ -99,7 +104,7 @@ if jq -e '.errors // .message | select(. != null)' >/dev/null 2>&1 <<<"$resposta
 fi
 
 # ── 3. Dispara e acompanha até o estado terminal ─────────────────────────────
-disparo="$(api POST "/api/v1/deploy?uuid=$uuid&force=false")"
+disparo="$(api POST "/api/v1/deploy?uuid=$uuid&force=false" || true)"
 deployment="$(jq -r '.deployments[0].deployment_uuid // .deployment_uuid // empty' <<<"$disparo")"
 if [ -z "$deployment" ]; then
   echo "::error::Coolify não devolveu deployment_uuid para '$alvo': $(head -c 300 <<<"$disparo")"
@@ -138,7 +143,7 @@ if [ "$status" != "finished" ]; then
 fi
 
 # ── 4. Confirma o que ficou gravado ──────────────────────────────────────────
-app="$(api GET "/api/v1/applications/$uuid")"
+app="$(api GET "/api/v1/applications/$uuid" || true)"
 tag_gravada="$(jq -r '.docker_registry_image_tag // "?"' <<<"$app")"
 estado="$(jq -r '.status // "?"' <<<"$app")"
 if [ "$tag_gravada" != "$tag" ]; then
