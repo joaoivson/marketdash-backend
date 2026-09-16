@@ -129,16 +129,22 @@ def main() -> None:
         print(f"  {quando}  ct_set_limits")
 
     # ── veredito ──────────────────────────────────────────────────────────────
-    hoje = sorted(por_dia)[-1]
-    media_hoje = sum(por_dia[hoje]) / len(por_dia[hoje])
+    # O VEREDITO sai do ponto MAIS RECENTE, nunca da média diária: a média
+    # carrega as horas estranguladas e continuaria alta por horas depois da
+    # remoção. Em 16/09 ela dizia "teto ATIVO, 55,6%" 20 minutos DEPOIS de o
+    # teto cair, com o ponto corrente já em 6,5%.
+    ultimo_ts = max(int(k) for k in uso)
+    media_hoje = float(uso[str(ultimo_ts)])
+    quando_ponto = dt.datetime.fromtimestamp(ultimo_ts, dt.timezone.utc)
     ultimo = max(limites) if limites else None
+    print(f"\nLeitura corrente: {media_hoje:.1f}% às {quando_ponto:%H:%M} UTC")
 
     print("\n" + "─" * 64)
     if media_hoje <= SUSPEITO:
-        print(f"PROVÁVEL: teto NÃO ativo — hoje em {media_hoje:.1f}%, na faixa do baseline.")
+        print(f"PROVÁVEL: teto NÃO ativo — leitura corrente {media_hoje:.1f}%, na faixa do baseline.")
         print("Confirme no painel e só então retome deploys.")
     else:
-        print(f"PROVÁVEL: teto ATIVO — hoje em {media_hoje:.1f}%, {media_hoje / BASELINE:.1f}× o baseline.")
+        print(f"PROVÁVEL: teto ATIVO — leitura corrente {media_hoje:.1f}%, {media_hoje / BASELINE:.1f}× o baseline.")
         if ultimo:
             idade = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(
                 ultimo.replace("Z", "+00:00")
