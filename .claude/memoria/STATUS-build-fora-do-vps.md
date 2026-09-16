@@ -34,6 +34,27 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 **Bloqueio da linha 15:** benchmark de CPU no host precisa voltar a < 1,8 s
 (agora: 3,3-4,9 s). Etapas 1-14 não dependem disso.
 
+## Ordem operacional acordada (16/09, com o suporte da Hostinger)
+
+Enquanto o teto estiver ativo: **nenhum build, nenhuma alteração em produção,
+nenhum benchmark**. Carga artificial pode reiniciar o relógio das ~3 h.
+
+1. **Remover o teto** — só a Hostinger pode: o reset semanal já foi usado.
+   Chamado escrito com o par controlado 12/09 → 13/09.
+2. **Medir de novo, com produção intacta** — `python3 scripts/teto_hostinger.py`.
+   Passa quando a média diária volta à faixa do baseline (~8%) **e** o painel
+   disser "CPU Limitations: No".
+3. **Rodar o scan de malware** (instalar pelo hPanel). Depois da remoção, nunca
+   antes: varredura de disco inteiro sob 20% de CPU demora horas e mantém a CPU
+   cravada, podendo prolongar a limitação.
+4. **Só então** investigar/ajustar Celery, Gunicorn e Coolify — inclusive a
+   etapa 17 deste quadro.
+
+Nota sobre a causa: com **92,5% de steal** (medido em 15/09 23:03 UTC),
+Gunicorn/Celery/Traefik apareciam no `top` por estarem **famintos**, não por
+consumirem. Steal mede CPU que o hypervisor reteve. A causa interna só é
+mensurável com o teto fora.
+
 ## ⚠️ Não subir o Coolify enquanto o teto estiver ativo
 
 Medido em 16/09: **com o Coolify de pé a demanda do VPS é 1,55 vCPU contra os
