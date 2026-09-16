@@ -1,5 +1,6 @@
 """CRUD das automações + listagem de publicações com cache."""
 
+import asyncio
 import logging
 import time
 from typing import Dict, List, Optional, Tuple
@@ -31,6 +32,7 @@ from app.schemas.instagram_automation import (
 )
 from app.services import instagram_login_client as ig
 from app.services.instagram_connection_service import InstagramConnectionService
+from app.services.instagram_media_url import expirada as thumbnail_expirada
 from app.utils.text_normalize import normalizar_comentario, palavra_pedida_na_legenda
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,16 @@ logger = logging.getLogger(__name__)
 # Cache da grade de publicações. A aluna abre a tela, rola, volta — sem cache
 # cada abertura queima cota da API. 15 min é o pedido do spec §5.3.
 CACHE_MEDIA_TTL_SEGUNDOS = 15 * 60
+
+# Teto de thumbnails renovadas por abertura da tela. A renovação é um brinde
+# oportunista: ela não pode transformar "listar automações" numa tela que
+# espera dezenas de chamadas à Meta. O que sobrar renova na carga seguinte.
+MAX_THUMBNAILS_RENOVADAS = 12
+
+# Orçamento total da renovação. O cliente da Graph API tem timeout de 30 s por
+# chamada — aceitável num envio, inaceitável numa listagem que a aluna está
+# olhando. Estourou, a tela vai com placeholder e tenta de novo depois.
+TIMEOUT_RENOVACAO_SEGUNDOS = 8.0
 _CACHE_MEDIA: Dict[Tuple[int, str], Tuple[float, dict]] = {}
 
 MAX_CAPTION_PREVIEW = 140
@@ -172,9 +184,81 @@ class InstagramAutomationService:
         resp.directs_enviados = int(dados.get("directs", 0))
         return resp
 
-    def listar(self, user_id: int) -> List[InstagramAutomationResponse]:
+    async def listar(self, user_id: int) -> List[InstagramAutomationResponse]:
+        automacoes = self.repo.list_automations(user_id)
+        await self._renovar_thumbnails_vencidas(user_id, automacoes)
         contadores = self.repo.contadores_por_automacao(user_id)
-        return [self._to_response(a, contadores) for a in self.repo.list_automations(user_id)]
+        return [self._to_response(a, contadores) for a in automacoes]
+
+    async def _renovar_thumbnails_vencidas(
+        self, user_id: int, automacoes: List[InstagramAutomation]
+    ) -> None:
+        """Troca as thumbnails cuja assinatura da Meta já venceu.
+
+        `media_thumbnail_url` é um retrato do instante da criação, e a URL do CDN
+        do Instagram expira (ver `instagram_media_url`). Como nada mais escrevia
+        nesse campo, a tela seguia pedindo ao CDN uma imagem que ele recusa com
+        403 — direto do navegador, sem passar pela nossa API e sem aparecer em
+        log nosso.
+
+        Duas decisões deliberadas:
+
+        - **Apagar vem antes de renovar.** Uma URL vencida no banco é 403 certo
+          no navegador; ausência tem placeholder na tela, quebrada não tem. Se a
+          renovação falhar (sem conexão, post apagado, Meta fora), o estado
+          honesto é o campo vazio.
+        - **Erro aqui nunca propaga.** Nem mesmo o código 190: quem o trata é
+          `handle_token_invalido`, e ele **pausa todas as automações da conta** —
+          efeito que não pode nascer de alguém só abrir uma tela. Aqui se anota
+          no log e segue; o envio real continua sendo quem marca o token.
+        """
+        vencidas = [
+            a for a in automacoes
+            if a.media_id and thumbnail_expirada(a.media_thumbnail_url)
+        ]
+        if not vencidas:
+            return
+
+        for automacao in vencidas:
+            automacao.media_thumbnail_url = None
+
+        alvos = vencidas[:MAX_THUMBNAILS_RENOVADAS]
+        conexao = self.repo.get_connection_by_user(user_id)
+        if conexao is None:
+            self.repo.db.commit()
+            return
+
+        try:
+            token = self.conexao_service.token_de(conexao)
+            resultados = await asyncio.wait_for(
+                asyncio.gather(
+                    *(ig.get_media(token, a.media_id) for a in alvos),
+                    return_exceptions=True,
+                ),
+                timeout=TIMEOUT_RENOVACAO_SEGUNDOS,
+            )
+        except Exception as exc:  # inclui o timeout — ver docstring
+            logger.warning(
+                "Instagram: não renovei %d thumbnail(s) vencida(s) do user_id=%s: %s",
+                len(alvos), user_id, exc,
+            )
+            self.repo.db.commit()
+            return
+
+        renovadas = 0
+        for automacao, resultado in zip(alvos, resultados):
+            if isinstance(resultado, BaseException):
+                continue
+            nova = resultado.get("thumbnail_url") or resultado.get("media_url")
+            if nova:
+                automacao.media_thumbnail_url = nova
+                renovadas += 1
+
+        self.repo.db.commit()
+        logger.info(
+            "Instagram: %d/%d thumbnail(s) renovada(s) para user_id=%s",
+            renovadas, len(alvos), user_id,
+        )
 
     def obter(self, user_id: int, automation_id: int) -> InstagramAutomationResponse:
         automacao = self.repo.get_automation(user_id, automation_id)
