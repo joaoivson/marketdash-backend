@@ -787,6 +787,30 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > Suítes rodadas **no worktree de `main`**, não na develop: 646 no cherry-pick
 > da 083 e 694 no da cobertura, ambas sem falha.
 
+> ⚠️ **Mais três commits em `main` por cherry-pick (17/09/2026)**: comentário de
+> anúncio (`original_media_id`) e envio retroativo de directs. **Sem migration.**
+>
+> | develop | main | o quê |
+> |---|---|---|
+> | back `779e78e` | `9d672ec` | pipeline casa comentário de anúncio com a automação do post |
+> | back `3320720` | `42c0fdb` | `GET/POST /automations/{id}/retroativos` + script de diagnóstico |
+> | front `adc7a39` | `70c2614` | modal "Enviar para quem já comentou" + rótulo do contador |
+>
+> CHANGELOG, runbook e memória ficaram na develop. Os arquivos tocados eram
+> **idênticos** entre `main` e develop no momento do cherry-pick. Mesmo assim,
+> espere conflito no merge futuro em `instagram_comment_pipeline.py`,
+> `instagram_login_client.py`, `instagram_automation_repository.py`,
+> `schemas/instagram_automation.py` e `routes/instagram.py` (back), e em
+> `Automacoes.tsx`, `instagram.service.ts` e `types/instagram.ts` (front).
+> Resolva **mantendo o lado da develop**.
+>
+> Suíte **no worktree de `main`**: 801 verdes contra 782 da `main` pura (os 19
+> novos), zero falha. `tsc` do front 26 = 26 da base de `main`, build ok.
+> Nota: sem `.env` no worktree, o pytest precisa de `DATABASE_URL`,
+> `JWT_SECRET` e um `SHOPEE_ENCRYPTION_KEY` Fernet qualquer por variável de
+> ambiente. Sem a chave, 94 testes de Instagram dão "Erro de configuração do
+> servidor", o que parece defeito do código.
+
 > ⚠️ **Mais quatro commits em `main` por cherry-pick (08/09/2026)** — tradução
 > do navegador e Meus Links em lista, **sem migration**:
 >
