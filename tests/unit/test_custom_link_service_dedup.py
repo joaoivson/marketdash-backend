@@ -86,3 +86,47 @@ def test_unknown_slug_returns_404():
     svc = CustomLinkService(repo)
     result = svc.handle_redirect("nope")
     assert result["status_code"] == 404
+
+
+# --------------------------------------------------------------------------- #
+#  Incidente de 17/09/2026: contagem nunca pode derrubar o redirecionamento    #
+# --------------------------------------------------------------------------- #
+
+
+def test_falha_ao_contar_clique_ainda_redireciona(service, active_link):
+    """Linha travada / banco lento: perde a contagem deste clique, nunca o destino."""
+    service.repository.increment_click_count.side_effect = Exception("lock timeout")
+    with _with_bot(False), _with_dedup(True):
+        result = service.handle_redirect("slug", ip="1.1.1.1", user_agent="Mozilla", purpose="")
+    assert result == {"url": "https://shopee.com.br/produto"}
+    service.repository.db.rollback.assert_called_once()
+
+
+def test_incremento_e_atomico_no_banco_e_grava_evento():
+    """click_count = click_count + 1 (não o valor lido no Python) + 1 evento por clique."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.base import Base
+    from app.models.custom_link import CustomLink
+    from app.models.custom_link_event import CustomLinkEvent
+    from app.repositories.custom_link_repository import CustomLinkRepository
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine, tables=[CustomLink.__table__, CustomLinkEvent.__table__])
+    Sessao = sessionmaker(bind=engine)
+    s1 = Sessao()
+    link = CustomLink(user_id=1, name="x", original_url="https://a", slug="a", click_count=10600)
+    s1.add(link)
+    s1.commit()
+
+    # Duas sessões com o MESMO objeto lido (10600): a versão antiga gravava 10601
+    # nas duas e perdia um clique.
+    s2 = Sessao()
+    copia = s2.get(CustomLink, link.id)
+    CustomLinkRepository(s1).increment_click_count(link)
+    CustomLinkRepository(s2).increment_click_count(copia)
+
+    s3 = Sessao()
+    assert s3.get(CustomLink, link.id).click_count == 10602
+    assert s3.query(CustomLinkEvent).count() == 2

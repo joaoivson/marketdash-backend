@@ -1,5 +1,6 @@
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
+import logging
 import uuid
 from app.models.custom_link import CustomLink
 from app.schemas.custom_link import CustomLinkCreate, CustomLinkUpdate, SlugCheckResponse
@@ -8,6 +9,8 @@ from app.repositories.custom_link_repository import CustomLinkRepository
 from app.repositories.custom_link_event_repository import CustomLinkEventRepository
 from app.utils.bot_detection import is_bot
 from app.utils.tracking_dedup import should_count
+
+logger = logging.getLogger(__name__)
 
 
 class CustomLinkService:
@@ -214,5 +217,15 @@ class CustomLinkService:
         if not should_count("clk", link.id, ip, user_agent, 60):
             return {"url": target_url}
 
-        self.repository.increment_click_count(link)
+        try:
+            self.repository.increment_click_count(link)
+        except Exception as exc:
+            # Contar é secundário; levar a pessoa ao produto não. Banco lento ou
+            # linha travada perde ESTE clique na contagem, nunca o redirecionamento
+            # (incidente de 17/09/2026).
+            try:
+                self.repository.db.rollback()
+            except Exception:
+                pass
+            logger.warning("Clique não contado no link %s: %s", getattr(link, "id", "?"), exc)
         return {"url": target_url}
