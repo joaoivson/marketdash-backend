@@ -11,16 +11,18 @@ Pedido extra do João (17/09): opção de enviar RETROATIVO para quem comentou e
 | 3 | Padrão das mídias que perdem comentário | `18607394596042322` (70) e `18057555857538856` recebem **comentário E reply de story no mesmo id por 6 dias** → assinatura de ANÚNCIO | eu | — | ✅ | — |
 | 4 | Payload da Meta p/ comentário em anúncio | referência: `media.ad_id`, `media.ad_title`, `media.original_media_id` — pipeline só lia `media.id` | eu | — | ✅ | — |
 | 5 | Prova final: comentários reais do post × ledger | exige token da conta; SSH/segredos bloqueados para mim | **João** (script no container) | ✅ | ⬜ | — |
-| 6 | Fix: casar por `original_media_id` + anúncio no ledger | pipeline + 5 testes | eu | ✅ | ⬜ | — |
-| 7 | Retroativo — backend | GET prévia / POST envio, priority 9, trava, 14 testes | eu | ✅ | ⬜ | — |
-| 8 | Retroativo — frontend | item no ⋮ do card + `RetroativosModal` | eu (mapa: `Explore: tela /dashboard/automacoes/:id`) | ✅ | — | ⚠️ |
+| 6 | Fix: casar por `original_media_id` + anúncio no ledger | pipeline + 5 testes; worker `42c0fdb` consumindo (comentário 14:49:44 processado em 0,4 s) | eu | ✅ | ⚠️ | — |
+| 7 | Retroativo — backend | GET prévia real em produção (aut. 5 da conta de teste): 200, 1 de 20 | eu | ✅ | ✅ | — |
+| 8 | Retroativo — frontend | produção, 1440+390: tela 1 = API 1, linhas 6/6/7, soma 20 = total | eu (mapa: `Explore: tela /dashboard/automacoes/:id`) | ✅ | — | ✅ |
 | 9 | Script de diagnóstico | `scripts/diagnosticar_automacao_instagram.py` | eu | ✅ | ⬜ | — |
-| 10 | Rótulo do contador | "comentários com a palavra-chave" (era "capturados", lido como total do post) | eu | ✅ | — | ⬜ |
-| 11 | Commit + push `develop` (2 repos) | autorizado pelo João 17/09 | eu | 🔄 | — | — |
-| 12 | Cherry-pick em `main` + testes/build no worktree | sem migration, arquivos idênticos main×develop | eu | ⬜ | — | — |
-| 13 | Gate de produção | aprovação no GitHub | **João** | — | ⬜ | — |
-| 14 | Conferir deploy | `/health` e `version.json` == SHA | eu | — | ⬜ | — |
-| 15 | Validar em produção | prévia real (conta de teste, SEM enviar) + tela | eu | — | ⬜ | ⬜ |
+| 10 | Rótulo do contador | print do João em produção mostra o texto novo; conta de teste (gatilho qualquer) API 6/6 = tela 6/6 | eu | ✅ | ✅ | ✅ |
+| 11 | Commit + push `develop` (2 repos) | autorizado pelo João 17/09 | eu | ✅ | — | — |
+| 12 | Cherry-pick em `main` + testes/build no worktree | back 801 verdes (782+19); front tsc 26=26, build ok | eu | ✅ | — | — |
+| 13 | Gate de produção | aprovado (back + 2× front) | **João** | — | ✅ | — |
+| 14 | Conferir deploy | `/health` = `42c0fdb`, `version.json` = `6bdc1a3` | eu | — | ✅ | — |
+| 15 | Validar em produção | prévia real (conta de teste, SEM enviar, escritas abortadas) + tela | eu | — | ✅ | ✅ |
+| 17 | Remover "Cobrir publicações" | front `144bf4e` → main `6bdc1a3`; prod 1440+390: botão 0, Nova Automação 1 | eu | ✅ | — | ✅ |
+| 18 | Números da automação 12 subirem | depende de a automação ser REATIVADA e do retroativo ser enviado pela conta do Luiz | **João / Luiz** | — | ⬜ | ⬜ |
 | 16 | Doc/CHANGELOG/DIARIO | escrito | eu | ✅ | — | — |
 
 **Tela ⚠️ (etapa 8):** validada com Playwright em 1440 e 390, com as rotas de
@@ -39,3 +41,11 @@ dentro do container da API de produção, ou com a prévia do retroativo na tela
 **Pré-existente, fora do escopo:** `test_waha_servidores::test_cache_evita_uma_query_por_mensagem`
 e `test_campaign_repository_unpaid_status::test_unpaid_nao_entra_no_resumo_de_sub_ids_do_modal_de_vinculo`
 vermelhos em `develop` sem as mudanças desta rodada.
+
+**API ⚠️ (etapa 6):** o fix do anúncio está no worker de produção e o worker
+consome. Ainda não passou por ele nenhum comentário de anúncio de post com
+automação. Fecha quando o ledger mostrar `detalhe` com `comentário em anúncio`.
+
+**Etapa 18 (contadores da automação 12):** o deploy não muda número nenhum sozinho.
+A automação está PAUSADA desde 14:18 UTC. Os comentários perdidos não viram
+evento, a não ser pelo retroativo. Os de mais de 7 dias não viram nunca.
