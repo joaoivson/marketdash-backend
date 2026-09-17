@@ -22,15 +22,15 @@ Environment); produção só migra depois que a Hostinger tirar o teto;
 | 7 | Frontend: Dockerfile com ARGs VITE_* | guarda contra tela branca + `version.json` | eu | ✅ imagem 98 MB | ✅ guarda recusa build sem chave; bundle com Supabase de hml; SPA 200 | — |
 | 8 | Frontend: workflows | Variables por ambiente, hash exato do bundle | eu | ✅ tsc 25 (baseline), YAML ok | ⬜ | — |
 | 9 | Retenção no GHCR | workflow semanal, mantém 15 versões | eu | ✅ nos 2 repos | — | — |
-| 10 | Pré-verificações no Coolify | Auto Deploy OFF, ports_mappings, healthcheck | eu | — | ⬜ | — |
+| 10 | Pré-verificações no Coolify | Auto Deploy OFF, ports_mappings, healthcheck | eu | — | ✅ **17/09** auto-deploy `f` nas 8 | — |
 | 11 | Push em `develop` (etapa 1 do rollout) | imagens publicadas; deploy barrado pela trava | eu | ✅ | ✅ **FEITA 16/09 14:47/14:53** | — |
-| 12 | Migrar as 5 apps de hml para Docker Image | PATCH ou B2 (SQL) com pg_dump antes | eu | ⬜ | ⬜ | — |
-| 13 | Deploy de hml pela imagem + validação | `version == sha`, login, bundle, carga do host | eu | ⬜ | ⬜ | ⬜ |
-| 14 | Promover para `main` (cherry-pick) | 131/73 commits da develop NÃO vão junto | eu | ⬜ | ⬜ | — |
-| 15 | Migrar prod + deploy aprovado | **só com o teto da Hostinger removido** | João aprova | ⬜ | ⬜ | ⬜ |
+| 12 | Migrar as 5 apps de hml para Docker Image | PATCH ou B2 (SQL) com pg_dump antes | eu | ✅ | ✅ as 5 | — |
+| 13 | Deploy de hml pela imagem + validação | `version == sha`, login, bundle, carga do host | eu | ✅ | ✅ version+worker+fila | ✅ bundle hml |
+| 14 | Promover para `main` (cherry-pick) | 3 commits backend + 4 frontend; 149/83 NÃO foram | eu | ✅ **17/09** | ✅ | — |
+| 15 | Migrar prod + deploy aprovado | SQL nas 3 apps + gate aprovado pelo João | João aprova | ✅ **17/09 01:5x** | ✅ `/health.version` + `/version.json` | ✅ bundle prod |
 | 16a | **Docs + CHANGELOG** | runbook §10 + §5/§9 corrigidas, 2 `.github/README.md`, `README-DEPLOY.md`, CHANGELOG | eu | ✅ **16/09** | — | — |
 | 16b | Limpeza | apagar `aguardar-build.sh`/`trigger-deploy.sh`/`Dockerfile.worker`, Redis nº 2 | eu | ⬜ só depois da 15 | — | — |
-| 17 | Tetos de recurso em hml | `limites-coolify.sh`: cpus/memória/shares 256 + `CELERY_CONCURRENCY=2` | eu | ✅ trava de ambiente, ensaio por padrão | ⬜ espera o Coolify | — |
+| 17 | Tetos de recurso em hml | cpus + shares 256 + `CELERY_CONCURRENCY=2` (prod também) | eu | ✅ | ✅ reconferido lendo de volta | — |
 
 **Bloqueio da linha 15:** benchmark de CPU no host precisa voltar a < 1,8 s
 (agora: 3,3-4,9 s). Etapas 1-14 não dependem disso.
@@ -85,6 +85,32 @@ aumentou" num commit que não mexeu em tipo nenhum.
 
 Os scripts de infra (`limites-coolify.sh`, `teto_hostinger.py`) e o fix da
 thumbnail do Instagram **não entram** neste cherry-pick — são rodadas próprias.
+
+## ✅ PIPELINE NO AR EM PRODUÇÃO — 17/09/2026 ~01:55 UTC
+
+Nenhum `docker build` roda mais no VPS. As 3 apps de produção puxam imagem do
+GHCR.
+
+| prova | valor |
+|---|---|
+| `api.marketdash.com.br/health` → `version` | `f7c5de3b8e8532e635c9717299d1aed952f353c0` |
+| `marketdash.com.br/version.json` | `a81db3de740ac0c148c54d6662b05f1c56b23258` |
+| bundle de produção | traz `iprdyorx…`, NÃO traz `ytjpdvj…` |
+| latência (20 amostras) | mediana 0,104 s, máx 0,347 s, zero acima de 1 s |
+| **queda durante a troca** | **nenhuma** — sonda a cada 5 s, zero eventos |
+
+Benchmark do host: **0,99 s** (contra 4,70 s de mediana sob o teto).
+
+### Dois achados que teriam mordido, pegos antes
+
+1. **`scripts/worker-entrypoint.sh` não existia na `main`.** O target `worker` do
+   Dockerfile novo faz `chmod +x` nele — o build de produção teria falhado. Foi
+   trazido no cherry-pick; conferido que com `CELERY_PAPEL` ausente o
+   comportamento é idêntico ao `CMD` antigo (a `main` já tinha `_fila_do_banco()`
+   e `task_default_queue`).
+2. **O entrypoint usa `CELERY_CONCURRENCY:-8`.** Produção subia sem `--concurrency`
+   (default = nº de CPUs); o entrypoint a elevaria para 8 em silêncio. Por isso
+   `CELERY_CONCURRENCY=2` virou PRÉ-REQUISITO do deploy, não melhoria.
 
 ## O benchmark de comparação — o comando EXATO
 
