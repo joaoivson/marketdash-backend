@@ -807,7 +807,8 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > | front `de833e6` | `64d8c77` | "Anúncios deste produto" na edição + "+N anúncios" no card |
 > | front `5defb31` | `eccc4af` | "Onde responde": publicação + anúncios numa lista só, modal de vincular |
 > | back `e184dea` | `78f9e29` | vincular ignora a mídia principal da própria automação |
-> | front `131ee3c` | `38a46e2` | mídia principal fora da lista de vinculados (memoizado) |
+> | front `131ee3c` | `38a46e2` | mídia principal fora da lista de vinculados (memoizado) — run cancelado, foi junto no `bb85c15` |
+> | front `14b324a` | `bb85c15` | editor sem rolagem horizontal (`min-w-0` nas colunas do grid) |
 >
 > ⚠️ **Migration 086** (`instagram_midias_detectadas.automation_id`) foi
 > **APLICADA em produção** em 17/09, antes do push. **Em hml não foi.** Se a 085

@@ -157,6 +157,14 @@ com a tag "Anúncio", e a automação é configurada nele como num post.
 - **Validado:** local e produção, conta do Luiz, 1440 e 390, sem estouro de
   largura, seleção do modal persistente, sem erro de renderização, nenhuma
   escrita.
+- **Regressão introduzida e corrigida no mesmo dia (`bb85c15`):** a legenda
+  truncada da lista fazia a coluna do formulário crescer (item de grid com
+  `min-width:auto`). O preview saía da tela, e o `<main>` rolava 1123 px na
+  horizontal num celular de 390. O fix foi `min-w-0` nas colunas. A primeira
+  validação media só o `document`, que não rola. A medição nova (todo elemento
+  com overflow-x mais a borda dos elementos do main) acusou o bug na versão
+  anterior e deu zero depois, nas páginas edição (11 e 12), nova e lista, em
+  1440 e 390.
 - ⚠️ **Configuração do Luiz (não é bug):** às 16:19 UTC a automação 12 foi
   trocada do reel orgânico `Dc3rR4fRqBP` para o anúncio `Dc7cCO7AzNW`. O reel
   orgânico ficou sem cobertura.
