@@ -317,6 +317,10 @@ class InstagramRetroativoPrevia(BaseModel):
     automation_id: int
     total_comentarios: int = 0
     elegiveis: int = 0
+    # Quantos dos elegíveis são das últimas 24h. A Meta documenta 7 dias para o
+    # direct de comentário, mas ferramentas do mercado falam em 24h: a tela mostra
+    # a separação para que uma recusa da Meta na faixa 1-7 dias salte à vista.
+    elegiveis_ultimas_24h: int = 0
     ja_respondidos: int = 0
     ja_processados: int = 0
     sem_palavra: int = 0
