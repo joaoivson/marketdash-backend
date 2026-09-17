@@ -174,9 +174,19 @@ class InstagramAutomationService:
         )
 
     def _to_response(
-        self, automacao: InstagramAutomation, contadores: Optional[dict] = None
+        self,
+        automacao: InstagramAutomation,
+        contadores: Optional[dict] = None,
+        vinculos: Optional[Dict[int, List[str]]] = None,
     ) -> InstagramAutomationResponse:
         resp = InstagramAutomationResponse.model_validate(automacao)
+        # Sempre preenchido: o toggle da lista substitui o card pela resposta, e
+        # um [] aqui apagaria o "+N anúncios" do card até recarregar a tela.
+        resp.anuncios_vinculados = (
+            vinculos.get(automacao.id, [])
+            if vinculos is not None
+            else self._vinculos_de(automacao)
+        )
         # A tela mostra o texto ORIGINAL ("QUERO"), não o normalizado ("quero").
         resp.palavras = list(automacao.palavras_exibicao or [])
         dados = (contadores or {}).get(automacao.id) or {}
@@ -188,7 +198,26 @@ class InstagramAutomationService:
         automacoes = self.repo.list_automations(user_id)
         await self._renovar_thumbnails_vencidas(user_id, automacoes)
         contadores = self.repo.contadores_por_automacao(user_id)
-        return [self._to_response(a, contadores) for a in automacoes]
+        vinculos = self._vinculos_da_aluna(user_id)
+        return [self._to_response(a, contadores, vinculos) for a in automacoes]
+
+    def _vinculos_de(self, automacao: InstagramAutomation) -> List[str]:
+        if not automacao.id:
+            return []
+        try:
+            return self.repo.midias_vinculadas_ids(automacao.id)
+        except Exception as exc:  # tabela ausente num ambiente sem a 086
+            self.db.rollback()
+            logger.warning("Instagram: vínculos de anúncio indisponíveis: %s", exc)
+            return []
+
+    def _vinculos_da_aluna(self, user_id: int) -> Dict[int, List[str]]:
+        try:
+            return self.repo.vinculos_por_automacao(user_id)
+        except Exception as exc:
+            self.db.rollback()
+            logger.warning("Instagram: vínculos de anúncio indisponíveis: %s", exc)
+            return {}
 
     async def _renovar_thumbnails_vencidas(
         self, user_id: int, automacoes: List[InstagramAutomation]

@@ -31,6 +31,7 @@ from app.schemas.instagram_automation import (
     InstagramAutomationResponse,
     InstagramAutomationStatusUpdate,
     InstagramAutomationUpdate,
+    InstagramAnunciosVinculoRequest,
     InstagramConnectionResponse,
     InstagramMediaPage,
     InstagramOAuthCallback,
@@ -228,6 +229,19 @@ async def alterar_status(
 ):
     """Toggle Ativa/Pausada da lista. Sem confirmação — é reversível."""
     return await _automacoes(db).alterar_status(current_user.id, automation_id, payload.status)
+
+
+@router.put("/automations/{automation_id}/anuncios", response_model=InstagramAutomationResponse)
+async def vincular_anuncios(
+    automation_id: int,
+    payload: InstagramAnunciosVinculoRequest,
+    current_user: User = Depends(exige_plano_max),
+    db: Session = Depends(get_db),
+):
+    """Anúncios do mesmo produto que a automação também responde (lista completa)."""
+    return await InstagramAnunciosService(InstagramAutomationRepository(db)).vincular(
+        current_user.id, automation_id, payload.media_ids
+    )
 
 
 @router.post(

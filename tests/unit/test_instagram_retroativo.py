@@ -27,6 +27,7 @@ from app.models.instagram_automation import (
     InstagramAutomation,
     InstagramConnection,
     InstagramEvent,
+    InstagramMidiaDetectada,
 )
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
 from app.services import instagram_login_client as ig
@@ -49,6 +50,7 @@ def db():
             InstagramConnection.__table__,
             InstagramAutomation.__table__,
             InstagramEvent.__table__,
+            InstagramMidiaDetectada.__table__,
         ],
     )
     sessao = sessionmaker(bind=engine)()
@@ -539,3 +541,29 @@ async def test_admin_com_automacao_inexistente_da_404(db, conexao, monkeypatch, 
     with pytest.raises(HTTPException) as exc:
         await _servico(db).previa_admin(999)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_retroativo_le_o_post_e_os_anuncios_vinculados(db, conexao, monkeypatch, fila):
+    """O mesmo produto: comentário do anúncio vinculado entra na prévia e no envio."""
+    automacao = _automacao(db, conexao)
+    db.add(InstagramMidiaDetectada(
+        user_id=1, connection_id=conexao.id, media_id="anuncio-1", eh_anuncio=True,
+        automation_id=automacao.id, comentarios=1,
+    ))
+    db.commit()
+    por_midia = {MEDIA_ID: [_c("do-post", pessoa="p1")], "anuncio-1": [_c("do-anuncio", pessoa="p2")]}
+    lidas = []
+
+    async def _list(token, media_id, after=None, limit=50):
+        lidas.append(media_id)
+        return {"data": por_midia[media_id]}
+
+    monkeypatch.setattr(ig, "list_comments", _list)
+
+    resposta = await _servico(db).enviar(1, automacao.id)
+
+    assert lidas == [MEDIA_ID, "anuncio-1"]
+    assert resposta.previa.elegiveis == 2
+    assert sorted(f["kwargs"]["valor"]["id"] for f in fila) == ["do-anuncio", "do-post"]
+

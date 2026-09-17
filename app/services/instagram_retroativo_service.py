@@ -272,7 +272,14 @@ class InstagramRetroativoService:
     ) -> tuple[InstagramAutomation, InstagramConnection, List[ComentarioClassificado], bool]:
         automacao = self._automacao_do_post(user_id, automation_id)
         conexao = self._conexao_da_automacao(automacao)
-        comentarios, truncado = await self.ler_comentarios(conexao, automacao.media_id)
+        # O post e os anúncios vinculados a ele (migration 086): é o mesmo produto,
+        # e é nos anúncios que costuma estar a maior parte dos comentários.
+        comentarios: List[dict] = []
+        truncado = False
+        for media_id in [automacao.media_id, *self.repo.midias_vinculadas_ids(automacao.id)]:
+            da_midia, cortou = await self.ler_comentarios(conexao, media_id)
+            comentarios.extend(da_midia)
+            truncado = truncado or cortou
         classificados = classificar_comentarios(
             comentarios,
             automacao,
