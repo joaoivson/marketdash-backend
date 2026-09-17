@@ -316,3 +316,15 @@ async def test_listagem_marca_anuncio_vinculado_a_automacao_ativa(db, conexao, m
     assert item.automation_id_vinculada == automacao.id
     assert item.tem_automacao is True
 
+
+@pytest.mark.asyncio
+async def test_vincular_ignora_a_midia_principal_da_propria_automacao(db, conexao, monkeypatch):
+    """Automação criada NO anúncio: marcar o mesmo anúncio não pode duplicar a linha."""
+    automacao = _automacao_post(db, conexao, media_id="ad-principal")
+    _midia(db, conexao, "ad-principal", eh_anuncio=True)
+    _midia(db, conexao, "ad-2", eh_anuncio=True)
+
+    resp = await _servico(db).vincular(1, automacao.id, ["ad-principal", "ad-2"])
+
+    assert resp.anuncios_vinculados == ["ad-2"]
+

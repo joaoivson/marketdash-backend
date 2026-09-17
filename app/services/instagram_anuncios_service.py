@@ -146,7 +146,13 @@ class InstagramAnunciosService:
             )
         conexao = self.conexao_service.require_conexao_ativa(user_id)
 
-        pedidos = list(dict.fromkeys(str(m) for m in media_ids if m))
+        # A mídia principal já é coberta pela automação: vinculá-la de novo só
+        # duplicava a linha na tela ("ALGODÃO / ALGODÃO"). Ignorada, sem erro.
+        pedidos = [
+            m
+            for m in dict.fromkeys(str(m) for m in media_ids if m)
+            if m != str(automacao.media_id or "")
+        ]
         encontrados = self.repo.anuncios_da_conexao(conexao.id, pedidos)
         faltando = sorted(set(pedidos) - {m.media_id for m in encontrados})
         if faltando:
