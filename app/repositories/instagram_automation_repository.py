@@ -117,6 +117,14 @@ class InstagramAutomationRepository:
             .first()
         )
 
+    def get_automation_de_qualquer_conta(self, automation_id: int) -> Optional[InstagramAutomation]:
+        """SÓ para rota de admin (suporte). Toda rota de aluna usa get_automation."""
+        return (
+            self.db.query(InstagramAutomation)
+            .filter(InstagramAutomation.id == automation_id)
+            .first()
+        )
+
     def active_automations_for_connection(self, connection_id: int) -> List[InstagramAutomation]:
         """Automações ativas da conta, em ordem ESTÁVEL.
 

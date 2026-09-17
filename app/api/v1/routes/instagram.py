@@ -14,7 +14,12 @@ import logging
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.v1.dependencies import get_current_user, require_active_subscription, require_plan
+from app.api.v1.dependencies import (
+    get_current_user,
+    require_active_subscription,
+    require_admin,
+    require_plan,
+)
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
@@ -31,6 +36,7 @@ from app.schemas.instagram_automation import (
     InstagramOAuthCallback,
     InstagramRetroativoEnvio,
     InstagramRetroativoPrevia,
+    InstagramRetroativoReconciliacao,
 )
 from app.services.instagram_automation_service import InstagramAutomationService
 from app.services.instagram_connection_service import InstagramConnectionService
@@ -249,6 +255,40 @@ async def enviar_retroativos(
 ):
     """Enfileira o direct dos comentários elegíveis, recalculados no servidor."""
     return await _retroativos(db).enviar(current_user.id, automation_id)
+
+
+# --------------------------------------------------------------------------- #
+#  Suporte (admin)                                                             #
+# --------------------------------------------------------------------------- #
+# Aqui e não num admin_*.py: registrar arquivo novo em routes/__init__.py
+# conflita no cherry-pick para main, que não tem os módulos de Grupos.
+# require_admin devolve 404 para quem não é admin.
+
+
+@router.get(
+    "/admin/automations/{automation_id}/retroativos",
+    response_model=InstagramRetroativoPrevia,
+)
+async def admin_previa_retroativos(
+    automation_id: int,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Prévia do retroativo de qualquer automação, sem o login da aluna."""
+    return await _retroativos(db).previa_admin(automation_id)
+
+
+@router.post(
+    "/admin/automations/{automation_id}/reconciliar",
+    response_model=InstagramRetroativoReconciliacao,
+)
+async def admin_reconciliar_contador(
+    automation_id: int,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Registra expirados e duplicados no contador. NUNCA envia direct."""
+    return await _retroativos(db).reconciliar_admin(automation_id)
 
 
 @router.delete("/automations/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)

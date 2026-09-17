@@ -21,19 +21,28 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Optional, Set
 
 from fastapi import HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.cache import get_client
 from app.models.instagram_automation import (
     AUTOMACAO_ATIVA,
     CONEXAO_ATIVA,
+    DM_DUPLICADO,
     DM_ENVIADO,
+    DM_EXPIRADO,
     ESCOPO_POST_ESPECIFICO,
+    EVENTO_COMENTARIO,
     InstagramAutomation,
     InstagramConnection,
+    InstagramEvent,
 )
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
-from app.schemas.instagram_automation import InstagramRetroativoEnvio, InstagramRetroativoPrevia
+from app.schemas.instagram_automation import (
+    InstagramRetroativoEnvio,
+    InstagramRetroativoPrevia,
+    InstagramRetroativoReconciliacao,
+)
 from app.services import instagram_login_client as ig
 from app.services.instagram_comment_pipeline import (
     JANELA_PRIVATE_REPLY_DIAS,
@@ -64,6 +73,11 @@ GRUPO_SEM_PALAVRA = "sem_palavra"
 GRUPO_PESSOA_JA_RECEBEU = "pessoa_ja_recebeu"
 GRUPO_FORA_DA_JANELA = "fora_da_janela"
 GRUPO_PROPRIA_CONTA = "da_propria_conta"
+
+# Códigos próprios em vez dos do pipeline: o evento registrado aqui não passou
+# pelo webhook, e quem investigar precisa conseguir separar (ou desfazer) só ele.
+CODIGO_RECONCILIADO_JANELA = "RECONCILIADO_JANELA_7_DIAS"
+CODIGO_RECONCILIADO_DUPLICADO = "RECONCILIADO_DUPLICADO"
 
 
 @dataclass
@@ -270,6 +284,122 @@ class InstagramRetroativoService:
         automacao, _, classificados, truncado = await self.levantar(user_id, automation_id)
         return montar_previa(automacao.id, classificados, truncado)
 
+    # ------------------------- registro no contador ------------------------ #
+
+    def registrar_nao_enviaveis(
+        self, automacao: InstagramAutomation, classificados: List[ComentarioClassificado]
+    ) -> tuple[int, int]:
+        """Grava o que o pipeline TERIA gravado se o comentário tivesse chegado.
+
+        O contador do card conta eventos. Comentário que nunca chegou ao pipeline
+        não virou evento, e a aluna via 4 onde havia dezenas. Aqui entram só os
+        dois desfechos que não dependem de enviar nada:
+
+        - **expirado**: casou com a palavra e passou da janela de 7 dias;
+        - **duplicado**: a pessoa JÁ RECEBEU o direct desta automação (no banco).
+          O repetido dentro do próprio lote fica de fora: o direct dela ainda
+          não saiu e, se falhar, o comentário seguinte precisa poder tentar.
+
+        Nunca grava "enviado": directs enviados só sobem com envio de verdade.
+        Idempotente: comentário que já tem evento é classificado como já
+        processado e nem chega aqui.
+        """
+        receberam = self.repo.pessoas_que_receberam(automacao.user_id, automacao.id)
+        eventos: List[InstagramEvent] = []
+        for c in classificados:
+            if c.grupo == GRUPO_FORA_DA_JANELA and c.timestamp is not None:
+                status_dm, codigo = DM_EXPIRADO, CODIGO_RECONCILIADO_JANELA
+                mensagem = (
+                    "Registrado na reconciliação: o comentário não chegou ao pipeline "
+                    "e passou da janela de 7 dias da Meta."
+                )
+            elif c.grupo == GRUPO_PESSOA_JA_RECEBEU and c.commenter_id in receberam:
+                status_dm, codigo = DM_DUPLICADO, CODIGO_RECONCILIADO_DUPLICADO
+                mensagem = "Registrado na reconciliação: a pessoa já recebeu o direct."
+            else:
+                continue
+            eventos.append(
+                InstagramEvent(
+                    user_id=automacao.user_id,
+                    automation_id=automacao.id,
+                    comment_id=c.comment_id,
+                    tipo=EVENTO_COMENTARIO,
+                    media_id=automacao.media_id,
+                    commenter_id=c.commenter_id or None,
+                    commenter_username=c.username,
+                    comment_text=(c.texto or "")[:4000] or None,
+                    comment_timestamp=c.timestamp,
+                    dm_status=status_dm,
+                    reply_status="nao_aplicavel",
+                    erro_codigo=codigo,
+                    erro_mensagem=mensagem,
+                )
+            )
+        if not eventos:
+            return 0, 0
+
+        gravados = self._gravar_eventos(eventos)
+        expirados = sum(1 for e in gravados if e.dm_status == DM_EXPIRADO)
+        return expirados, len(gravados) - expirados
+
+    def _gravar_eventos(self, eventos: List[InstagramEvent]) -> List[InstagramEvent]:
+        """Em lote; se o webhook gravou algum no meio do caminho, um a um."""
+        try:
+            self.db.add_all(eventos)
+            self.db.commit()
+            return eventos
+        except IntegrityError:
+            self.db.rollback()
+        gravados = []
+        for evento in eventos:
+            copia = InstagramEvent(
+                **{col.name: getattr(evento, col.name) for col in InstagramEvent.__table__.columns
+                   if col.name not in ("id", "created_at", "processed_at")}
+            )
+            try:
+                self.db.add(copia)
+                self.db.commit()
+                gravados.append(copia)
+            except IntegrityError:
+                self.db.rollback()
+        return gravados
+
+    # -------------------------------- admin -------------------------------- #
+
+    def _automacao_admin(self, automation_id: int) -> InstagramAutomation:
+        automacao = self.repo.get_automation_de_qualquer_conta(automation_id)
+        if not automacao:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Automação não encontrada."
+            )
+        return automacao
+
+    async def previa_admin(self, automation_id: int) -> InstagramRetroativoPrevia:
+        """A mesma prévia da aluna, para o suporte ver sem o login dela."""
+        automacao = self._automacao_admin(automation_id)
+        return await self.previa(automacao.user_id, automacao.id)
+
+    async def reconciliar_admin(self, automation_id: int) -> InstagramRetroativoReconciliacao:
+        """Registra expirados e duplicados SEM enviar nada, inclusive com a automação pausada.
+
+        Enviar direct continua sendo decisão da aluna (ou autorizada por ela):
+        esta rota só acerta o contador com o que já não tem como ser enviado.
+        """
+        automacao = self._automacao_admin(automation_id)
+        automacao, _, classificados, truncado = await self.levantar(
+            automacao.user_id, automacao.id
+        )
+        expirados, duplicados = self.registrar_nao_enviaveis(automacao, classificados)
+        logger.info(
+            "Instagram reconciliação: automacao=%s user_id=%s expirados=%d duplicados=%d",
+            automacao.id, automacao.user_id, expirados, duplicados,
+        )
+        return InstagramRetroativoReconciliacao(
+            registrados_expirados=expirados,
+            registrados_duplicados=duplicados,
+            previa=montar_previa(automacao.id, classificados, truncado),
+        )
+
     # ------------------------------- envio ------------------------------- #
 
     async def enviar(self, user_id: int, automation_id: int) -> InstagramRetroativoEnvio:
@@ -329,12 +459,17 @@ class InstagramRetroativoService:
                     comentario.comment_id, automacao.id, exc,
                 )
 
+        expirados, duplicados = self.registrar_nao_enviaveis(automacao, classificados)
+
         logger.info(
-            "Instagram retroativo: automacao=%s user_id=%s elegiveis=%d enfileirados=%d",
-            automacao.id, user_id, len(elegiveis), enfileirados,
+            "Instagram retroativo: automacao=%s user_id=%s elegiveis=%d enfileirados=%d "
+            "expirados=%d duplicados=%d",
+            automacao.id, user_id, len(elegiveis), enfileirados, expirados, duplicados,
         )
         return InstagramRetroativoEnvio(
             enfileirados=enfileirados,
+            registrados_expirados=expirados,
+            registrados_duplicados=duplicados,
             previa=montar_previa(automacao.id, classificados, truncado),
         )
 

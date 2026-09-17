@@ -423,3 +423,100 @@ async def test_valor_enfileirado_passa_pelo_pipeline_real_e_envia(db, conexao, m
     evento = db.query(InstagramEvent).filter(InstagramEvent.comment_id == "a").one()
     assert evento.automation_id == automacao.id
     assert evento.commenter_id == "p1"
+
+
+# --------------------------------------------------------------------------- #
+#  Registro do que não pode mais receber (17/09/2026)                          #
+# --------------------------------------------------------------------------- #
+#
+# O contador do card ("comentários com a palavra-chave") conta eventos. O que o
+# webhook nunca entregou não virou evento, e a aluna via 4 onde havia dezenas.
+# O retroativo registra o que o pipeline TERIA registrado: expirado (janela de
+# 7 dias) e duplicado (a pessoa já recebeu). Nunca registra "enviado" sem envio.
+
+
+def _cenario_contador(db, conexao, monkeypatch, status="ativa"):
+    automacao = _automacao(db, conexao, status=status)
+    _evento(db, "ja-enviado", DM_ENVIADO, commenter_id="p9", automation_id=automacao.id)
+    _usar_graph(
+        monkeypatch,
+        [[
+            _c("ja-enviado", pessoa="p9", horas_atras=30),
+            _c("elegivel", pessoa="p1", horas_atras=5),
+            _c("mesma-pessoa-no-lote", pessoa="p1", horas_atras=2),
+            _c("expirado", pessoa="p2", horas_atras=24 * 9),
+            _c("repetido-de-quem-recebeu", pessoa="p9", horas_atras=3),
+            _c("sem-palavra", pessoa="p3", texto="lindo"),
+        ]],
+    )
+    return automacao
+
+
+def _contador(db, automacao):
+    return InstagramAutomationRepository(db).contadores_por_automacao(1)[automacao.id]
+
+
+@pytest.mark.asyncio
+async def test_envio_registra_expirados_e_repetidos_e_o_contador_sobe(db, conexao, monkeypatch, fila):
+    automacao = _cenario_contador(db, conexao, monkeypatch)
+    assert _contador(db, automacao) == {"comentarios": 1, "directs": 1}
+
+    resposta = await _servico(db).enviar(1, automacao.id)
+
+    assert resposta.enfileirados == 1
+    assert resposta.registrados_expirados == 1
+    assert resposta.registrados_duplicados == 1
+    por_id = {e.comment_id: e for e in db.query(InstagramEvent).all()}
+    assert por_id["expirado"].dm_status == "expirado"
+    assert por_id["expirado"].automation_id == automacao.id
+    assert por_id["expirado"].erro_codigo == retro.CODIGO_RECONCILIADO_JANELA
+    assert por_id["repetido-de-quem-recebeu"].dm_status == "duplicado"
+    # O repetido DENTRO do lote não é registrado: o direct da pessoa ainda nem
+    # saiu, e se falhar o comentário seguinte dela tem que poder tentar.
+    assert "mesma-pessoa-no-lote" not in por_id
+    assert "sem-palavra" not in por_id
+    assert "elegivel" not in por_id, "o elegível é do pipeline, não do registro"
+    # Directs só sobem com envio de verdade.
+    assert _contador(db, automacao) == {"comentarios": 3, "directs": 1}
+
+
+@pytest.mark.asyncio
+async def test_reconciliar_de_admin_registra_sem_enviar_e_aceita_pausada(db, conexao, monkeypatch, fila):
+    automacao = _cenario_contador(db, conexao, monkeypatch, status="pausada")
+
+    resposta = await _servico(db).reconciliar_admin(automacao.id)
+
+    assert fila == [], "reconciliar nunca envia direct"
+    assert resposta.registrados_expirados == 1
+    assert resposta.registrados_duplicados == 1
+    assert resposta.previa.elegiveis == 1
+    assert _contador(db, automacao) == {"comentarios": 3, "directs": 1}
+
+
+@pytest.mark.asyncio
+async def test_reconciliar_duas_vezes_nao_conta_em_dobro(db, conexao, monkeypatch, fila):
+    automacao = _cenario_contador(db, conexao, monkeypatch, status="pausada")
+
+    await _servico(db).reconciliar_admin(automacao.id)
+    segunda = await _servico(db).reconciliar_admin(automacao.id)
+
+    assert segunda.registrados_expirados == 0
+    assert segunda.registrados_duplicados == 0
+    assert _contador(db, automacao) == {"comentarios": 3, "directs": 1}
+
+
+@pytest.mark.asyncio
+async def test_previa_de_admin_acha_automacao_de_qualquer_conta(db, conexao, monkeypatch, fila):
+    automacao = _automacao(db, conexao)
+    _usar_graph(monkeypatch, [[_c("a")]])
+
+    previa = await _servico(db).previa_admin(automacao.id)
+
+    assert previa.elegiveis == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_com_automacao_inexistente_da_404(db, conexao, monkeypatch, fila):
+    with pytest.raises(HTTPException) as exc:
+        await _servico(db).previa_admin(999)
+    assert exc.value.status_code == 404
