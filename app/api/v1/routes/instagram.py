@@ -29,9 +29,12 @@ from app.schemas.instagram_automation import (
     InstagramConnectionResponse,
     InstagramMediaPage,
     InstagramOAuthCallback,
+    InstagramRetroativoEnvio,
+    InstagramRetroativoPrevia,
 )
 from app.services.instagram_automation_service import InstagramAutomationService
 from app.services.instagram_connection_service import InstagramConnectionService
+from app.services.instagram_retroativo_service import InstagramRetroativoService
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,10 @@ def _conexao(db: Session) -> InstagramConnectionService:
 
 def _automacoes(db: Session) -> InstagramAutomationService:
     return InstagramAutomationService(InstagramAutomationRepository(db))
+
+
+def _retroativos(db: Session) -> InstagramRetroativoService:
+    return InstagramRetroativoService(InstagramAutomationRepository(db))
 
 
 # --------------------------------------------------------------------------- #
@@ -218,6 +225,30 @@ def duplicar_automacao(
     db: Session = Depends(get_db),
 ):
     return _automacoes(db).duplicar(current_user.id, automation_id)
+
+
+@router.get(
+    "/automations/{automation_id}/retroativos", response_model=InstagramRetroativoPrevia
+)
+async def previa_retroativos(
+    automation_id: int,
+    current_user: User = Depends(exige_plano_max),
+    db: Session = Depends(get_db),
+):
+    """Quantos comentários do post ficaram sem direct, e por quê. Não envia nada."""
+    return await _retroativos(db).previa(current_user.id, automation_id)
+
+
+@router.post(
+    "/automations/{automation_id}/retroativos", response_model=InstagramRetroativoEnvio
+)
+async def enviar_retroativos(
+    automation_id: int,
+    current_user: User = Depends(exige_plano_max),
+    db: Session = Depends(get_db),
+):
+    """Enfileira o direct dos comentários elegíveis, recalculados no servidor."""
+    return await _retroativos(db).enviar(current_user.id, automation_id)
 
 
 @router.delete("/automations/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)

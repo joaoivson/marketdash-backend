@@ -297,3 +297,32 @@ class InstagramAutomationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class InstagramRetroativoPrevia(BaseModel):
+    """O que o envio retroativo faria, sem enviar nada.
+
+    Os grupos são EXCLUSIVOS e somam `total_comentarios`: a aluna precisa ver
+    por que cada comentário não entra, não só quantos entram. "Fora da janela"
+    separado é o que explica o limite da Meta (7 dias) em vez de parecer defeito.
+    """
+
+    automation_id: int
+    total_comentarios: int = 0
+    elegiveis: int = 0
+    ja_respondidos: int = 0
+    ja_processados: int = 0
+    sem_palavra: int = 0
+    pessoa_ja_recebeu: int = 0
+    fora_da_janela: int = 0
+    da_propria_conta: int = 0
+    # A leitura para em um teto de comentários — post viral não pode segurar o
+    # request por minutos. `truncado` avisa que há mais do que foi analisado.
+    truncado: bool = False
+    # Quando o elegível MAIS ANTIGO deixa de poder receber direct. É o prazo real.
+    primeiro_expira_em: Optional[datetime] = None
+
+
+class InstagramRetroativoEnvio(BaseModel):
+    enfileirados: int
+    previa: InstagramRetroativoPrevia
