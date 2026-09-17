@@ -382,6 +382,18 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        # Variável de ambiente desconhecida é IGNORADA, não rejeitada.
+        #
+        # Em 26/08/2026 a migração das chaves do Supabase acrescentou quatro
+        # variáveis ao `.env` e a API parou de subir: o padrão do
+        # pydantic-settings da época era RECUSAR o que não está declarado, e em
+        # produção isso vira crash-loop a cada env nova no Coolify.
+        #
+        # Medido em 17/09/2026: com pydantic-settings 2.14.2 o extra já é
+        # ignorado por padrão neste estilo de config, então hoje a linha é
+        # REDUNDANTE. Fica explícita de propósito — é o que impede que um
+        # upgrade da biblioteca reintroduza o crash-loop em silêncio.
+        extra = "ignore"
 
 
 settings = Settings()
