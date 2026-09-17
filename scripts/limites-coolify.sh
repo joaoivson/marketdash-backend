@@ -57,13 +57,19 @@ if [ -z "${COOLIFY_TOKEN:-}" ]; then
   exit 1
 fi
 
-# uuid | rótulo | limits_cpus | limits_memory | CELERY_CONCURRENCY ('-' = não aplicar)
+# uuid | rótulo | limits_cpus | CELERY_CONCURRENCY ('-' = não aplicar)
+#
+# MEMÓRIA NÃO ENTRA AQUI, de propósito. Os tetos de memória já estavam
+# configurados (WAHA 2048m, API 1536m, frontend 512m…) e mexer neles sem medir o
+# consumo real seria trocar um risco conhecido por um desconhecido — WAHA com
+# metade da memória e sessões de WhatsApp dentro é convite a OOM. O que este
+# script governa é CPU, que é o recurso que a Hostinger estrangulou.
 APPS=(
-  "r448swsggoock0wg80csws0k|API hml               |0.5 |1g   |-"
-  "jos0k8so0gw4c8okkgg8kskg|Worker Celery hml     |0.5 |1g   |2"
-  "cogwsgwocwk8k4wkswokks0s|Worker WhatsApp hml   |0.5 |1g   |2"
-  "mws0c0g4kkw00cwg88o00kw4|Frontend hml          |0.25|256m |-"
-  "hw88gc8ocsko04k8wkocs8kc|WAHA hml              |0.5 |1g   |-"
+  "r448swsggoock0wg80csws0k|API hml               |0.5 |-"
+  "jos0k8so0gw4c8okkgg8kskg|Worker Celery hml     |0.5 |2"
+  "cogwsgwocwk8k4wkswokks0s|Worker WhatsApp hml   |0.5 |2"
+  "mws0c0g4kkw00cwg88o00kw4|Frontend hml          |0.25|-"
+  "hw88gc8ocsko04k8wkocs8kc|WAHA hml              |0.5 |-"
 )
 PESO_HML=256   # produção fica no padrão do Docker (1024) — ver cabeçalho
 
@@ -92,11 +98,11 @@ if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$sonda"; then
 fi
 
 [ "$APLICAR" = "1" ] || echo "── ENSAIO (nada será gravado; use --aplicar) ──"
-printf '\n%-22s %-18s %-18s %s\n' "APLICAÇÃO" "CPUs" "MEMÓRIA" "CELERY_CONCURRENCY"
+printf '\n%-22s %-16s %-16s %-12s %s\n' "APLICAÇÃO" "CPUs" "PESO (shares)" "MEMÓRIA" "CONCURRENCY"
 
 for linha in "${APPS[@]}"; do
-  IFS='|' read -r uuid rotulo cpus memoria concorrencia <<<"$linha"
-  cpus="${cpus// /}"; memoria="${memoria// /}"; concorrencia="${concorrencia// /}"
+  IFS='|' read -r uuid rotulo cpus concorrencia <<<"$linha"
+  cpus="${cpus// /}"; concorrencia="${concorrencia// /}"
 
   app="$(api GET "/api/v1/applications/$uuid" || true)"
   if ! jq -e 'has("uuid")' >/dev/null 2>&1 <<<"$app"; then
@@ -120,7 +126,8 @@ for linha in "${APPS[@]}"; do
   fi
 
   cpus_hoje="$(jq -r '.limits_cpus // "" ' <<<"$app")"
-  mem_hoje="$(jq -r '.limits_memory // ""' <<<"$app")"
+  mem_hoje="$(jq -r '.limits_memory // ""' <<<"$app")"   # só para exibir — não é alterado
+  shares_hoje="$(jq -r '.limits_cpu_shares // ""' <<<"$app")"
 
   conc_hoje="-"
   if [ "$concorrencia" != "-" ]; then
@@ -128,13 +135,14 @@ for linha in "${APPS[@]}"; do
     conc_hoje="$(jq -r '[.[] | select(.key=="CELERY_CONCURRENCY") | .value][0] // "(ausente → 8)"' <<<"$envs")"
   fi
 
-  printf '%-22s %-18s %-18s %s\n' "$rotulo" \
-    "${cpus_hoje:-(sem)} → $cpus" "${mem_hoje:-(sem)} → $memoria" "$conc_hoje → $concorrencia"
+  printf '%-22s %-16s %-16s %-12s %s\n' "$rotulo" \
+    "${cpus_hoje:-(sem)} → $cpus" "${shares_hoje:-(sem)} → $PESO_HML" \
+    "${mem_hoje:-(sem)} (intacta)" "$conc_hoje → $concorrencia"
 
   [ "$APLICAR" = "1" ] || continue
 
-  corpo="$(jq -nc --arg c "$cpus" --arg m "$memoria" --argjson s "$PESO_HML" \
-    '{limits_cpus: $c, limits_memory: $m, limits_cpu_shares: $s}')"
+  corpo="$(jq -nc --arg c "$cpus" --argjson s "$PESO_HML" \
+    '{limits_cpus: $c, limits_cpu_shares: $s}')"
   resp="$(api PATCH "/api/v1/applications/$uuid" "$corpo" || true)"
   if jq -e '.errors' >/dev/null 2>&1 <<<"$resp"; then
     echo "::error::Coolify recusou os limites de '$rotulo': $(jq -c '.errors' <<<"$resp")"
@@ -147,12 +155,19 @@ for linha in "${APPS[@]}"; do
     # PATCH atualiza a variável que já existe; POST cria a que não existe. O
     # Coolify não tem upsert, e qual das duas serve depende do estado da app —
     # por isso as duas, nesta ordem.
-    r="$(api PATCH "/api/v1/applications/$uuid/envs" "$env_corpo" || true)"
-    if ! jq -e '.message? // .uuid? // .key?' >/dev/null 2>&1 <<<"$r"; then
-      r="$(api POST "/api/v1/applications/$uuid/envs" "$env_corpo" || true)"
-    fi
-    if jq -e '.errors' >/dev/null 2>&1 <<<"$r"; then
-      echo "::error::não gravei CELERY_CONCURRENCY em '$rotulo': $(jq -c '.errors' <<<"$r")"
+    # POST primeiro (cria), PATCH depois (atualiza a que já existe). A ordem
+    # inversa parecia funcionar e não funcionava: o PATCH numa variável
+    # inexistente devolve um corpo COM campo `message`, e a checagem antiga
+    # aceitava isso como sucesso — então o POST nunca rodava e a env nunca era
+    # gravada, com o script relatando ✅. Descoberto em 17/09 lendo de volta.
+    api POST  "/api/v1/applications/$uuid/envs" "$env_corpo" >/dev/null 2>&1 || true
+    api PATCH "/api/v1/applications/$uuid/envs" "$env_corpo" >/dev/null 2>&1 || true
+
+    # A ÚNICA prova é reler. Resposta de API não é estado gravado.
+    gravado="$(api GET "/api/v1/applications/$uuid/envs" \
+      | jq -r '[.[] | select(.key=="CELERY_CONCURRENCY") | .value][0] // empty')"
+    if [ "$gravado" != "$concorrencia" ]; then
+      echo "::error::CELERY_CONCURRENCY em '$rotulo' ficou '${gravado:-ausente}', esperado '$concorrencia'."
       exit 1
     fi
   fi
