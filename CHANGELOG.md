@@ -119,6 +119,28 @@ com a tag "Anúncio", e a automação é configurada nele como num post.
   como cópia do post, é um **anúncio** (`AD`). O mesmo vale para o AXILIA
   `/p/DbUhjTOAkGv/`.
 
+### Anúncio vinculado ao produto e a regra dos 7 dias (fim de 17/09)
+
+- **Migration 086** (`instagram_midias_detectadas.automation_id`), aplicada em
+  produção. Um anúncio pertence a uma automação só.
+- **Na edição:** "Anúncios deste produto" lista os anúncios detectados, com os de
+  mesma palavra-chave primeiro. O vínculo é salvo na hora. **Vincular a uma
+  automação ativa faz os próximos comentários do anúncio receberem direct.**
+- **No card:** "Uma publicação + N anúncios". O contador soma o que a automação
+  processar no post e nos anúncios.
+- **Pipeline:** comentário em anúncio vinculado responde pela automação do
+  produto. O dedupe por pessoa vale entre post e anúncio.
+- **Retroativo e reconciliação** leem o post e os anúncios vinculados.
+- **A janela é de 7 dias, e isto é da documentação da Meta:** "within 7 days of
+  the comment". As 24h valem para a mensagem seguinte e para reply de story. O
+  modal mostra a regra e separa os elegíveis das últimas 24h dos de 1 a 7 dias,
+  para uma eventual recusa da Meta na faixa maior ficar visível.
+- **Tela validada na conta do Luiz** (1440 e 390): 18 anúncios na API e 18 linhas
+  na seção, com o ALGODÃO em primeiro na automação Calcinhas Algodão.
+- ⚠️ **Já existia antes:** ao editar uma automação antiga, a fileira de
+  publicações não mostra a publicação escolhida quando ela está além da primeira
+  página.
+
 ### O que a medição da tarde mudou no diagnóstico
 
 - **O post da automação 12 tem 15 comentários, não 50+** (Graph API, com

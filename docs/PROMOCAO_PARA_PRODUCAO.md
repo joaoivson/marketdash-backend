@@ -801,6 +801,20 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > | back `882562c` | `408aaad` | **migration 085** + anúncios detectados pelo 1º comentário + `GET /instagram/anuncios` + admin `/midias/{id}` |
 > | back `f1f4388` | `7afac45` | anúncio só com prova (`media_product_type = AD` da Graph ou `ad_id`) |
 > | front `506c7a2` | `2432155` | anúncios na escolha da publicação, com a tag "Anúncio" |
+> | back `386145f` | `6641515` | prévia do retroativo separa elegíveis das últimas 24h |
+> | front `450a354` | `096dd00` | modal mostra a regra da Meta (7 dias) e a faixa de 24h |
+> | back `9f1e2be` | `9f72d2d` | **migration 086** + anúncio vinculado à automação do produto |
+> | front `de833e6` | `64d8c77` | "Anúncios deste produto" na edição + "+N anúncios" no card |
+>
+> ⚠️ **Migration 086** (`instagram_midias_detectadas.automation_id`) foi
+> **APLICADA em produção** em 17/09, antes do push. **Em hml não foi.** Se a 085
+> também não rodou lá, o `create_all` cria a tabela já com a coluna. Se a 085
+> rodou antes, aplique a 086.
+>
+> Nota de operação: os runs `6641515`/`096dd00` foram cancelados por mim para
+> não haver deploy fora de ordem. O do backend já tinha sido aprovado e terminou
+> **inteiro** (API e worker em `6641515`) antes de o cancelamento valer. O
+> "cancelled" no fim do run não significa deploy parcial.
 >
 > ⚠️ **Migration 085 (`instagram_midias_detectadas`) já APLICADA em produção
 > (17/09, antes do push, via `apply_migration`)**: RLS ligado, 1 política,

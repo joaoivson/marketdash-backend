@@ -34,7 +34,12 @@ Pedido extra do João (17/09): opção de enviar RETROATIVO para quem comentou e
 | 27 | Rota admin: ler mídia de anúncio | 8/8 `AD`, legenda, miniatura, comentários legíveis (50+/pág) | eu | ✅ | ✅ | — |
 | 28 | Backfill a partir do ledger | 18 anúncios do Luiz na tela sem esperar comentário novo | eu | ✅ | ✅ | — |
 | 29 | Tela: seleção com tag "Anúncio" | conta do Luiz 1440+390: API 18 = atalho 18 = 18 tags | eu | ✅ | — | ✅ |
-| 30 | Criar automações nos 18 anúncios | config (link/texto por produto) é da aluna; eu faço só com ok do João | **João / Luiz** | — | ⬜ | ⬜ |
+| 30 | Criar automações nos 18 anúncios | substituído pela 32 (vínculo ao produto) | — | — | — | — |
+| 31 | Sinalizar janela (7 dias / últimas 24h) | doc da Meta = 7 dias; modal mostra regra + faixa 24h; prod `6641515`/`096dd00` | eu | ✅ | ✅ | ✅ |
+| 32 | Vincular anúncio à automação do produto | migration 086 prod ✅ hml ❌; `9f72d2d`/`64d8c77`; tela Luiz 18=18 | eu | ✅ | ✅ | ✅ |
+| 33 | Aplicar os 9 vínculos do Luiz | 8 em automação ATIVA → directs a novos comentários de anúncio | **João (ok)** | — | ⬜ | ⬜ |
+| 34 | Retroativo nos anúncios vinculados | directs a quem comentou ≤ 7 dias | **João (ok)** | — | ⬜ | ⬜ |
+| 35 | Editor não mostra a publicação escolhida (fora da 1ª página) | pré-existente, anotado | eu | ⬜ | — | ⬜ |
 | 16 | Doc/CHANGELOG/DIARIO | escrito | eu | ✅ | — | — |
 
 **Tela ⚠️ (etapa 8):** validada com Playwright em 1440 e 390, com as rotas de
