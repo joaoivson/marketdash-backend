@@ -1291,7 +1291,68 @@ class AdminMetricsService:
             return "yellow"
         return "red"
 
+    def _pertence_ao_card(
+        self,
+        origem: str,
+        sub_events: List,
+        chave: str,
+        chaves_mrr: Optional[set],
+        start: Optional[datetime],
+        end: Optional[datetime],
+    ) -> Tuple[bool, Optional[int]]:
+        """Esta linha compõe o card clicado? E com qual valor?
+
+        Trabalha sobre `sub_events` — o MESMO conjunto que a linha já usa para o
+        total pago. Isso herda de graça o de-dup de upgrade (uma pessoa que trocou
+        de plano tem duas subscriber_keys, e a linha sobrevivente absorve os
+        `subscription_id` da outra). Recalcular por fora duplicaria a lógica mais
+        frágil do painel — a dos 4 achados da Rodada 6.
+
+        Devolve `(entra, valor_em_centavos)`. `valor` só existe para Faturamento,
+        que é o único card cuja soma das linhas tem de bater com o total.
+        """
+        if origem == "mrr":
+            return (chaves_mrr is not None and chave in chaves_mrr), None
+
+        if origem == "churn":
+            saiu = any(
+                e.event_type in CANCEL_EVENTS
+                and not getattr(e, "is_plan_change", False)
+                and (_utc(e.received_at) or start) is not None
+                and start <= (_utc(e.received_at) or start) <= end
+                for e in sub_events
+            )
+            return saiu, None
+
+        if origem == "faturamento":
+            # Atribuição pela DATA DA COBRANÇA: plano anual ou trimestral entra
+            # INTEIRO no mês em que foi pago, não rateado. É o oposto do MRR, que
+            # divide o anual por 12 — um é caixa, o outro é receita recorrente, e
+            # confundir os dois é o erro clássico deste painel.
+            total = 0
+            for c in extract_paid_charges(sub_events):
+                quando = _utc(c.get("paid_at"))
+                if quando and start <= quando <= end:
+                    total += c["net_cents"]
+            return total > 0, total
+
+        return True, None
+
     def list_clients(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Drill-down dos cards do dashboard: mostra QUEM compõe o número clicado.
+        origem = (filters.get("origem") or "").lower()
+        if origem not in ("mrr", "faturamento", "churn"):
+            origem = ""
+        janela = (
+            bounds_do_periodo(filters.get("inicio"), filters.get("fim"))
+            if origem in ("faturamento", "churn")
+            else (None, None)
+        )
+        chaves_mrr = (
+            {_subscriber_key(e) for e in self.renewing_subscribers()}
+            if origem == "mrr"
+            else None
+        )
         actives_map = {_subscriber_key(e): e for e in self.active_subscribers()}
         # also include inactive with latest event
         eventos = self._all_events()
@@ -1485,6 +1546,20 @@ class AdminMetricsService:
             }
 
             # filters
+            # Drill-down: quando veio de um card, a linha só entra se compuser
+            # aquele número. Vem ANTES do filtro de status de propósito — o card
+            # de Churn é feito de gente cancelada, que o status padrão da lista
+            # esconderia, e a tela mostraria "nenhum cliente" para um card com
+            # valor. Foi o primeiro modo de falha que testei.
+            if origem:
+                entra, valor = self._pertence_ao_card(
+                    origem, sub_events, key, chaves_mrr, janela[0], janela[1]
+                )
+                if not entra:
+                    continue
+                if valor is not None:
+                    item["valor_no_periodo_cents"] = valor
+
             if not _status_permitido(status, filters.get("status"), q):
                 continue
             if filters.get("plan") and filters["plan"] != item["plan"]:
