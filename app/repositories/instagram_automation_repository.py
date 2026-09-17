@@ -13,6 +13,7 @@ from app.models.instagram_automation import (
     InstagramAutomation,
     InstagramConnection,
     InstagramEvent,
+    InstagramMidiaDetectada,
 )
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,67 @@ class InstagramAutomationRepository:
             .all()
         )
         return {str(c) for (c,) in linhas}
+
+    # ------------------------- mídias detectadas ------------------------- #
+
+    def registrar_midia_comentada(
+        self,
+        conexao: InstagramConnection,
+        media_id: str,
+        ad_id: Optional[str] = None,
+        ad_title: Optional[str] = None,
+        original_media_id: Optional[str] = None,
+        quando: Optional[datetime] = None,
+    ) -> InstagramMidiaDetectada:
+        """Upsert da mídia comentada (migration 085). Não commita — quem chama decide.
+
+        `ad_id` no webhook é certeza de anúncio; sem ele, `eh_anuncio` fica como
+        estava (None até a listagem conferir contra as orgânicas).
+        """
+        quando = quando or datetime.now(timezone.utc)
+        midia = (
+            self.db.query(InstagramMidiaDetectada)
+            .filter(
+                InstagramMidiaDetectada.connection_id == conexao.id,
+                InstagramMidiaDetectada.media_id == str(media_id),
+            )
+            .first()
+        )
+        if midia is None:
+            midia = InstagramMidiaDetectada(
+                user_id=conexao.user_id,
+                connection_id=conexao.id,
+                media_id=str(media_id),
+                comentarios=0,
+                primeiro_comentario_em=quando,
+            )
+            self.db.add(midia)
+        midia.comentarios = (midia.comentarios or 0) + 1
+        midia.ultimo_comentario_em = quando
+        if ad_id:
+            midia.ad_id = str(ad_id)
+            midia.eh_anuncio = True
+        if ad_title:
+            midia.ad_title = ad_title
+        if original_media_id:
+            midia.original_media_id = str(original_media_id)
+        self.db.flush()
+        return midia
+
+    def midias_detectadas(self, connection_id: int) -> List[InstagramMidiaDetectada]:
+        """As que não foram descartadas como post do feed, mais comentada recente primeiro."""
+        return (
+            self.db.query(InstagramMidiaDetectada)
+            .filter(
+                InstagramMidiaDetectada.connection_id == connection_id,
+                InstagramMidiaDetectada.eh_anuncio.isnot(False),
+            )
+            .order_by(
+                InstagramMidiaDetectada.ultimo_comentario_em.desc(),
+                InstagramMidiaDetectada.id.desc(),
+            )
+            .all()
+        )
 
     def add_event(self, evento: InstagramEvent) -> InstagramEvent:
         self.db.add(evento)

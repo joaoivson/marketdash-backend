@@ -262,3 +262,49 @@ class InstagramWebhookEntrega(Base):
     desfecho = Column(String(64), nullable=False, default="enfileirado")
     detalhe = Column(Text, nullable=True)
     processado_em = Column(DateTime(timezone=True), nullable=True)
+
+
+class InstagramMidiaDetectada(Base):
+    """Mídia comentada descoberta pelo webhook — em especial ANÚNCIO (migration 085).
+
+    Anúncio criado no Gerenciador é outra mídia e não aparece em /me/media: sem
+    este registro a tela de seleção nunca o oferecia, e todo comentário nele caía
+    em "nenhuma automação cobre este post". A mídia nasce aqui no primeiro
+    comentário (o mesmo modelo da InstaMagic).
+
+    `eh_anuncio`: True (veio ad_id, ou não está entre as orgânicas), False (é post
+    do feed), None (ainda não conferido — resolvido na primeira listagem).
+    """
+
+    __tablename__ = "instagram_midias_detectadas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    connection_id = Column(
+        Integer, ForeignKey("instagram_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    media_id = Column(String(128), nullable=False)
+    ad_id = Column(String(64), nullable=True)
+    ad_title = Column(Text, nullable=True)
+    original_media_id = Column(String(128), nullable=True)
+    eh_anuncio = Column(Boolean, nullable=True)
+
+    caption = Column(Text, nullable=True)
+    permalink = Column(Text, nullable=True)
+    thumbnail_url = Column(Text, nullable=True)
+    media_type = Column(String(32), nullable=True)
+    media_product_type = Column(String(32), nullable=True)
+    media_timestamp = Column(String(40), nullable=True)
+    metadados_lidos_em = Column(DateTime(timezone=True), nullable=True)
+    metadados_erro = Column(Text, nullable=True)
+
+    comentarios = Column(Integer, nullable=False, default=0)
+    primeiro_comentario_em = Column(DateTime(timezone=True), nullable=True)
+    ultimo_comentario_em = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("connection_id", "media_id", name="uq_ig_midia_detectada"),
+    )
+

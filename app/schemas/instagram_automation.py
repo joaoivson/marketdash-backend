@@ -98,6 +98,13 @@ class InstagramMediaItem(BaseModel):
     # ver `palavra_pedida_na_legenda`.
     palavra_sugerida: Optional[str] = None
 
+    # Mídia de ANÚNCIO descoberta pelo comentário (migration 085) — não existe em
+    # /me/media. A tela mostra com a tag "Anúncio".
+    eh_anuncio: bool = False
+    ad_title: Optional[str] = None
+    comentarios: Optional[int] = None
+    ultimo_comentario_em: Optional[datetime] = None
+
 
 class InstagramMediaPage(BaseModel):
     items: List[InstagramMediaItem] = []

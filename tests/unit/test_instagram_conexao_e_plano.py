@@ -295,7 +295,8 @@ class TestGateDePlano:
         precisam_gate = [
             r
             for r in rotas.router.routes
-            if ("/automations" in r.path or r.path == "/media") and not r.path.startswith("/admin/")
+            if ("/automations" in r.path or r.path in ("/media", "/anuncios"))
+            and not r.path.startswith("/admin/")
         ]
         assert precisam_gate, "nenhuma rota de automação encontrada"
 
