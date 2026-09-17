@@ -87,6 +87,38 @@ directs**.
   9 +1, 8 +3, 7 +6, 6 +1), nenhum direct. Banco = API = tela nos 9 cards, em
   1440 e 390.
 
+### Anúncios viram mídia selecionável (noite de 17/09)
+
+O modelo é o da InstaMagic: o anúncio aparece depois do **primeiro comentário**,
+com a tag "Anúncio", e a automação é configurada nele como num post.
+
+- **Migration 085** `instagram_midias_detectadas` (RLS), com backfill a partir
+  do ledger. Aplicada em produção antes do push; em hml ainda não.
+- O pipeline registra toda mídia comentada que não tem automação (ou que veio
+  com `ad_id`/`original_media_id`/`media_product_type`), sem nunca mudar o
+  desfecho do comentário. A automação casa pela mídia do anúncio **ou** pelo
+  post original.
+- `GET /instagram/anuncios`: só conta como anúncio o que tem **prova**, ou seja
+  `ad_id` no webhook ou a Graph dizendo `media_product_type = "AD"`. Legenda,
+  miniatura e link vêm da Graph. Se a leitura falhar, a mídia fica sem veredito
+  e sai da tela.
+  - A primeira versão usava "fora da lista de orgânicas" e marcou o id falso do
+    simulador como anúncio. Corrigido em `7afac45`.
+- `GET /instagram/admin/midias/{id}` (admin): o que a Graph devolve para a mídia.
+- **Tela:** o modal de escolha mostra primeiro "Anúncios que já receberam
+  comentário", com a tag e a contagem. A fileira ganha o atalho "Anúncios (N)".
+- **Medido em produção:** a Graph lê a mídia de anúncio com o token do Instagram
+  Login. As 18 mídias da conta do Luiz voltaram `AD`, com legenda, miniatura e
+  comentários (50+ por página). Logo o retroativo funciona em automação de
+  anúncio.
+- **Tela validada na conta do Luiz**, em 1440 e 390: API 18 = "Anúncios (18)" =
+  18 tags, e os 3 primeiros batem em contagem e legenda. Um toast "Failed to
+  fetch" apareceu uma vez e não se repetiu em duas reproduções (todas as 13
+  páginas de `/media` voltaram 200).
+- **Correção de diagnóstico de 13/09:** o "ALGODÃO" `/p/Dc7cCO7AzNW/`, tratado
+  como cópia do post, é um **anúncio** (`AD`). O mesmo vale para o AXILIA
+  `/p/DbUhjTOAkGv/`.
+
 ### O que a medição da tarde mudou no diagnóstico
 
 - **O post da automação 12 tem 15 comentários, não 50+** (Graph API, com

@@ -26,7 +26,15 @@ Pedido extra do João (17/09): opção de enviar RETROATIVO para quem comentou e
 | 19 | Botão à vista (card + editor) | back `e11e4c4`, front `f152c04`; conta do Luiz, 1440+390: botão nos 9 cards e no editor | eu | ✅ | — | ✅ |
 | 20 | Rotas de suporte (admin) | prévia + reconciliar, `require_admin`, guarda em teste | eu | ✅ | ✅ | — |
 | 21 | Onde estão os 50+ comentários | 8 mídias do ledger (~200 coment.) fora das 298 orgânicas = anúncios; post 12 tem 15 | eu | — | ✅ | — |
-| 22 | Ligar comentário de anúncio à automação | depende de a Meta mandar `original_media_id` (1º pós-deploy veio sem) | eu | ⬜ | ⬜ | ⬜ |
+| 22 | Ligar comentário de anúncio à automação | substituído pelas etapas 23-30 (modelo InstaMagic) | eu | — | — | — |
+| 23 | Estudo: InstaMagic + doc Private Replies | detecção pelo 1º comentário, tag "Anúncio", private reply vale p/ "ad post"; ledger NÃO guarda body cru (corrige o print do amigo) | eu | — | ✅ | — |
+| 24 | Migration 085: registro de mídias detectadas | aplicada em PROD antes do push: RLS + 1 política + backfill 68 (Luiz 31); **hml pendente** | eu | ✅ | ✅ | — |
+| 25 | Pipeline: casar por mídia do anúncio OU original + registrar mídia | ALGODÃO-anúncio foi de 28→29 ao vivo (registro em produção) | eu | ✅ | ✅ | — |
+| 26 | Listagem de anúncios (+ metadados via Graph) | regra final: prova = ad_id ou Graph `AD` (a de orgânicas deu falso positivo 999…) | eu | ✅ | ✅ | — |
+| 27 | Rota admin: ler mídia de anúncio | 8/8 `AD`, legenda, miniatura, comentários legíveis (50+/pág) | eu | ✅ | ✅ | — |
+| 28 | Backfill a partir do ledger | 18 anúncios do Luiz na tela sem esperar comentário novo | eu | ✅ | ✅ | — |
+| 29 | Tela: seleção com tag "Anúncio" | conta do Luiz 1440+390: API 18 = atalho 18 = 18 tags | eu | ✅ | — | ✅ |
+| 30 | Criar automações nos 18 anúncios | config (link/texto por produto) é da aluna; eu faço só com ok do João | **João / Luiz** | — | ⬜ | ⬜ |
 | 16 | Doc/CHANGELOG/DIARIO | escrito | eu | ✅ | — | — |
 
 **Tela ⚠️ (etapa 8):** validada com Playwright em 1440 e 390, com as rotas de

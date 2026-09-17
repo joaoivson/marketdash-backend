@@ -1774,3 +1774,22 @@ por uma rota de admin que nunca envia. "Enviado" só com envio.
 
 O botão estava no menu ⋮ e ninguém achou. Lição de novo: validar que o item
 EXISTE (Playwright achou) não é validar que a pessoa o ENCONTRA.
+
+### 17/09 (noite): anúncios como mídia, e duas correções de premissa
+
+**O print do amigo do João** afirmava que "o ledger tem 185 payloads crus".
+Não tem: a 083 decidiu não guardar corpo de webhook. A dica útil do print
+(`ad_id`/`ad_title` na doc) valeu. A premissa, não.
+
+**A InstaMagic** documenta o próprio modelo: o anúncio aparece depois do 1º
+comentário, com a tag. Reproduzimos isso com as permissões que já tínhamos.
+
+**Erro meu, pego pela tela:** usei "fora da lista de orgânicas" como prova de
+anúncio. A tela do Luiz mostrou o id falso do simulador (`999…`) como anúncio.
+Ausência não é prova. A Graph tinha o sinal direto, `media_product_type = "AD"`,
+e o frontend já documentava esse valor num comentário de tipo. Troquei a regra.
+De quebra sumiu a leitura de 13 páginas de `/me/media`.
+
+**Correção do 13/09:** o "ALGODÃO que era cópia" (`Dc7cCO7AzNW`) é **anúncio**.
+Por dois dias o diagnóstico foi "a aluna republica o produto e a automação fica
+na cópia errada". Era anúncio desde o começo.

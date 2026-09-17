@@ -787,7 +787,7 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > Suítes rodadas **no worktree de `main`**, não na develop: 646 no cherry-pick
 > da 083 e 694 no da cobertura, ambas sem falha.
 
-> ⚠️ **Mais seis commits em `main` por cherry-pick (17/09/2026)**: comentário de
+> ⚠️ **Mais nove commits em `main` por cherry-pick (17/09/2026)**: comentário de
 > anúncio (`original_media_id`) e envio retroativo de directs. **Sem migration.**
 >
 > | develop | main | o quê |
@@ -798,6 +798,17 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > | front `144bf4e` | `6bdc1a3` | remove o botão "Cobrir publicações" (a rota em-lote continua) |
 > | back `113e30b` | `e11e4c4` | contador reconcilia expirados/duplicados + rotas `/instagram/admin/…` (prévia e reconciliar) |
 > | front `0d30696` | `f152c04` | "Enviar para quem já comentou" vira botão à vista (card + editor) |
+> | back `882562c` | `408aaad` | **migration 085** + anúncios detectados pelo 1º comentário + `GET /instagram/anuncios` + admin `/midias/{id}` |
+> | back `f1f4388` | `7afac45` | anúncio só com prova (`media_product_type = AD` da Graph ou `ad_id`) |
+> | front `506c7a2` | `2432155` | anúncios na escolha da publicação, com a tag "Anúncio" |
+>
+> ⚠️ **Migration 085 (`instagram_midias_detectadas`) já APLICADA em produção
+> (17/09, antes do push, via `apply_migration`)**: RLS ligado, 1 política,
+> backfill de 68 mídias. **Em homologação NÃO foi aplicada** (sem acesso ao
+> projeto `ytjpdvjuxtvxacredekk` nesta sessão). Lá o `create_all` do boot cria a
+> tabela **sem RLS e sem backfill**. Risco baixo, porque o Instagram está
+> desligado em hml, mas aplique o arquivo antes de testar Instagram lá. Ela é
+> idempotente.
 >
 > CHANGELOG, runbook e memória ficaram na develop. Os arquivos tocados eram
 > **idênticos** entre `main` e develop no momento do cherry-pick. Mesmo assim,
