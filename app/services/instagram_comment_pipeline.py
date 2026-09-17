@@ -183,7 +183,20 @@ class InstagramCommentPipeline:
         commenter_username = de.get("username")
         texto = (valor or {}).get("text") or ""
         media = (valor or {}).get("media") or {}
-        media_id = str(media.get("id") or "")
+        media_entregue = str(media.get("id") or "")
+        # Comentário feito no ANÚNCIO de uma publicação impulsionada chega com
+        # `media.id` = mídia do anúncio e o post em `original_media_id`. A
+        # automação é do post: sem isto, todo comentário vindo do anúncio caía em
+        # "nenhuma automação cobre este post" (automação 12, 17/09/2026).
+        media_original = str(media.get("original_media_id") or "")
+        ad_id = str(media.get("ad_id") or "")
+        media_id = media_original or media_entregue
+        origem_anuncio = (
+            f" (anúncio ad_id={ad_id or '?'}, mídia={media_entregue or '?'}, "
+            f"post={media_original or '?'})"
+            if ad_id or media_original
+            else ""
+        )
         comment_ts = parse_comment_timestamp((valor or {}).get("timestamp"))
 
         # 1) Comentário da própria aluna (inclusive a resposta pública que NÓS
@@ -199,7 +212,13 @@ class InstagramCommentPipeline:
         ativas = self.repo.active_automations_for_connection(conexao.id)
         candidatas = [a for a in ativas if a.cobre_media(media_id)]
         if not candidatas:
-            return {"status": "ignorado", "motivo": "nenhuma automação cobre este post"}
+            # O prefixo é fixo: as consultas do ledger agrupam por ele. O sufixo
+            # do anúncio separa "anúncio de post sem automação" de "post sem
+            # automação" — sem ele os dois ficavam idênticos no diagnóstico.
+            return {
+                "status": "ignorado",
+                "motivo": "nenhuma automação cobre este post" + origem_anuncio,
+            }
 
         # 4) Matching. A primeira que casar é a que responde — a Meta só permite
         #    uma private reply por comentário, então não faz sentido tentar duas.
@@ -247,7 +266,12 @@ class InstagramCommentPipeline:
         if evento is None:
             return {"status": "duplicado", "motivo": "corrida no comment_id"}
 
-        return await self._enviar(conexao, automacao, evento, comment_id)
+        resultado = await self._enviar(conexao, automacao, evento, comment_id)
+        if origem_anuncio and not resultado.get("motivo"):
+            # Vai para o `detalhe` do ledger: é o único rastro de que o direct
+            # saiu por um comentário do anúncio, não do orgânico.
+            resultado["motivo"] = "comentário em anúncio" + origem_anuncio
+        return resultado
 
     async def _enviar(
         self,
