@@ -1758,3 +1758,19 @@ a prévia separa "mais de 7 dias" para isso não parecer defeito.
 **O que ficou bloqueado para mim:** SSH no VPS e leitura de segredo. A prova
 final (comentários reais × ledger) depende do token da conta, então fica com o
 script rodado no container, ou com a prévia na tela depois do deploy.
+
+### 17/09 (tarde) — o post tinha 15 comentários; os 50 estão em anúncios
+
+Com o login do Luiz (passado pelo João), a prévia do retroativo leu a Graph API
+de verdade. O reel `Dc3rR4fRqBP` tem **15** comentários contando as respostas, e
+nenhum pode receber direct agora. Listei as 298 publicações orgânicas da conta, e
+nenhuma das 8 mídias com mais comentário no ledger (~200) está entre elas. São
+anúncios. O "50+ comentários" é o que o Instagram mostra agregado, mas para a
+API cada anúncio é outra mídia.
+
+"Atualize os números nem que seja por SQL": não inflei "directs enviados". O
+contador de comentários subiu com o que o pipeline teria registrado (expirado),
+por uma rota de admin que nunca envia. "Enviado" só com envio.
+
+O botão estava no menu ⋮ e ninguém achou. Lição de novo: validar que o item
+EXISTE (Playwright achou) não é validar que a pessoa o ENCONTRA.

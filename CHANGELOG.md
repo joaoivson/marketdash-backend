@@ -71,6 +71,34 @@ directs**.
   do post, e "capturados" era lido como se contasse.
 - O botão **"Cobrir publicações"** saiu da lista de automações, a pedido do João.
   A rota `/dashboard/automacoes/em-lote` continua existindo.
+- **"Enviar para quem já comentou" vira botão à vista**, no card e no topo da
+  edição. Escondido no menu ⋮, ninguém tinha achado.
+
+### Contador reconciliado (tarde de 17/09)
+
+- O envio retroativo passa a gravar o que o pipeline **teria** gravado sem
+  precisar enviar nada: `expirado` (casou com a palavra e passou de 7 dias) e
+  `duplicado` (a pessoa já tinha recebido). Nunca grava `enviado`. Esses eventos
+  levam `erro_codigo` `RECONCILIADO_*`, para poderem ser separados ou desfeitos.
+- Rotas de suporte, só para admin (404 para os demais):
+  `GET /instagram/admin/automations/{id}/retroativos` e
+  `POST /instagram/admin/automations/{id}/reconciliar` (nunca envia direct).
+- Rodado nas 9 automações do Luiz: +14 comentários no contador (12 +1, 10 +2,
+  9 +1, 8 +3, 7 +6, 6 +1), nenhum direct. Banco = API = tela nos 9 cards, em
+  1440 e 390.
+
+### O que a medição da tarde mudou no diagnóstico
+
+- **O post da automação 12 tem 15 comentários, não 50+** (Graph API, com
+  respostas): 4 receberam direct, 5 sem a palavra, 5 do próprio perfil, 1 com
+  mais de 7 dias. **Elegíveis para retroativo: 0 nas 9 automações.**
+- **As 8 mídias que concentram ~200 comentários no ledger NÃO estão entre as 298
+  publicações orgânicas da conta.** Duas delas também recebem reply de story. São
+  anúncios. O comentário que o Luiz vê no reel vem desses anúncios.
+- ⚠️ Ainda não se sabe se a Meta manda `original_media_id` nesses comentários.
+  O único que chegou depois do deploy veio sem. Se não mandar, a correção por
+  `original_media_id` não basta: vai ser preciso ligar a mídia do anúncio ao post
+  por outro caminho.
 
 ### Verificação
 

@@ -22,7 +22,11 @@ Pedido extra do João (17/09): opção de enviar RETROATIVO para quem comentou e
 | 14 | Conferir deploy | `/health` = `42c0fdb`, `version.json` = `6bdc1a3` | eu | — | ✅ | — |
 | 15 | Validar em produção | prévia real (conta de teste, SEM enviar, escritas abortadas) + tela | eu | — | ✅ | ✅ |
 | 17 | Remover "Cobrir publicações" | front `144bf4e` → main `6bdc1a3`; prod 1440+390: botão 0, Nova Automação 1 | eu | ✅ | — | ✅ |
-| 18 | Números da automação 12 subirem | depende de a automação ser REATIVADA e do retroativo ser enviado pela conta do Luiz | **João / Luiz** | — | ⬜ | ⬜ |
+| 18 | Números da automação 12 subirem | reconciliação de admin nas 9 automações: +14 no contador, 0 direct | eu | ✅ | ✅ | ✅ |
+| 19 | Botão à vista (card + editor) | back `e11e4c4`, front `f152c04`; conta do Luiz, 1440+390: botão nos 9 cards e no editor | eu | ✅ | — | ✅ |
+| 20 | Rotas de suporte (admin) | prévia + reconciliar, `require_admin`, guarda em teste | eu | ✅ | ✅ | — |
+| 21 | Onde estão os 50+ comentários | 8 mídias do ledger (~200 coment.) fora das 298 orgânicas = anúncios; post 12 tem 15 | eu | — | ✅ | — |
+| 22 | Ligar comentário de anúncio à automação | depende de a Meta mandar `original_media_id` (1º pós-deploy veio sem) | eu | ⬜ | ⬜ | ⬜ |
 | 16 | Doc/CHANGELOG/DIARIO | escrito | eu | ✅ | — | — |
 
 **Tela ⚠️ (etapa 8):** validada com Playwright em 1440 e 390, com as rotas de
@@ -49,3 +53,8 @@ automação. Fecha quando o ledger mostrar `detalhe` com `comentário em anúnci
 **Etapa 18 (contadores da automação 12):** o deploy não muda número nenhum sozinho.
 A automação está PAUSADA desde 14:18 UTC. Os comentários perdidos não viram
 evento, a não ser pelo retroativo. Os de mais de 7 dias não viram nunca.
+
+**Validação 17/09 tarde (conta real do Luiz, escrita bloqueada, "Enviar" nunca clicado):**
+banco = API = tela nos 9 cards (ex.: 12 → 5/4, 7 → 6/0), botão em todos e no
+editor. Prévia 12: API 15 = tela 15 (4 respondidos, 5 sem palavra, 1 analisado,
+5 próprios, 0 elegíveis).
