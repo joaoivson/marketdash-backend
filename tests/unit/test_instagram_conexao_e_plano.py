@@ -293,12 +293,30 @@ class TestGateDePlano:
         from app.api.v1.routes import instagram as rotas
 
         precisam_gate = [
-            r for r in rotas.router.routes if "/automations" in r.path or r.path == "/media"
+            r
+            for r in rotas.router.routes
+            if ("/automations" in r.path or r.path == "/media") and not r.path.startswith("/admin/")
         ]
         assert precisam_gate, "nenhuma rota de automação encontrada"
 
         sem_gate = [r.path for r in precisam_gate if not _tem_gate_max(r)]
         assert sem_gate == [], f"rotas de automação sem gate de plano: {sem_gate}"
+
+    def test_rotas_de_suporte_exigem_admin(self):
+        """As rotas /admin/ do Instagram leem e gravam em conta de OUTRA pessoa.
+
+        Ficam fora do gate de plano (quem chama é o suporte, não a aluna), e por
+        isso mesmo não podem nascer sem require_admin.
+        """
+        from app.api.v1.dependencies import require_admin
+        from app.api.v1.routes import instagram as rotas
+
+        def _tem_admin(dependant) -> bool:
+            return any(sub.call is require_admin or _tem_admin(sub) for sub in dependant.dependencies)
+
+        admin = [r for r in rotas.router.routes if r.path.startswith("/admin/")]
+        assert admin, "nenhuma rota de suporte encontrada"
+        assert [r.path for r in admin if not _tem_admin(r.dependant)] == []
 
     def test_conexao_fica_fora_do_gate(self):
         """Se a assinatura cair de MAX, a aluna ainda precisa ver e remover a conexão."""

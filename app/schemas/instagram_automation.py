@@ -325,4 +325,14 @@ class InstagramRetroativoPrevia(BaseModel):
 
 class InstagramRetroativoEnvio(BaseModel):
     enfileirados: int
+    # Entram no contador do card sem envio: casaram com a palavra e já não
+    # podem receber (janela de 7 dias) ou a pessoa já tinha recebido.
+    registrados_expirados: int = 0
+    registrados_duplicados: int = 0
+    previa: InstagramRetroativoPrevia
+
+
+class InstagramRetroativoReconciliacao(BaseModel):
+    registrados_expirados: int
+    registrados_duplicados: int
     previa: InstagramRetroativoPrevia
