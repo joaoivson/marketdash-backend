@@ -58,11 +58,31 @@ def _ym(year: Optional[int], month: Optional[int]) -> tuple[int, int]:
 def admin_dashboard(
     year: Optional[int] = None,
     month: Optional[int] = None,
+    inicio: Optional[date] = Query(
+        None, description="Início do período (AAAA-MM-DD). Vazio com periodo=livre = desde sempre."
+    ),
+    fim: Optional[date] = Query(None, description="Fim do período (AAAA-MM-DD). Vazio = hoje."),
+    periodo: Optional[str] = Query(
+        None, description="'livre' usa inicio/fim; ausente mantém o mês de year/month."
+    ),
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    """Painel do admin, por mês (padrão) ou por período livre.
+
+    O modo é EXPLÍCITO (`periodo=livre`) em vez de inferido da presença de
+    `inicio`/`fim`: "todo o período" é exatamente o caso em que os dois vêm
+    vazios, e inferir faria esse pedido cair no mês corrente — o oposto do que
+    a tela pediu.
+    """
+    livre = (periodo or "").lower() == "livre"
+    if livre and inicio and fim and inicio > fim:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A data inicial não pode ser depois da final.",
+        )
     y, m = _ym(year, month)
-    return AdminMetricsService(db).dashboard(y, m)
+    return AdminMetricsService(db).dashboard(y, m, inicio=inicio, fim=fim, periodo_livre=livre)
 
 
 @router.get("/alerts")

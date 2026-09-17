@@ -48,6 +48,62 @@ FAILED_PAY_EVENTS = {
 BRT = ZoneInfo("America/Sao_Paulo")
 
 
+def bounds_do_periodo(
+    inicio: Optional[date], fim: Optional[date]
+) -> Tuple[datetime, datetime]:
+    """Intervalo livre para o painel, em dias civis BRT convertidos para UTC.
+
+    Mesma régua de `_month_bounds`, que existe porque o dado é gravado em UTC e
+    o negócio é brasileiro: uma cobrança às 21h BRT já é 00h UTC do dia
+    seguinte, e sem a conversão ela cai no dia — e no mês — errado.
+
+    `inicio=None` significa **desde sempre** e `fim=None` significa **até
+    agora**: é assim que o filtro "Todo o período" pede o histórico inteiro sem
+    o chamador precisar descobrir a data da primeira cobrança.
+    """
+    if inicio is None:
+        # 2000 é anterior a qualquer cobrança possível e evita o `datetime.min`,
+        # que estoura na conversão de fuso em algumas plataformas.
+        comeco = datetime(2000, 1, 1, tzinfo=BRT).astimezone(timezone.utc)
+    else:
+        comeco = datetime(
+            inicio.year, inicio.month, inicio.day, tzinfo=BRT
+        ).astimezone(timezone.utc)
+
+    if fim is None:
+        termino = datetime.now(timezone.utc)
+    else:
+        termino = datetime(
+            fim.year, fim.month, fim.day, 23, 59, 59, 999999, tzinfo=BRT
+        ).astimezone(timezone.utc)
+    return comeco, termino
+
+
+def receita_das_cobrancas_no_intervalo(events, start: datetime, end: datetime) -> dict:
+    """Irmã de `revenue_from_charges_for_month`, para intervalo livre.
+
+    A mensal compara ANO e MÊS do dia civil BRT; esta compara o INSTANTE contra
+    os limites que `bounds_do_periodo` já converteu. O resultado é idêntico
+    quando o intervalo é exatamente um mês — há teste para isso.
+    """
+    net = gross = 0
+    for c in extract_paid_charges(events):
+        dt = c.get("paid_at")
+        if not dt:
+            continue
+        quando = _utc(dt) if isinstance(dt, datetime) else None
+        if quando is None:
+            # Cobrança com data (não instante): compara pelo dia civil BRT.
+            if start.astimezone(BRT).date() <= dt <= end.astimezone(BRT).date():
+                net += c["net_cents"]
+                gross += c["gross_cents"]
+            continue
+        if start <= quando <= end:
+            net += c["net_cents"]
+            gross += c["gross_cents"]
+    return {"net": net, "gross": gross}
+
+
 def _month_bounds(year: int, month: int) -> Tuple[datetime, datetime]:
     """Início/fim do mês em BRT (America/Sao_Paulo), convertidos pra instantes
     UTC — todo dado é gravado em UTC, mas o negócio é brasileiro. Sem isso, uma
@@ -670,11 +726,18 @@ class AdminMetricsService:
             return por_email.get(ev.customer_email)
         return None
 
-    def revenue_for_month(self, year: int, month: int) -> Dict[str, int]:
-        start, end = _month_bounds(year, month)
+    def revenue_for_month(
+        self, year: int, month: int, intervalo: Optional[Tuple[datetime, datetime]] = None
+    ) -> Dict[str, int]:
+        """Faturamento do mês — ou do `intervalo`, quando o painel filtra livre."""
+        start, end = intervalo or _month_bounds(year, month)
         all_events = self._all_events()
         # Sem caminho legado: toda cobrança é um evento pago com order_ref.
-        charges_rev = revenue_from_charges_for_month(all_events, year, month)
+        charges_rev = (
+            receita_das_cobrancas_no_intervalo(all_events, start, end)
+            if intervalo
+            else revenue_from_charges_for_month(all_events, year, month)
+        )
         gross = charges_rev["gross"]
         net = charges_rev["net"]
 
@@ -697,7 +760,9 @@ class AdminMetricsService:
             "refund_net": refund_net,
         }
 
-    def new_subscriptions(self, year: int, month: int) -> int:
+    def new_subscriptions(
+        self, year: int, month: int, intervalo: Optional[Tuple[datetime, datetime]] = None
+    ) -> int:
         """Assinantes cuja 1ª cobrança paga histórica caiu neste mês — não
         depende do status atual (cancelamento depois não reescreve o mês de
         entrada).
@@ -711,7 +776,7 @@ class AdminMetricsService:
         derrubava esse tipo de assinante da contagem — produção mostrava 6
         novas em julho/2026 quando o correto é 7.
         """
-        start, end = _month_bounds(year, month)
+        start, end = intervalo or _month_bounds(year, month)
         first_paid: Dict[str, datetime] = {}
         for ev in self.db.query(SubscriptionEvent).filter(SubscriptionEvent.event_type.in_(PAID_EVENTS)).all():
             key = _subscriber_key(ev)
@@ -722,8 +787,14 @@ class AdminMetricsService:
                 first_paid[key] = ts
         return sum(1 for ts in first_paid.values() if start <= ts <= end)
 
-    def churn_for_month(self, year: int, month: int) -> Dict[str, Any]:
-        start, end = _month_bounds(year, month)
+    def churn_for_month(
+        self, year: int, month: int, intervalo: Optional[Tuple[datetime, datetime]] = None
+    ) -> Dict[str, Any]:
+        """Churn do mês — ou do `intervalo`. O denominador continua sendo o
+        RETRATO do instante anterior ao começo, então num período longo ele é a
+        base de quando o período começou: é a leitura certa de "quantos dos que
+        estavam comigo foram embora"."""
+        start, end = intervalo or _month_bounds(year, month)
         # Denominador = RETRATO do instante anterior ao início do mês (31/07
         # 23:59:59 BRT, para o churn de agosto), reconstruído das cobranças.
         #
@@ -782,7 +853,9 @@ class AdminMetricsService:
         """Ponto de corte do mês corrente — sobrescrito nos testes."""
         return datetime.now(timezone.utc)
 
-    def renewal_rate(self, year: int, month: int) -> Optional[float]:
+    def renewal_rate(
+        self, year: int, month: int, intervalo: Optional[Tuple[datetime, datetime]] = None
+    ) -> Optional[float]:
         """De quem venceu no período: renovou = pagou. Cancelou = não renovou.
 
         Rodada 6, item 4. O denominador vem do FIM das vigências pagas
@@ -791,7 +864,7 @@ class AdminMetricsService:
         quem cancelou ficava com vencimento no futuro e sumia do denominador —
         era por isso que o painel marcava 100%.
         """
-        start, end = _month_bounds(year, month)
+        start, end = intervalo or _month_bounds(year, month)
         # Vencimento que ainda não chegou não é renovação falha: no mês corrente
         # o denominador vai só até agora.
         agora = self._agora()
@@ -1116,15 +1189,45 @@ class AdminMetricsService:
             })
         return out
 
-    def dashboard(self, year: int, month: int) -> Dict[str, Any]:
+    def dashboard(
+        self,
+        year: int,
+        month: int,
+        inicio: Optional[date] = None,
+        fim: Optional[date] = None,
+        periodo_livre: bool = False,
+    ) -> Dict[str, Any]:
+        """Painel do admin.
+
+        Sem `periodo_livre`, o comportamento é o de sempre: mês civil BRT de
+        `year`/`month`.
+
+        Com `periodo_livre`, as métricas **de período** (faturamento, novas,
+        churn, renovação) passam a valer para `inicio`..`fim`, e `inicio=None`
+        significa desde a primeira cobrança. O resto do painel — MRR, ativos,
+        ARPU, LTV, alertas — é **foto do agora** e não muda com o filtro: MRR é
+        receita recorrente do momento, não algo que se some ao longo de meses.
+        Somar MRR de 12 meses daria um número sem significado, e é justamente o
+        erro que essa separação evita.
+        """
+        intervalo = bounds_do_periodo(inicio, fim) if periodo_livre else None
         actives = self.renewing_subscribers()
         mrr = self.mrr_cents(actives)
-        rev = self.revenue_for_month(year, month)
-        churn = self.churn_for_month(year, month)
+        rev = self.revenue_for_month(year, month, intervalo)
+        churn = self.churn_for_month(year, month, intervalo)
         arpu = int(round(mrr["net"] / len(actives))) if actives else 0
         return {
             "year": year,
             "month": month,
+            "periodo": (
+                {
+                    "livre": True,
+                    "inicio": intervalo[0].astimezone(BRT).date().isoformat(),
+                    "fim": intervalo[1].astimezone(BRT).date().isoformat(),
+                }
+                if intervalo
+                else {"livre": False}
+            ),
             "mrr_net_cents": mrr["net"],
             "mrr_gross_cents": mrr["gross"],
             "revenue_net_cents": rev["net"],
@@ -1132,10 +1235,10 @@ class AdminMetricsService:
             "refund_net_cents": rev["refund_net"],
             "active_count": len(actives),
             "active_by_plan": self.plan_breakdown(actives),
-            "new_subscriptions": self.new_subscriptions(year, month),
+            "new_subscriptions": self.new_subscriptions(year, month, intervalo),
             "churn_count": churn["count"],
             "churn_rate": churn["rate"],
-            "renewal_rate": self.renewal_rate(year, month),
+            "renewal_rate": self.renewal_rate(year, month, intervalo),
             "arpu_cents": arpu,
             "ltv_cents": self.ltv_estimate_cents(mrr["net"], len(actives)),
             "alerts": self.alerts(),
