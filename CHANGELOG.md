@@ -11,6 +11,74 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-17 (Instagram: comentário de anúncio e envio retroativo)
+
+Queixa do Luiz (@promosdabeatrizz_): a publicação `Dc3rR4fRqBP` ("Calcinhas
+Algodão", automação 12) tem 50+ comentários e a tela mostrava **4 capturados · 4
+directs**.
+
+### O que a medição mostrou
+
+- **As 4 entregas com o id do post foram todas respondidas.** Desde 11/09 o
+  webhook trouxe só 4 comentários com `media.id = 18118006687931396` (2 de
+  terceiros, 2 respostas nossas). O pipeline não falhou em nenhum que chegou.
+- **Existem mídias da conta que recebem comentário E resposta de story no mesmo
+  id, por 6 dias** (`18607394596042322`: 70 comentários + reply de story). Post
+  orgânico não recebe reply de story, e story orgânico dura 24h. Isso só se
+  explica com um **anúncio** veiculado em Feed/Reels e Stories.
+- **A referência do webhook da Meta** (`IGCommentMedia`) traz `media.ad_id`,
+  `media.ad_title` e `media.original_media_id`. O pipeline só lia `media.id`.
+- ⚠️ **Não provado ainda** que os ~46 comentários que faltam são exatamente os
+  do anúncio. A prova casa `GET /{post}/comments` com `instagram_webhook_entregas.item_id`,
+  e exige o token da conta. Ela sai com `scripts/diagnosticar_automacao_instagram.py`
+  rodado no container de produção, ou abrindo a prévia do retroativo na tela.
+
+### Backend
+
+- **Comentário em anúncio casa com a automação do post.** O pipeline usa
+  `original_media_id` quando ele vem. O evento, o dedupe por pessoa e a contagem
+  da tela usam o id do POST: quem comentou no anúncio e no orgânico recebe um
+  direct só.
+- **O ledger guarda o anúncio.** `detalhe` ganha `(anúncio ad_id=…, mídia=…,
+  post=…)`, tanto no `enviado` quanto no descarte. O prefixo `nenhuma automação
+  cobre este post` não mudou, e as consultas que agrupam por ele continuam
+  valendo.
+- **Envio retroativo:** `GET /api/v1/instagram/automations/{id}/retroativos`
+  (prévia, não envia nada) e `POST` no mesmo caminho (enfileira).
+  - Lê os comentários do post pela Graph API (com respostas, teto de 2000).
+  - Classifica cada um num grupo exclusivo: elegível, já respondido, já
+    processado, sem palavra, mesma pessoa já recebeu, **mais de 7 dias**, da
+    própria conta.
+  - O POST **recalcula no servidor**, exige automação ativa e enfileira na fila
+    de lote (`priority=9`), com 3 s entre um direct e outro.
+  - Uma trava Redis de 5 min barra clique duplo. Ela é solta se a leitura da
+    Meta falhar.
+  - Passa pelo **mesmo pipeline do webhook**: dedupe, janela, teto horário e
+    resposta pública valem igual.
+  - **A Meta não aceita private reply depois de 7 dias do comentário.** Não
+    existe retroativo além disso.
+- `scripts/diagnosticar_automacao_instagram.py --automacao N`: comentários reais
+  × ledger × eventos, sem imprimir texto nem username.
+
+### Frontend
+
+- Menu "⋮" do card da automação: **Enviar para quem já comentou**. Só aparece
+  para "Uma publicação" que não seja rascunho.
+- O modal mostra o total elegível, o prazo do mais antigo, e as linhas de quem
+  ficou de fora e por quê. Com a automação pausada, o botão trava.
+
+### Verificação
+
+- pytest: 5 testes novos do anúncio + 14 do retroativo. A suíte fechou em 1347
+  verdes e 2 vermelhos **pré-existentes** (`test_waha_servidores`, que falha com
+  as mudanças guardadas, e `test_campaign_repository_unpaid_status`, que não
+  toca Instagram).
+- Mutação: `priority=5` e o dedupe por pessoa desligado derrubam 3 testes.
+- Tela (Playwright, 1440 e 390): retroativo **simulado** (o endpoint ainda não
+  está em produção), resto da API real só com GET. Tela 31 = API 31, as linhas
+  batem uma a uma, soma 53 = total. Card de story sem o item. Pausada trava o
+  botão sem POST.
+
 ## [Não versionado] - 2026-09-16 (Deploy: o build sai do VPS)
 
 O Coolify rodava `docker build` **dentro do servidor que serve produção**. Isso

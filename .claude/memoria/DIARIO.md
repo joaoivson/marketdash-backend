@@ -1725,3 +1725,36 @@ falhou — e o **teste** é que estava errado: com `palavras_comuns` preenchidas
 item fica válido, que é justamente o desenho (é assim que os 27% que comentam
 "quero" passam a ser atendidos). Ajustei o cenário para uma invalidez real (item
 sem link) e acrescentei o contraponto explícito.
+
+## 17/09/2026 — Automação 12: o post com 50 comentários e 4 directs
+
+Terceira vez que este post aparece numa queixa (11/09, 13/09, 17/09). Nas duas
+anteriores a causa era cobertura (a cópia do produto sem automação). Desta vez
+não parti dessa premissa, e o ledger mostrou outra coisa.
+
+**O que a 083 respondeu na hora:** o post da automação recebeu só 4 entregas
+desde 11/09, e as 4 foram respondidas. O pipeline não errou em nada que chegou.
+A pergunta virou "por onde chegam os outros 46?".
+
+**A pista que valeu:** `media_id` que recebe comentário E reply de story, por
+dias. Nenhuma mídia orgânica faz isso. Anúncio em Feed+Stories faz. E a
+referência do webhook da Meta tem `original_media_id` e `ad_id`, que a gente
+nunca leu.
+
+**Dois erros meus no caminho, registrados:**
+1. Suspeitei que `18607394596042322` era o anúncio que começou em 13/09. O
+   ledger mostrou comentário nela desde 11/09. A hipótese de "boost em 13/09"
+   morreu, e a de anúncio só voltou com o padrão do reply de story. **Não está
+   provado que ESSA mídia é o anúncio DESTE post.**
+2. No teste de mutação, restaurei com `git checkout` um arquivo **untracked**.
+   O checkout não fez nada e a mutação ficou no código. Peguei no grep seguinte
+   e restaurei do backup. Lição: mutação em arquivo novo, backup antes e
+   conferência com grep depois, nunca git.
+
+**Pedido do João no meio da rodada:** retroativo para quem ficou sem direct.
+O limite que manda no desenho é a janela de 7 dias da Meta para private reply:
+a prévia separa "mais de 7 dias" para isso não parecer defeito.
+
+**O que ficou bloqueado para mim:** SSH no VPS e leitura de segredo. A prova
+final (comentários reais × ledger) depende do token da conta, então fica com o
+script rodado no container, ou com a prévia na tela depois do deploy.
