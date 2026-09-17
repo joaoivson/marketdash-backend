@@ -99,9 +99,19 @@ def admin_clients(
     payment_failed: bool = False,
     never_connected: bool = False,
     no_login_10d: bool = False,
+    origem: Optional[str] = Query(
+        None, description="Card de origem do drill-down: mrr, faturamento ou churn."
+    ),
+    inicio: Optional[date] = Query(None, description="Início do período (AAAA-MM-DD)."),
+    fim: Optional[date] = Query(None, description="Fim do período (AAAA-MM-DD)."),
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
+    """Lista de clientes. Com `origem`, devolve só quem compõe aquele card.
+
+    `origem=faturamento` acrescenta `valor_no_periodo_cents` em cada linha — é o
+    que permite conferir que a soma da lista bate com o total do card.
+    """
     return AdminMetricsService(db).list_clients({
         "q": q,
         "status": status_filter,
@@ -110,6 +120,9 @@ def admin_clients(
         "payment_failed": payment_failed,
         "never_connected": never_connected,
         "no_login_10d": no_login_10d,
+        "origem": origem,
+        "inicio": inicio,
+        "fim": fim,
     })
 
 
