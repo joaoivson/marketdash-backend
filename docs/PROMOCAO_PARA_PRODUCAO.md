@@ -805,6 +805,9 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > | front `450a354` | `096dd00` | modal mostra a regra da Meta (7 dias) e a faixa de 24h |
 > | back `9f1e2be` | `9f72d2d` | **migration 086** + anúncio vinculado à automação do produto |
 > | front `de833e6` | `64d8c77` | "Anúncios deste produto" na edição + "+N anúncios" no card |
+> | front `5defb31` | `eccc4af` | "Onde responde": publicação + anúncios numa lista só, modal de vincular |
+> | back `e184dea` | `78f9e29` | vincular ignora a mídia principal da própria automação |
+> | front `131ee3c` | `38a46e2` | mídia principal fora da lista de vinculados (memoizado) |
 >
 > ⚠️ **Migration 086** (`instagram_midias_detectadas.automation_id`) foi
 > **APLICADA em produção** em 17/09, antes do push. **Em hml não foi.** Se a 085

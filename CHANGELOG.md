@@ -141,6 +141,26 @@ com a tag "Anúncio", e a automação é configurada nele como num post.
   publicações não mostra a publicação escolhida quando ela está além da primeira
   página.
 
+### UX do "Onde": publicação e anúncios numa lista só (fim de 17/09)
+
+- Escolhida a mídia, o bloco vira **"Onde responde"**: a publicação (com
+  *Trocar*) e os anúncios vinculados (com ✕), cada linha com título curto (a
+  palavra do produto) e meta. Embaixo: "Comentários na publicação e nos anúncios
+  desta lista recebem o mesmo direct."
+- **"Vincular anúncio"** abre um `ResponsiveModal` (drawer no celular) com busca,
+  "Mesma palavra-chave" primeiro (também casa palavra específica da automação na
+  legenda) e "Salvar (N)". A lista aberta de 18 linhas saiu do formulário.
+- **Corrige** a edição que mostrava 4 posts recentes em vez da publicação
+  escolhida.
+- **Corrige** a linha duplicada: automação com o anúncio como mídia principal
+  **e** vinculado. O backend ignora esse vínculo e a tela não lista a principal.
+- **Validado:** local e produção, conta do Luiz, 1440 e 390, sem estouro de
+  largura, seleção do modal persistente, sem erro de renderização, nenhuma
+  escrita.
+- ⚠️ **Configuração do Luiz (não é bug):** às 16:19 UTC a automação 12 foi
+  trocada do reel orgânico `Dc3rR4fRqBP` para o anúncio `Dc7cCO7AzNW`. O reel
+  orgânico ficou sem cobertura.
+
 ### O que a medição da tarde mudou no diagnóstico
 
 - **O post da automação 12 tem 15 comentários, não 50+** (Graph API, com

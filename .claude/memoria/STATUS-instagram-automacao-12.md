@@ -39,7 +39,10 @@ Pedido extra do João (17/09): opção de enviar RETROATIVO para quem comentou e
 | 32 | Vincular anúncio à automação do produto | migration 086 prod ✅ hml ❌; `9f72d2d`/`64d8c77`; tela Luiz 18=18 | eu | ✅ | ✅ | ✅ |
 | 33 | Aplicar os 9 vínculos do Luiz | 8 em automação ATIVA → directs a novos comentários de anúncio | **João (ok)** | — | ⬜ | ⬜ |
 | 34 | Retroativo nos anúncios vinculados | directs a quem comentou ≤ 7 dias | **João (ok)** | — | ⬜ | ⬜ |
-| 35 | Editor não mostra a publicação escolhida (fora da 1ª página) | pré-existente, anotado | eu | ⬜ | — | ⬜ |
+| 35 | Editor não mostra a publicação escolhida (fora da 1ª página) | resolvido pelo modo compacto "Onde responde" | eu | ✅ | — | ✅ |
+| 36 | UX "Onde responde" + modal de vincular | front `eccc4af`; local+prod Luiz 1440/390 | eu (skill ui-shadcn-premium) | ✅ | — | ✅ |
+| 37 | Linha duplicada (principal = vinculado) | back `78f9e29` / front `38a46e2` — gate pendente | eu / **João (gate)** | ✅ | ⬜ | ⬜ |
+| 38 | Automação 12 aponta para o anúncio, reel orgânico descoberto | configuração da aluna; decidir | **João / Luiz** | — | — | — |
 | 16 | Doc/CHANGELOG/DIARIO | escrito | eu | ✅ | — | — |
 
 **Tela ⚠️ (etapa 8):** validada com Playwright em 1440 e 390, com as rotas de
