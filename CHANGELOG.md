@@ -11,6 +11,39 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-17 (Promoção seletiva para produção)
+
+Quatro correções que estavam só na `develop` foram para produção **sem levar o
+módulo de Grupos de WhatsApp**, que segue em desenvolvimento.
+
+- **Chaves novas do Supabase** (`sb_publishable_…` / `sb_secret_…`) aceitas sem
+  perder as antigas (`anon` / `service_role`).
+- **Estorno não desfaz mais a troca de e-mail.** O webhook de estorno traz o
+  e-mail do pedido ANTIGO e renomeava a conta de volta pelo CPF — a aluna que
+  pagou caía em "Assinatura Necessária" porque o login criava conta duplicada.
+- **Pool de banco por processo** (`DB_POOL_SIZE` / `DB_MAX_OVERFLOW`). Já
+  existiam como env no Dockerfile do worker, mas `session.py` tinha
+  `pool_size=5, max_overflow=5` cravados: **as variáveis eram ignoradas em
+  silêncio** e o comentário do Dockerfile afirmava um controle que não existia.
+- **Env desconhecida é ignorada explicitamente.** Redundante com
+  pydantic-settings 2.14.2 (medido), fica para impedir que um upgrade
+  reintroduza o crash-loop de 26/08.
+
+### O que NÃO foi, e por quê
+
+| Item | Motivo |
+|---|---|
+| Alerta de queda por WhatsApp | importa `waha_client`, que é código de Grupos — o boot da API quebraria com `ModuleNotFoundError`. E o WAHA só existe em hml |
+| Isolamento de fila do Celery | é a fila de envio **em grupo** |
+| `frontend_url` derivado do banco | o conflito exigiria trazer o `config.py` inteiro da develop, com ~25 settings de WAHA/WhatsApp |
+| Backfill de placement | script avulso da feature de leads |
+| Campo `actions` do Meta (Lead) | é a fase F7 de Grupos |
+
+**Achado do levantamento:** `git cherry` mostrou **33 commits já equivalentes**
+na `main`. O painel Admin › Infraestrutura, a automação em Story e a cobertura
+de posts do Instagram **já estavam em produção** por cherry-picks anteriores —
+"78 commits pendentes" contava patches já presentes com SHA diferente.
+
 ## [Não versionado] - 2026-09-16 (Thumbnail das automações expirava e virava 403)
 
 A tela **Automações** despejava uma parede de `403 (Forbidden)` no console, em
