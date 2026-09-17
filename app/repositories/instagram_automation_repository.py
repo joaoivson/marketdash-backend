@@ -272,6 +272,7 @@ class InstagramAutomationRepository:
         ad_title: Optional[str] = None,
         original_media_id: Optional[str] = None,
         quando: Optional[datetime] = None,
+        media_product_type: Optional[str] = None,
     ) -> InstagramMidiaDetectada:
         """Upsert da mídia comentada (migration 085). Não commita — quem chama decide.
 
@@ -301,6 +302,10 @@ class InstagramAutomationRepository:
         if ad_id:
             midia.ad_id = str(ad_id)
             midia.eh_anuncio = True
+        if media_product_type:
+            midia.media_product_type = str(media_product_type)
+            if media_product_type == "AD":
+                midia.eh_anuncio = True
         if ad_title:
             midia.ad_title = ad_title
         if original_media_id:

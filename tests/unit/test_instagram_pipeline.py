@@ -518,6 +518,15 @@ async def test_ad_id_no_webhook_marca_anuncio_com_titulo(db, conexao, cliente):
 
 
 @pytest.mark.asyncio
+async def test_media_product_type_ad_no_webhook_ja_marca_anuncio(db, conexao, cliente):
+    valor = _comentario("c1", media_id=ANUNCIO_MEDIA_ID)
+    valor["media"]["media_product_type"] = "AD"
+    await _processar(db, valor)
+    midia = db.query(InstagramMidiaDetectada).one()
+    assert midia.eh_anuncio is True and midia.media_product_type == "AD"
+
+
+@pytest.mark.asyncio
 async def test_post_organico_coberto_nao_registra_midia(db, conexao, cliente):
     _automacao(db, conexao, media_id=MEDIA_ID)
     await _processar(db, _comentario("c1", media_id=MEDIA_ID))

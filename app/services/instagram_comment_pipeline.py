@@ -219,7 +219,10 @@ class InstagramCommentPipeline:
             if a.cobre_media(media_entregue) or (media_original and a.cobre_media(media_original))
         ]
         if ad_id or media_original or not candidatas:
-            self._registrar_midia(conexao, media_entregue, ad_id, ad_title, media_original)
+            self._registrar_midia(
+                conexao, media_entregue, ad_id, ad_title, media_original,
+                media.get("media_product_type"),
+            )
         if not candidatas:
             # O prefixo é fixo: as consultas do ledger agrupam por ele. O sufixo
             # do anúncio separa "anúncio de post sem automação" de "post sem
@@ -478,6 +481,7 @@ class InstagramCommentPipeline:
         ad_id: str,
         ad_title: Optional[str],
         media_original: str,
+        media_product_type: Optional[str] = None,
     ) -> None:
         """Guarda a mídia comentada (migration 085). NUNCA muda o desfecho.
 
@@ -494,6 +498,7 @@ class InstagramCommentPipeline:
                 ad_id=ad_id or None,
                 ad_title=ad_title,
                 original_media_id=media_original or None,
+                media_product_type=media_product_type,
             )
             self.db.commit()
         except Exception as exc:

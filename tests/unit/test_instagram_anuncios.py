@@ -1,9 +1,10 @@
 """Anúncios na tela de seleção (migration 085, 17/09/2026).
 
 O que estes testes protegem:
-- post do feed NUNCA aparece como anúncio (confere contra as orgânicas);
-- sem a lista orgânica inteira, não se afirma nada (fica para a próxima abertura);
-- ad_id no webhook dispensa a conferência;
+- só aparece como anúncio o que tem PROVA: ad_id no webhook ou a Graph dizendo
+  media_product_type = "AD" (a regra antiga, "fora das orgânicas", marcou o id
+  falso do simulador como anúncio);
+- post do feed lido com sucesso sai da lista e não é relido;
 - metadados vêm da Graph, e falha deles não some com o anúncio nem pausa nada.
 """
 
@@ -26,10 +27,8 @@ from app.models.instagram_automation import (
     InstagramMidiaDetectada,
 )
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
-from app.schemas.instagram_automation import InstagramMediaItem, InstagramMediaPage
 from app.services import instagram_anuncios_service as anuncios
 from app.services import instagram_login_client as ig
-from app.services.instagram_automation_service import InstagramAutomationService
 
 AGORA = datetime.now(timezone.utc)
 
@@ -82,23 +81,6 @@ def _midia(db, conexao, media_id, horas_atras=1, **kw):
     return m
 
 
-def _organicas(monkeypatch, paginas, falha=False):
-    chamadas = []
-
-    async def _listar(self, user_id, cursor=None, forcar=False):
-        chamadas.append(cursor)
-        if falha:
-            raise HTTPException(status_code=400, detail="Meta fora")
-        indice = int(cursor) if cursor else 0
-        return InstagramMediaPage(
-            items=[InstagramMediaItem(id=i) for i in paginas[indice]],
-            next_cursor=str(indice + 1) if indice + 1 < len(paginas) else None,
-        )
-
-    monkeypatch.setattr(InstagramAutomationService, "listar_midias", _listar)
-    return chamadas
-
-
 def _graph(monkeypatch, respostas):
     lidas = []
 
@@ -118,61 +100,72 @@ def _servico(db):
 
 
 @pytest.mark.asyncio
-async def test_post_do_feed_nunca_aparece_como_anuncio(db, conexao, monkeypatch):
-    _midia(db, conexao, "organico-sem-automacao")
-    _midia(db, conexao, "anuncio-dark-post")
-    _organicas(monkeypatch, [["organico-sem-automacao", "outro"], ["mais-um"]])
+async def test_so_aparece_como_anuncio_o_que_a_graph_diz_que_e_ad(db, conexao, monkeypatch):
+    _midia(db, conexao, "reel-do-feed")
+    _midia(db, conexao, "anuncio")
+    _graph(monkeypatch, {
+        "reel-do-feed": {"id": "reel-do-feed", "media_product_type": "REELS"},
+        "anuncio": {"id": "anuncio", "media_product_type": "AD"},
+    })
+
+    pagina = await _servico(db).listar(1)
+
+    assert [i.id for i in pagina.items] == ["anuncio"]
+    assert pagina.items[0].eh_anuncio is True
+    vereditos = {m.media_id: m.eh_anuncio for m in db.query(InstagramMidiaDetectada).all()}
+    assert vereditos == {"reel-do-feed": False, "anuncio": True}
+
+
+@pytest.mark.asyncio
+async def test_id_que_a_graph_nao_le_nao_vira_anuncio(db, conexao, monkeypatch):
+    """O caso real: o id falso do simulador (999…) não está no feed e a Graph dá erro."""
+    _midia(db, conexao, "999999999999999")
+    _graph(monkeypatch, {"999999999999999": ig.InstagramApiError("unexpected", codigo=2, permanente=False)})
+
+    pagina = await _servico(db).listar(1)
+
+    assert pagina.items == []
+    assert db.query(InstagramMidiaDetectada).one().eh_anuncio is None
+
+
+@pytest.mark.asyncio
+async def test_veredito_antigo_sem_prova_e_desfeito(db, conexao, monkeypatch):
+    """Linha marcada pela regra das orgânicas, com leitura que falhou: sai da tela."""
+    _midia(db, conexao, "999", eh_anuncio=True, metadados_erro="x",
+           metadados_lidos_em=AGORA - timedelta(hours=1))
     _graph(monkeypatch, {})
 
     pagina = await _servico(db).listar(1)
 
-    assert [i.id for i in pagina.items] == ["anuncio-dark-post"]
-    assert pagina.items[0].eh_anuncio is True
-    resolvidas = {m.media_id: m.eh_anuncio for m in db.query(InstagramMidiaDetectada).all()}
-    assert resolvidas == {"organico-sem-automacao": False, "anuncio-dark-post": True}
+    assert pagina.items == []
+    assert db.query(InstagramMidiaDetectada).one().eh_anuncio is None
 
 
 @pytest.mark.asyncio
-async def test_conferencia_so_roda_uma_vez_por_midia(db, conexao, monkeypatch):
-    _midia(db, conexao, "anuncio")
-    chamadas = _organicas(monkeypatch, [["x"]])
-    _graph(monkeypatch, {})
+async def test_post_do_feed_nao_e_relido_na_abertura_seguinte(db, conexao, monkeypatch):
+    _midia(db, conexao, "reel")
+    lidas = _graph(monkeypatch, {"reel": {"id": "reel", "media_product_type": "REELS"}})
 
     await _servico(db).listar(1)
     await _servico(db).listar(1)
 
-    assert chamadas == [None], "já resolvida, não relê as orgânicas"
+    assert lidas == ["reel"]
 
 
 @pytest.mark.asyncio
-async def test_sem_a_lista_organica_inteira_nao_afirma_nada(db, conexao, monkeypatch):
-    _midia(db, conexao, "desconhecida")
-    _midia(db, conexao, "com-ad-id", ad_id="120", eh_anuncio=True)
-    _organicas(monkeypatch, [], falha=True)
-    _graph(monkeypatch, {})
+async def test_ad_id_do_webhook_basta_mesmo_se_a_graph_falhar(db, conexao, monkeypatch):
+    _midia(db, conexao, "com-ad-id", ad_id="120", ad_title="Calcinhas", eh_anuncio=True)
+    _graph(monkeypatch, {"com-ad-id": ig.InstagramApiError("fora", codigo=2, permanente=False)})
 
     pagina = await _servico(db).listar(1)
 
     assert [i.id for i in pagina.items] == ["com-ad-id"]
-    assert db.query(InstagramMidiaDetectada).filter_by(media_id="desconhecida").one().eh_anuncio is None
-
-
-@pytest.mark.asyncio
-async def test_ad_id_dispensa_a_conferencia(db, conexao, monkeypatch):
-    _midia(db, conexao, "com-ad-id", ad_id="120", ad_title="Calcinhas", eh_anuncio=True)
-    chamadas = _organicas(monkeypatch, [["x"]])
-    _graph(monkeypatch, {})
-
-    pagina = await _servico(db).listar(1)
-
-    assert chamadas == []
     assert pagina.items[0].ad_title == "Calcinhas"
 
 
 @pytest.mark.asyncio
 async def test_metadados_da_graph_viram_miniatura_legenda_e_palavra(db, conexao, monkeypatch):
-    _midia(db, conexao, "anuncio", eh_anuncio=True)
-    _organicas(monkeypatch, [[]])
+    _midia(db, conexao, "anuncio")
     _graph(monkeypatch, {"anuncio": {
         "id": "anuncio",
         "caption": 'Comente " ALGODÃO " para receber o link!',
@@ -192,7 +185,7 @@ async def test_metadados_da_graph_viram_miniatura_legenda_e_palavra(db, conexao,
 
 @pytest.mark.asyncio
 async def test_falha_nos_metadados_mantem_o_anuncio_e_nao_pausa_nada(db, conexao, monkeypatch):
-    _midia(db, conexao, "anuncio", eh_anuncio=True, ad_title="Oferta")
+    _midia(db, conexao, "anuncio", eh_anuncio=True, ad_id="120", ad_title="Oferta")
     automacao = InstagramAutomation(
         user_id=1, connection_id=conexao.id, nome="x", escopo=ESCOPO_POST_ESPECIFICO,
         media_id="outro", trigger_tipo=TRIGGER_PALAVRAS, palavras=["quero"],
@@ -201,7 +194,6 @@ async def test_falha_nos_metadados_mantem_o_anuncio_e_nao_pausa_nada(db, conexao
     )
     db.add(automacao)
     db.commit()
-    _organicas(monkeypatch, [[]])
     _graph(monkeypatch, {"anuncio": ig.InstagramApiError("token", codigo=190, permanente=True)})
 
     pagina = await _servico(db).listar(1)
@@ -215,9 +207,8 @@ async def test_falha_nos_metadados_mantem_o_anuncio_e_nao_pausa_nada(db, conexao
 
 @pytest.mark.asyncio
 async def test_falha_recente_nao_relê_a_cada_abertura(db, conexao, monkeypatch):
-    _midia(db, conexao, "anuncio", eh_anuncio=True, metadados_erro="x",
+    _midia(db, conexao, "anuncio", eh_anuncio=True, ad_id="120", metadados_erro="x",
            metadados_lidos_em=AGORA - timedelta(hours=1))
-    _organicas(monkeypatch, [[]])
     lidas = _graph(monkeypatch, {})
     await _servico(db).listar(1)
     assert lidas == []
@@ -225,8 +216,10 @@ async def test_falha_recente_nao_relê_a_cada_abertura(db, conexao, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_anuncio_com_automacao_ativa_vem_marcado_e_ordem_e_do_mais_recente(db, conexao, monkeypatch):
-    _midia(db, conexao, "antigo", horas_atras=30, eh_anuncio=True)
-    _midia(db, conexao, "recente", horas_atras=1, eh_anuncio=True)
+    _midia(db, conexao, "antigo", horas_atras=30, eh_anuncio=True, media_product_type="AD",
+           metadados_lidos_em=AGORA)
+    _midia(db, conexao, "recente", horas_atras=1, eh_anuncio=True, media_product_type="AD",
+           metadados_lidos_em=AGORA)
     db.add(InstagramAutomation(
         user_id=1, connection_id=conexao.id, nome="x", escopo=ESCOPO_POST_ESPECIFICO,
         media_id="antigo", trigger_tipo=TRIGGER_PALAVRAS, palavras=["quero"],
@@ -234,7 +227,6 @@ async def test_anuncio_com_automacao_ativa_vem_marcado_e_ordem_e_do_mais_recente
         status=AUTOMACAO_ATIVA,
     ))
     db.commit()
-    _organicas(monkeypatch, [[]])
     _graph(monkeypatch, {})
 
     itens = (await _servico(db).listar(1)).items
