@@ -11,6 +11,43 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-17 (Incidente: banco de produção travado por fila de cliques)
+
+**17:00–17:37 UTC.** Login, API e Auth do Supabase caíram de forma intermitente
+(`ERR_NETWORK_CHANGED` no navegador, 500 em 15 s, depois 404 do proxy).
+
+### O que a medição mostrou
+- **Não era a API:** o `/health` com `curl` passou 120/120 enquanto o login falhava.
+  O `/health` só começou a voltar 503 em 10 s quando o banco parou de responder.
+- **Não era falta de conexões:** zero "too many connections". Eram timeouts.
+- **Logs do Postgres:** dezenas de `UPDATE custom_links SET click_count=10601
+  WHERE id=569` em paralelo, levando até 99 s, e `still waiting for
+  ExclusiveLock on tuple … after 118080 ms`. A relação 47047 é `custom_links`.
+  Houve ainda INSERTs de evento de clique de 20 a 70 s, um checkpoint de 479 s
+  e upserts de vendas de 28 a 55 s.
+- **Causa:** `increment_click_count` fazia `click_count += 1` no Python. Isso
+  perdia clique (dois cliques simultâneos gravavam o mesmo valor) e segurava a
+  trava da linha durante a transação inteira. Com o disco lento, os links mais
+  clicados viraram fila, as conexões ficaram presas e o banco inteiro parou.
+- **O restart do projeto às 17:36:55** aliviou, mas às 17:37:51 os timeouts
+  voltaram. Desde 17:40: zero comandos lentos e zero esperas de trava.
+
+### Correção (`953014a` develop → `440fad1` main)
+- Incremento atômico no banco (`click_count = click_count + 1`).
+- O UPDATE fica por último, antes do commit.
+- `lock_timeout` de 2 s e `statement_timeout` de 5 s: com a linha ocupada, o
+  clique deixa de ser contado em vez de entrar na fila.
+- O redirecionamento nunca falha por causa da contagem.
+- Teste com duas sessões concorrentes: a versão antiga perdia um clique (10601
+  em vez de 10602).
+
+### Pendente
+- Deploy de `440fad1`: gate aguardando aprovação.
+- Conferir o gráfico **Disk IO budget** no painel do Supabase. Se estiver
+  esgotado, a lentidão de disco volta com qualquer pico de gravação.
+- O healthcheck da API depende do banco. Com o banco lento, o proxy tira a API
+  inteira do ar (404), inclusive rotas que não usam banco.
+
 ## [Não versionado] - 2026-09-17 (Instagram: comentário de anúncio e envio retroativo)
 
 Queixa do Luiz (@promosdabeatrizz_): a publicação `Dc3rR4fRqBP` ("Calcinhas
