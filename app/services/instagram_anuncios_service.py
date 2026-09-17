@@ -9,18 +9,21 @@ O modelo é o da InstaMagic: a mídia aparece depois do PRIMEIRO comentário, co
 tag "Anúncio", e a automação é configurada nela como em qualquer post. O pipeline
 já registra a mídia comentada; aqui ela é conferida e enfeitada para a tela:
 
-1. **É mesmo anúncio?** `ad_id` no webhook é certeza. Sem ele, a mídia é
-   comparada com a lista de publicações orgânicas (cache de 15 min): fora dela,
-   é anúncio. Post do feed nunca aparece como anúncio.
-2. **Metadados** (legenda, miniatura, link) vêm de GET /{media_id} com o token da
-   própria conta. Se a Meta não deixar ler, a mídia aparece assim mesmo, com o
-   título do anúncio e a contagem de comentários — melhor que sumir.
+1. **É mesmo anúncio?** Só com prova: `ad_id` no webhook, ou a própria Graph
+   dizendo `media_product_type = "AD"` em GET /{media_id}. Medido em produção
+   (17/09): as 18 mídias de anúncio da conta do caso voltaram `AD`, com legenda,
+   miniatura e comentários legíveis pelo token do Instagram Login.
+   A primeira versão comparava com a lista de orgânicas ("fora dela é anúncio")
+   e marcou como anúncio o id falso do simulador de teste — ausência não é prova.
+2. **Metadados** (legenda, miniatura, link) vêm da mesma leitura. Post do feed
+   lido com sucesso vira `eh_anuncio = False` e não é relido. Leitura que falhou
+   fica sem veredito, some da tela e é tentada de novo mais tarde.
 """
 
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -29,16 +32,14 @@ from app.models.instagram_automation import InstagramConnection, InstagramMidiaD
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
 from app.schemas.instagram_automation import InstagramMediaItem, InstagramMediaPage
 from app.services import instagram_login_client as ig
-from app.services.instagram_automation_service import InstagramAutomationService, _caption_preview
+from app.services.instagram_automation_service import _caption_preview
 from app.services.instagram_connection_service import InstagramConnectionService
 from app.services.instagram_media_url import expirada as thumbnail_expirada
 from app.utils.text_normalize import palavra_pedida_na_legenda
 
 logger = logging.getLogger(__name__)
 
-# Teto de páginas de /me/media lidas para conferir o que é orgânico. A conta do
-# caso tinha 298 publicações = 13 páginas; 40 cobre contas bem maiores.
-MAX_PAGINAS_ORGANICAS = 40
+PRODUTO_ANUNCIO = "AD"
 
 # Leitura de metadados por abertura de tela: é enfeite, não pode segurar a lista.
 MAX_METADADOS_POR_CARGA = 20
@@ -46,6 +47,10 @@ TIMEOUT_METADADOS_SEGUNDOS = 8.0
 
 # Mídia cuja leitura falhou só é tentada de novo depois disto.
 RETENTAR_METADADOS_APOS = timedelta(hours=6)
+
+
+def _eh_anuncio_comprovado(midia: InstagramMidiaDetectada) -> bool:
+    return bool(midia.ad_id) or midia.media_product_type == PRODUTO_ANUNCIO
 
 
 def _precisa_metadados(midia: InstagramMidiaDetectada, agora: datetime) -> bool:
@@ -92,46 +97,23 @@ class InstagramAnunciosService:
         conexao = self.conexao_service.require_conexao_ativa(user_id)
         midias = self.repo.midias_detectadas(conexao.id)
 
-        pendentes = [m for m in midias if m.eh_anuncio is None]
-        if pendentes:
-            organicas = await self._ids_organicos(user_id)
-            if organicas is not None:
-                for midia in pendentes:
-                    midia.eh_anuncio = midia.media_id not in organicas
-                self.db.commit()
+        await self._ler_metadados(conexao, midias)
+        for midia in midias:
+            if _eh_anuncio_comprovado(midia):
+                midia.eh_anuncio = True
+            elif midia.metadados_lidos_em is not None and not midia.metadados_erro:
+                # A Graph leu e disse que NÃO é anúncio: post do feed. Não volta.
+                midia.eh_anuncio = False
+            elif midia.eh_anuncio and not midia.ad_id:
+                # Veredito antigo sem prova (regra das orgânicas): volta a ser dúvida.
+                midia.eh_anuncio = None
+        self.db.commit()
 
         anuncios = [m for m in midias if m.eh_anuncio is True]
-        await self._ler_metadados(conexao, anuncios)
-
         cobertos = self.repo.media_ids_com_automacao_ativa(conexao.id)
         return InstagramMediaPage(
             items=[_item(m, cobertos) for m in anuncios], next_cursor=None, from_cache=False
         )
-
-    async def _ids_organicos(self, user_id: int) -> Optional[set]:
-        """Ids de TODAS as publicações do feed, pela mesma listagem cacheada da grade.
-
-        None quando a leitura falha no meio: sem a lista inteira não dá para
-        afirmar que uma mídia está fora dela, e marcar post do feed como anúncio
-        seria pior que esperar a próxima abertura.
-        """
-        automacoes = InstagramAutomationService(self.repo)
-        ids: set = set()
-        cursor: Optional[str] = None
-        for _ in range(MAX_PAGINAS_ORGANICAS):
-            try:
-                pagina = await automacoes.listar_midias(user_id, cursor=cursor)
-            except HTTPException as exc:
-                logger.warning(
-                    "Instagram anúncios: não li as orgânicas do user_id=%s: %s", user_id, exc.detail
-                )
-                return None
-            ids.update(item.id for item in pagina.items)
-            cursor = pagina.next_cursor
-            if not cursor:
-                return ids
-        logger.warning("Instagram anúncios: user_id=%s passou de %d páginas", user_id, MAX_PAGINAS_ORGANICAS)
-        return None
 
     async def _ler_metadados(
         self, conexao: InstagramConnection, midias: List[InstagramMidiaDetectada]
