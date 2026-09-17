@@ -104,6 +104,14 @@ class InstagramMediaItem(BaseModel):
     ad_title: Optional[str] = None
     comentarios: Optional[int] = None
     ultimo_comentario_em: Optional[datetime] = None
+    # A automação que já responde este anúncio (vínculo da migration 086).
+    automation_id_vinculada: Optional[int] = None
+
+
+class InstagramAnunciosVinculoRequest(BaseModel):
+    """A lista COMPLETA de anúncios da automação: o que ficar de fora é desvinculado."""
+
+    media_ids: List[str] = Field(default_factory=list, max_length=100)
 
 
 class InstagramMediaPage(BaseModel):
@@ -301,6 +309,8 @@ class InstagramAutomationResponse(BaseModel):
     # Contadores para o card da lista.
     comentarios_capturados: int = 0
     directs_enviados: int = 0
+    # Anúncios do mesmo produto que esta automação também responde (migration 086).
+    anuncios_vinculados: List[str] = []
 
     class Config:
         from_attributes = True

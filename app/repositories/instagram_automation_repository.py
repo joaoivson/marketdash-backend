@@ -328,6 +328,66 @@ class InstagramAutomationRepository:
             .all()
         )
 
+    def automacao_vinculada_id(self, connection_id: int, media_id: str) -> Optional[int]:
+        """Caminho quente do webhook: este anúncio responde por qual automação?"""
+        if not media_id:
+            return None
+        linha = (
+            self.db.query(InstagramMidiaDetectada.automation_id)
+            .filter(
+                InstagramMidiaDetectada.connection_id == connection_id,
+                InstagramMidiaDetectada.media_id == str(media_id),
+                InstagramMidiaDetectada.automation_id.isnot(None),
+            )
+            .first()
+        )
+        return int(linha[0]) if linha else None
+
+    def midias_vinculadas_ids(self, automation_id: int) -> List[str]:
+        linhas = (
+            self.db.query(InstagramMidiaDetectada.media_id)
+            .filter(InstagramMidiaDetectada.automation_id == automation_id)
+            .order_by(InstagramMidiaDetectada.id)
+            .all()
+        )
+        return [str(m) for (m,) in linhas]
+
+    def vinculos_por_automacao(self, user_id: int) -> Dict[int, List[str]]:
+        """{automation_id: [media_id de anúncio]} em uma query, para a lista de cards."""
+        linhas = (
+            self.db.query(InstagramMidiaDetectada.automation_id, InstagramMidiaDetectada.media_id)
+            .filter(
+                InstagramMidiaDetectada.user_id == user_id,
+                InstagramMidiaDetectada.automation_id.isnot(None),
+            )
+            .order_by(InstagramMidiaDetectada.id)
+            .all()
+        )
+        saida: Dict[int, List[str]] = {}
+        for aid, media_id in linhas:
+            saida.setdefault(int(aid), []).append(str(media_id))
+        return saida
+
+    def anuncios_da_conexao(
+        self, connection_id: int, media_ids: List[str]
+    ) -> List[InstagramMidiaDetectada]:
+        if not media_ids:
+            return []
+        return (
+            self.db.query(InstagramMidiaDetectada)
+            .filter(
+                InstagramMidiaDetectada.connection_id == connection_id,
+                InstagramMidiaDetectada.media_id.in_([str(m) for m in media_ids]),
+                InstagramMidiaDetectada.eh_anuncio.is_(True),
+            )
+            .all()
+        )
+
+    def desvincular_anuncios(self, automation_id: int) -> None:
+        self.db.query(InstagramMidiaDetectada).filter(
+            InstagramMidiaDetectada.automation_id == automation_id
+        ).update({InstagramMidiaDetectada.automation_id: None}, synchronize_session="fetch")
+
     def add_event(self, evento: InstagramEvent) -> InstagramEvent:
         self.db.add(evento)
         self.db.flush()

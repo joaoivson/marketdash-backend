@@ -288,6 +288,10 @@ class InstagramMidiaDetectada(Base):
     ad_title = Column(Text, nullable=True)
     original_media_id = Column(String(128), nullable=True)
     eh_anuncio = Column(Boolean, nullable=True)
+    # Automação do mesmo produto que responde este anúncio (migration 086).
+    automation_id = Column(
+        Integer, ForeignKey("instagram_automations.id", ondelete="SET NULL"), nullable=True
+    )
 
     caption = Column(Text, nullable=True)
     permalink = Column(Text, nullable=True)

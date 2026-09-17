@@ -554,3 +554,39 @@ async def test_falha_ao_registrar_midia_nao_muda_o_desfecho(db, conexao, cliente
     assert resultado["status"] == "enviado"
     assert len(cliente.dms) == 1
 
+
+@pytest.mark.asyncio
+async def test_anuncio_vinculado_responde_pela_automacao_do_produto(db, conexao, cliente):
+    """Dark post sem ad_id nem original: só o vínculo (086) liga ao produto."""
+    automacao = _automacao(db, conexao, media_id=MEDIA_ID)
+    db.add(InstagramMidiaDetectada(
+        user_id=1, connection_id=conexao.id, media_id=ANUNCIO_MEDIA_ID, eh_anuncio=True,
+        automation_id=automacao.id, comentarios=5,
+    ))
+    db.commit()
+
+    resultado = await _processar(db, _comentario("c1", media_id=ANUNCIO_MEDIA_ID))
+
+    assert resultado["status"] == "enviado"
+    evento = db.query(InstagramEvent).filter(InstagramEvent.comment_id == "c1").one()
+    assert evento.automation_id == automacao.id
+    # Evento na mídia da automação: é o produto que conta, e o dedupe por pessoa
+    # vale entre post e anúncio.
+    assert evento.media_id == MEDIA_ID
+    assert db.query(InstagramMidiaDetectada).one().comentarios == 6
+
+
+@pytest.mark.asyncio
+async def test_anuncio_vinculado_a_automacao_pausada_nao_responde(db, conexao, cliente):
+    automacao = _automacao(db, conexao, media_id=MEDIA_ID, status="pausada")
+    db.add(InstagramMidiaDetectada(
+        user_id=1, connection_id=conexao.id, media_id=ANUNCIO_MEDIA_ID, eh_anuncio=True,
+        automation_id=automacao.id,
+    ))
+    db.commit()
+
+    resultado = await _processar(db, _comentario("c1", media_id=ANUNCIO_MEDIA_ID))
+
+    assert resultado["status"] == "ignorado"
+    assert cliente.dms == []
+

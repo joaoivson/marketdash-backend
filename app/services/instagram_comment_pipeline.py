@@ -211,14 +211,18 @@ class InstagramCommentPipeline:
 
         # 3) Automações ativas que cobrem o post
         ativas = self.repo.active_automations_for_connection(conexao.id)
+        vinculada_id = self._automacao_vinculada(conexao, media_entregue)
         # A automação pode ter sido criada NO ANÚNCIO (mídia detectada, sem post
-        # no feed) ou no POST que o anúncio impulsiona — as duas valem.
+        # no feed), no POST que o anúncio impulsiona, ou ter o anúncio VINCULADO
+        # a ela (mesmo produto, migration 086) — as três valem.
         candidatas = [
             a
             for a in ativas
-            if a.cobre_media(media_entregue) or (media_original and a.cobre_media(media_original))
+            if a.cobre_media(media_entregue)
+            or (media_original and a.cobre_media(media_original))
+            or (vinculada_id is not None and a.id == vinculada_id)
         ]
-        if ad_id or media_original or not candidatas:
+        if ad_id or media_original or vinculada_id is not None or not candidatas:
             self._registrar_midia(
                 conexao, media_entregue, ad_id, ad_title, media_original,
                 media.get("media_product_type"),
@@ -473,6 +477,15 @@ class InstagramCommentPipeline:
         return REPLY_ENVIADO
 
     # ------------------------------ registro ----------------------------- #
+
+    def _automacao_vinculada(self, conexao: InstagramConnection, media_id: str) -> Optional[int]:
+        """Mesma política do registro: falhar aqui nunca muda o desfecho."""
+        try:
+            return self.repo.automacao_vinculada_id(conexao.id, media_id)
+        except Exception as exc:
+            self.db.rollback()
+            logger.warning("Instagram: não li o vínculo do anúncio %s: %s", media_id, exc)
+            return None
 
     def _registrar_midia(
         self,

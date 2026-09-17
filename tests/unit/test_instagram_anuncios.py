@@ -240,3 +240,79 @@ async def test_sem_conexao_ativa_recusa(db, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await _servico(db).listar(1)
     assert exc.value.status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+#  Vínculo anúncio → automação do produto (migration 086)                      #
+# --------------------------------------------------------------------------- #
+
+
+def _automacao_post(db, conexao, media_id="post-1", **kw):
+    a = InstagramAutomation(
+        user_id=kw.pop("user_id", 1), connection_id=conexao.id, nome="Produto",
+        escopo=kw.pop("escopo", ESCOPO_POST_ESPECIFICO), media_id=media_id,
+        trigger_tipo=TRIGGER_PALAVRAS, palavras=["quero"], palavras_exibicao=["quero"],
+        resposta_publica_variacoes=[], dm_texto="t", status=kw.pop("status", AUTOMACAO_ATIVA),
+    )
+    db.add(a)
+    db.commit()
+    return a
+
+
+@pytest.mark.asyncio
+async def test_vincular_define_a_lista_completa(db, conexao, monkeypatch):
+    automacao = _automacao_post(db, conexao)
+    _midia(db, conexao, "ad-1", eh_anuncio=True, automation_id=automacao.id)
+    _midia(db, conexao, "ad-2", eh_anuncio=True)
+    _midia(db, conexao, "ad-3", eh_anuncio=True)
+
+    resp = await _servico(db).vincular(1, automacao.id, ["ad-2", "ad-3"])
+
+    assert sorted(resp.anuncios_vinculados) == ["ad-2", "ad-3"]
+    vinculos = {m.media_id: m.automation_id for m in db.query(InstagramMidiaDetectada).all()}
+    assert vinculos == {"ad-1": None, "ad-2": automacao.id, "ad-3": automacao.id}
+
+
+@pytest.mark.asyncio
+async def test_anuncio_pertence_a_uma_automacao_so(db, conexao, monkeypatch):
+    primeira = _automacao_post(db, conexao, media_id="post-1")
+    segunda = _automacao_post(db, conexao, media_id="post-2")
+    _midia(db, conexao, "ad-1", eh_anuncio=True, automation_id=primeira.id)
+
+    await _servico(db).vincular(1, segunda.id, ["ad-1"])
+
+    assert db.query(InstagramMidiaDetectada).one().automation_id == segunda.id
+
+
+@pytest.mark.asyncio
+async def test_vincular_recusa_midia_que_nao_e_anuncio_da_conta(db, conexao, monkeypatch):
+    automacao = _automacao_post(db, conexao)
+    _midia(db, conexao, "post-do-feed", eh_anuncio=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await _servico(db).vincular(1, automacao.id, ["post-do-feed", "inventado"])
+
+    assert exc.value.status_code == 422
+    assert db.query(InstagramMidiaDetectada).one().automation_id is None
+
+
+@pytest.mark.asyncio
+async def test_vincular_em_automacao_de_outra_aluna_da_404(db, conexao, monkeypatch):
+    automacao = _automacao_post(db, conexao)
+    with pytest.raises(HTTPException) as exc:
+        await _servico(db).vincular(2, automacao.id, [])
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_listagem_marca_anuncio_vinculado_a_automacao_ativa(db, conexao, monkeypatch):
+    automacao = _automacao_post(db, conexao)
+    _midia(db, conexao, "ad-1", eh_anuncio=True, media_product_type="AD",
+           metadados_lidos_em=AGORA, automation_id=automacao.id)
+    _graph(monkeypatch, {})
+
+    item = (await _servico(db).listar(1)).items[0]
+
+    assert item.automation_id_vinculada == automacao.id
+    assert item.tem_automacao is True
+

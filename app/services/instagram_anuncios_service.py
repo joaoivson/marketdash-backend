@@ -30,7 +30,12 @@ from sqlalchemy.orm import Session
 
 from app.models.instagram_automation import InstagramConnection, InstagramMidiaDetectada
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
-from app.schemas.instagram_automation import InstagramMediaItem, InstagramMediaPage
+from app.models.instagram_automation import AUTOMACAO_ATIVA, ESCOPO_POST_ESPECIFICO
+from app.schemas.instagram_automation import (
+    InstagramAutomationResponse,
+    InstagramMediaItem,
+    InstagramMediaPage,
+)
 from app.services import instagram_login_client as ig
 from app.services.instagram_automation_service import _caption_preview
 from app.services.instagram_connection_service import InstagramConnectionService
@@ -65,7 +70,9 @@ def _precisa_metadados(midia: InstagramMidiaDetectada, agora: datetime) -> bool:
     return bool(midia.thumbnail_url) and thumbnail_expirada(midia.thumbnail_url)
 
 
-def _item(midia: InstagramMidiaDetectada, cobertos: frozenset) -> InstagramMediaItem:
+def _item(
+    midia: InstagramMidiaDetectada, cobertos: frozenset, ativas: frozenset = frozenset()
+) -> InstagramMediaItem:
     miniatura = midia.thumbnail_url
     if miniatura and thumbnail_expirada(miniatura):
         miniatura = None
@@ -78,12 +85,13 @@ def _item(midia: InstagramMidiaDetectada, cobertos: frozenset) -> InstagramMedia
         thumbnail_url=miniatura,
         timestamp=midia.media_timestamp
         or (midia.ultimo_comentario_em.isoformat() if midia.ultimo_comentario_em else None),
-        tem_automacao=midia.media_id in cobertos,
+        tem_automacao=midia.media_id in cobertos or midia.automation_id in ativas,
         palavra_sugerida=palavra_pedida_na_legenda(midia.caption),
         eh_anuncio=True,
         ad_title=midia.ad_title,
         comentarios=midia.comentarios or 0,
         ultimo_comentario_em=midia.ultimo_comentario_em,
+        automation_id_vinculada=midia.automation_id,
     )
 
 
@@ -111,9 +119,52 @@ class InstagramAnunciosService:
 
         anuncios = [m for m in midias if m.eh_anuncio is True]
         cobertos = self.repo.media_ids_com_automacao_ativa(conexao.id)
+        ativas = frozenset(a.id for a in self.repo.active_automations_for_connection(conexao.id))
         return InstagramMediaPage(
-            items=[_item(m, cobertos) for m in anuncios], next_cursor=None, from_cache=False
+            items=[_item(m, cobertos, ativas) for m in anuncios], next_cursor=None, from_cache=False
         )
+
+    async def vincular(
+        self, user_id: int, automation_id: int, media_ids: List[str]
+    ) -> InstagramAutomationResponse:
+        """Define os anúncios da automação. A lista é a COMPLETA: o resto é desvinculado.
+
+        Um anúncio pertence a uma automação só: vincular aqui tira de onde estava.
+        Vínculo com automação ATIVA passa a responder os próximos comentários do
+        anúncio na hora — é a razão de existir, e por isso só a própria aluna
+        (ou alguém com o aval dela) faz.
+        """
+        from app.services.instagram_automation_service import InstagramAutomationService
+
+        automacao = self.repo.get_automation(user_id, automation_id)
+        if not automacao:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Automação não encontrada.")
+        if automacao.escopo != ESCOPO_POST_ESPECIFICO:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Só automação de uma publicação específica recebe anúncios.",
+            )
+        conexao = self.conexao_service.require_conexao_ativa(user_id)
+
+        pedidos = list(dict.fromkeys(str(m) for m in media_ids if m))
+        encontrados = self.repo.anuncios_da_conexao(conexao.id, pedidos)
+        faltando = sorted(set(pedidos) - {m.media_id for m in encontrados})
+        if faltando:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Anúncio não encontrado nesta conta: {', '.join(faltando)}",
+            )
+
+        self.repo.desvincular_anuncios(automacao.id)
+        for midia in encontrados:
+            midia.automation_id = automacao.id
+        self.db.commit()
+        logger.info(
+            "Instagram: automação %s (user_id=%s) com %d anúncio(s) vinculado(s)",
+            automacao.id, user_id, len(encontrados),
+        )
+        servico = InstagramAutomationService(self.repo)
+        return servico._to_response(automacao, self.repo.contadores_por_automacao(user_id))
 
     async def _ler_metadados(
         self, conexao: InstagramConnection, midias: List[InstagramMidiaDetectada]
