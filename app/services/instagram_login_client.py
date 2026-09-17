@@ -320,6 +320,30 @@ async def get_media(access_token: str, media_id: str) -> dict[str, Any]:
     return await _request("GET", _graph_url(media_id), params=params)
 
 
+# Campos de um comentário lido pela API — o mesmo recorte que o webhook entrega,
+# para o comentário retroativo passar pelo pipeline igual a um que chegou na hora.
+_CAMPOS_COMENTARIO = "id,text,timestamp,username,from,parent_id"
+
+
+async def list_comments(
+    access_token: str, media_id: str, after: Optional[str] = None, limit: int = 50
+) -> dict[str, Any]:
+    """Comentários de uma publicação, com as respostas embutidas, por cursor.
+
+    As respostas vêm em `replies` porque o webhook também entrega resposta a
+    comentário como comentário — quem responde "quero" embaixo de outra pessoa
+    teria recebido direct se a notificação tivesse chegado.
+    """
+    params = {
+        "fields": f"{_CAMPOS_COMENTARIO},replies{{{_CAMPOS_COMENTARIO}}}",
+        "limit": limit,
+        "access_token": access_token,
+    }
+    if after:
+        params["after"] = after
+    return await _request("GET", _graph_url(f"{media_id}/comments"), params=params)
+
+
 # --------------------------------------------------------------------------- #
 #  Envio                                                                       #
 # --------------------------------------------------------------------------- #

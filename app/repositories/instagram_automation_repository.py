@@ -224,6 +224,35 @@ class InstagramAutomationRepository:
             q = q.filter(InstagramEvent.media_id == str(media_id))
         return self.db.query(q.exists()).scalar() is True
 
+    def status_dos_comentarios(self, user_id: int, comment_ids: List[str]) -> Dict[str, str]:
+        """`comment_id → dm_status` dos que já passaram pelo pipeline, em lote."""
+        if not comment_ids:
+            return {}
+        linhas = (
+            self.db.query(InstagramEvent.comment_id, InstagramEvent.dm_status)
+            .filter(
+                InstagramEvent.user_id == user_id,
+                InstagramEvent.comment_id.in_([str(c) for c in comment_ids]),
+            )
+            .all()
+        )
+        return {str(c): s for c, s in linhas}
+
+    def pessoas_que_receberam(self, user_id: int, automation_id: int) -> set:
+        """Quem já recebeu o direct DESTA automação — a mesma régua do dedupe por pessoa."""
+        linhas = (
+            self.db.query(InstagramEvent.commenter_id)
+            .filter(
+                InstagramEvent.user_id == user_id,
+                InstagramEvent.automation_id == automation_id,
+                InstagramEvent.dm_status == DM_ENVIADO,
+                InstagramEvent.commenter_id.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+        return {str(c) for (c,) in linhas}
+
     def add_event(self, evento: InstagramEvent) -> InstagramEvent:
         self.db.add(evento)
         self.db.flush()
