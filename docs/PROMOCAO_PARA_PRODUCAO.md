@@ -787,7 +787,7 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > Suítes rodadas **no worktree de `main`**, não na develop: 646 no cherry-pick
 > da 083 e 694 no da cobertura, ambas sem falha.
 
-> ⚠️ **Mais três commits em `main` por cherry-pick (17/09/2026)**: comentário de
+> ⚠️ **Mais quatro commits em `main` por cherry-pick (17/09/2026)**: comentário de
 > anúncio (`original_media_id`) e envio retroativo de directs. **Sem migration.**
 >
 > | develop | main | o quê |
@@ -795,6 +795,7 @@ promoção do módulo demorar, vale um cherry-pick — **decisão do João, item
 > | back `779e78e` | `9d672ec` | pipeline casa comentário de anúncio com a automação do post |
 > | back `3320720` | `42c0fdb` | `GET/POST /automations/{id}/retroativos` + script de diagnóstico |
 > | front `adc7a39` | `70c2614` | modal "Enviar para quem já comentou" + rótulo do contador |
+> | front `144bf4e` | `6bdc1a3` | remove o botão "Cobrir publicações" (a rota em-lote continua) |
 >
 > CHANGELOG, runbook e memória ficaram na develop. Os arquivos tocados eram
 > **idênticos** entre `main` e develop no momento do cherry-pick. Mesmo assim,

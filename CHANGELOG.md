@@ -66,6 +66,11 @@ directs**.
   para "Uma publicação" que não seja rascunho.
 - O modal mostra o total elegível, o prazo do mais antigo, e as linhas de quem
   ficou de fora e por quê. Com a automação pausada, o botão trava.
+- O contador do card passa a dizer **"comentários com a palavra-chave"** (ou
+  "capturados" quando o gatilho é qualquer palavra). Ele nunca contou o total
+  do post, e "capturados" era lido como se contasse.
+- O botão **"Cobrir publicações"** saiu da lista de automações, a pedido do João.
+  A rota `/dashboard/automacoes/em-lote` continua existindo.
 
 ### Verificação
 
