@@ -7,6 +7,17 @@
 > da raiz e do `git log` de `develop`. Onde ela divergir do código, **o código
 > vence** — e quem notar corrige a seção aqui.
 
+
+## Deploy (mudou em 17/09/2026)
+
+**Nenhum `docker build` roda no VPS.** GitHub Actions constrói, publica no GHCR,
+Coolify puxa. Produção espera aprovação no Actions; `CI verde agora É deploy
+feito` (o job prova `/health.version` e `/version.json` antes de sair 0).
+
+O fluxo inteiro, as 8 apps e as 3 travas estão em `CLAUDE_MONOREPO.md` §
+"Branches e deploy" e em `docs/PROMOCAO_PARA_PRODUCAO.md` §10. **Leia antes de
+mexer em workflow, Dockerfile ou app do Coolify.**
+
 ## Stack (autoritativa — doc que divergir perde)
 
 FastAPI · SQLAlchemy (ORM, sem Alembic) · **PostgreSQL no Supabase** ·

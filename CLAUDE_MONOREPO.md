@@ -79,13 +79,48 @@ cd marketdash-backend && docker-compose up  # PostgreSQL, Redis, App, Worker
 ## Branches e deploy
 
 ```
-develop → CI → homologação    (push na develop deploya hml sozinho)
-main    → CI → PRODUÇÃO       (push na main deploya prod sozinho)
+develop → Actions constrói → GHCR → hml PUXA          (automático)
+main    → Actions constrói → GHCR → [APROVAÇÃO] → prod PUXA
 ```
+
+**Desde 17/09/2026 nenhum `docker build` roda no VPS.** O Coolify construía
+dentro do servidor que serve produção e isso derrubou produção 2× em 5 dias.
+Agora o GitHub Actions constrói, publica no GHCR, e o VPS só puxa a imagem
+pronta. Detalhes em `docs/PROMOCAO_PARA_PRODUCAO.md` §10.
 
 Os dois repos têm o mesmo par de workflows (`deploy-homologation.yml` /
 `deploy-production.yml`), com `paths-ignore: '**.md'` — commit só de doc **não**
 dispara deploy.
+
+### As 8 apps do VPS e de onde vem a imagem de cada uma
+
+| app | ambiente | imagem |
+|---|---|---|
+| API | produção | `ghcr.io/joaoivson/marketdash-backend:<sha>` |
+| Worker Celery | produção | `ghcr.io/joaoivson/marketdash-backend-worker:<sha>` |
+| Frontend | produção | `ghcr.io/joaoivson/marketdash-frontend:prod-<sha>` |
+| API | hml | `…/marketdash-backend:<sha>` |
+| Worker Celery | hml | `…/marketdash-backend-worker:<sha>` |
+| Worker WhatsApp | hml | `…/marketdash-backend-worker:<sha>` (mesma imagem) |
+| Frontend | hml | `…/marketdash-frontend:hml-<sha>` |
+| WAHA | hml | `devlikeapro/waha:latest` (terceiro) |
+
+Produção **não tem WAHA nem worker de WhatsApp** — o módulo de grupos é só hml.
+
+⚠️ **Uma imagem por ambiente no frontend.** O Vite grava as `VITE_*` INLINE no
+bundle; subir o artefato de hml em produção dá 401 em toda chamada autenticada.
+Os valores vêm de **GitHub Variables** (`vars.VITE_*_PROD` / `_HML`), não mais
+do painel do Coolify.
+
+### Três travas que sustentam isso
+
+1. `build_pack` tem de ser `dockerimage`. `deploy-imagem.sh` **recusa disparar**
+   numa app em `dockerfile` — um POST nesse estado mandaria o VPS compilar.
+2. **Auto Deploy do Coolify DESLIGADO** nas 8 apps. Ligado, o webhook do GitHub
+   App compila no VPS pelas costas do CI. O campo **não vem pela API**: só por
+   SQL em `application_settings`.
+3. **Gate de aprovação** no deploy de produção (`environment: production`,
+   revisor `joaoivson`).
 
 **Existem dois caminhos para produção, e o default não é o merge.**
 
@@ -101,10 +136,21 @@ teórico: `Base.metadata.create_all()` roda no boot da API e **cria em produçã
 toda tabela de model novo, sem RLS**, antes de qualquer migration. Antes de
 qualquer merge, liste o que mais vai (`git log --oneline origin/main..origin/develop`).
 
-**Depois de empurrar, CI verde não é deploy feito** — o job só diz que o webhook
-do Coolify foi aceito. Confirme pelo estado real: `status: finished` do
-deployment no Coolify + um marcador do código novo no ar (hash do bundle do
-frontend, endpoint que só existe agora, tempo/tamanho de resposta).
+**CI verde AGORA é deploy feito** — isto inverteu em 17/09/2026. O job só sai 0
+depois de o deployment chegar a `finished`, da tag gravada bater, e do código
+novo **responder** na URL real:
+
+```bash
+curl -s https://api.marketdash.com.br/health | jq -r .version     # == SHA empurrado
+curl -s https://marketdash.com.br/version.json | jq -r .version    # == SHA empurrado
+```
+
+O aviso antigo ("CI verde ≠ deploy") **continua valendo para app que ainda não
+migrou** para Docker Image — mas nessas o script recusa disparar e o job fica
+vermelho, que é o certo.
+
+**Rollback são segundos**: `gh workflow run deploy-production.yml -f tag=<sha>`
+pula o build e reaponta a imagem já publicada (as 15 últimas ficam no GHCR).
 
 **Cherry-pick deixa rastro para depois:** o SHA em `main` é outro, então o merge
 futuro da `develop` reconflita nesses arquivos. Registre o par de SHAs no
