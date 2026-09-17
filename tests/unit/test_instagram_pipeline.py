@@ -386,3 +386,83 @@ async def test_token_recusado_no_envio_pausa_as_automacoes(db, conexao, cliente)
     db.refresh(conexao)
     assert automacao.status == "pausada"
     assert conexao.status == "expirado"
+
+
+# --------------------------------------------------------------------------- #
+#  Comentário em ANÚNCIO (17/09/2026 — automação 12, @promosdabeatrizz_)       #
+# --------------------------------------------------------------------------- #
+#
+# Quando a publicação é impulsionada, a Meta entrega o comentário feito no
+# anúncio com `media.id` = mídia do ANÚNCIO e o post orgânico em
+# `media.original_media_id` (referência do webhook: IGCommentMedia). O pipeline
+# só olhava `media.id` e descartava tudo como "nenhuma automação cobre este post"
+# — o post tinha 50+ comentários e a tela mostrava 4.
+
+ANUNCIO_MEDIA_ID = "18607394596042322"
+
+
+def _comentario_em_anuncio(comment_id: str, commenter="9001", texto="quero", original=MEDIA_ID):
+    valor = _comentario(comment_id, texto=texto, commenter=commenter, media_id=ANUNCIO_MEDIA_ID)
+    valor["media"] = {
+        "id": ANUNCIO_MEDIA_ID,
+        "ad_id": "120200000000000001",
+        "ad_title": "Calcinhas Algodão",
+        "original_media_id": original,
+        "media_product_type": "FEED",
+    }
+    return valor
+
+
+@pytest.mark.asyncio
+async def test_comentario_no_anuncio_do_post_recebe_direct(db, conexao, cliente):
+    automacao = _automacao(db, conexao, media_id=MEDIA_ID)
+
+    resultado = await _processar(db, _comentario_em_anuncio("c1"))
+
+    assert resultado["status"] == "enviado"
+    assert cliente.dms and cliente.dms[0][0] == "c1"
+    evento = db.query(InstagramEvent).filter(InstagramEvent.comment_id == "c1").one()
+    assert evento.automation_id == automacao.id
+    # O evento é da PUBLICAÇÃO: é por esse id que a tela conta e o dedupe compara.
+    assert evento.media_id == MEDIA_ID
+
+
+@pytest.mark.asyncio
+async def test_comentario_no_anuncio_deixa_o_ad_id_no_desfecho(db, conexao, cliente):
+    """Sem o ad_id no ledger, "anúncio" e "outra cópia do post" ficam iguais."""
+    _automacao(db, conexao, media_id=MEDIA_ID)
+    resultado = await _processar(db, _comentario_em_anuncio("c1"))
+    assert "120200000000000001" in (resultado.get("motivo") or "")
+
+
+@pytest.mark.asyncio
+async def test_mesma_pessoa_no_anuncio_e_no_organico_recebe_um_direct(db, conexao, cliente):
+    """Anúncio e orgânico são a MESMA oferta: um direct por pessoa, não dois."""
+    _automacao(db, conexao, media_id=MEDIA_ID)
+
+    await _processar(db, _comentario("c1", media_id=MEDIA_ID))
+    resultado = await _processar(db, _comentario_em_anuncio("c2"))
+
+    assert resultado["status"] == "duplicado"
+    assert len(cliente.dms) == 1
+
+
+@pytest.mark.asyncio
+async def test_anuncio_de_outro_post_continua_ignorado_com_o_anuncio_no_motivo(db, conexao, cliente):
+    _automacao(db, conexao, media_id=MEDIA_ID)
+
+    resultado = await _processar(db, _comentario_em_anuncio("c1", original=OUTRO_MEDIA_ID))
+
+    assert resultado["status"] == "ignorado"
+    assert resultado["motivo"].startswith("nenhuma automação cobre este post")
+    assert "120200000000000001" in resultado["motivo"]
+    assert OUTRO_MEDIA_ID in resultado["motivo"]
+    assert cliente.dms == []
+
+
+@pytest.mark.asyncio
+async def test_comentario_organico_sem_anuncio_mantem_o_motivo_de_sempre(db, conexao, cliente):
+    """As consultas do ledger agrupam por esse texto exato."""
+    _automacao(db, conexao, media_id=MEDIA_ID)
+    resultado = await _processar(db, _comentario("c1", media_id=OUTRO_MEDIA_ID))
+    assert resultado["motivo"] == "nenhuma automação cobre este post"
