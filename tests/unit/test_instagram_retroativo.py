@@ -249,6 +249,25 @@ async def test_previa_informa_quando_o_primeiro_elegivel_expira(db, conexao, mon
 
 
 @pytest.mark.asyncio
+async def test_previa_separa_elegiveis_das_ultimas_24h(db, conexao, monkeypatch, fila):
+    automacao = _automacao(db, conexao)
+    _usar_graph(
+        monkeypatch,
+        [[
+            _c("recente", pessoa="p1", horas_atras=3),
+            _c("ontem", pessoa="p2", horas_atras=23),
+            _c("dois-dias", pessoa="p3", horas_atras=49),
+            _c("seis-dias", pessoa="p4", horas_atras=24 * 6),
+        ]],
+    )
+
+    previa = await _servico(db).previa(1, automacao.id)
+
+    assert previa.elegiveis == 4
+    assert previa.elegiveis_ultimas_24h == 2
+
+
+@pytest.mark.asyncio
 async def test_le_todas_as_paginas_de_comentarios(db, conexao, monkeypatch, fila):
     automacao = _automacao(db, conexao)
     graph = _usar_graph(

@@ -190,10 +190,12 @@ def montar_previa(
         contagem[c.grupo] = contagem.get(c.grupo, 0) + 1
 
     elegiveis_ts = [c.timestamp for c in classificados if c.grupo == GRUPO_ELEGIVEL and c.timestamp]
+    limite_24h = datetime.now(timezone.utc) - timedelta(hours=24)
     return InstagramRetroativoPrevia(
         automation_id=automation_id,
         total_comentarios=len(classificados),
         elegiveis=contagem.get(GRUPO_ELEGIVEL, 0),
+        elegiveis_ultimas_24h=sum(1 for ts in elegiveis_ts if ts >= limite_24h),
         ja_respondidos=contagem.get(GRUPO_JA_RESPONDIDO, 0),
         ja_processados=contagem.get(GRUPO_JA_PROCESSADO, 0),
         sem_palavra=contagem.get(GRUPO_SEM_PALAVRA, 0),
