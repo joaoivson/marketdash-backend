@@ -21,6 +21,7 @@ from app.models.instagram_automation import (
     InstagramAutomation,
     InstagramEvent,
     InstagramWebhookEntrega,
+    InstagramMidiaDetectada,
 )
 from app.models.campaign import Campaign, CampaignDailyInsight, CampaignPlatformDailyInsight
 from app.models.kiwify_plan_product import KiwifyPlanProduct

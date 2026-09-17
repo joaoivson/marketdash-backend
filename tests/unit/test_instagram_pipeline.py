@@ -24,6 +24,7 @@ from app.models.instagram_automation import (
     InstagramAutomation,
     InstagramConnection,
     InstagramEvent,
+    InstagramMidiaDetectada,
 )
 from app.repositories.instagram_automation_repository import InstagramAutomationRepository
 from app.services import instagram_login_client as ig
@@ -44,6 +45,7 @@ def db():
             InstagramConnection.__table__,
             InstagramAutomation.__table__,
             InstagramEvent.__table__,
+            InstagramMidiaDetectada.__table__,
         ],
     )
     sessao = sessionmaker(bind=engine)()
@@ -466,3 +468,80 @@ async def test_comentario_organico_sem_anuncio_mantem_o_motivo_de_sempre(db, con
     _automacao(db, conexao, media_id=MEDIA_ID)
     resultado = await _processar(db, _comentario("c1", media_id=OUTRO_MEDIA_ID))
     assert resultado["motivo"] == "nenhuma automação cobre este post"
+
+
+# --------------------------------------------------------------------------- #
+#  Automação criada NO ANÚNCIO + registro da mídia (migration 085)             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_automacao_no_anuncio_responde_comentario_com_original(db, conexao, cliente):
+    """Automação criada na mídia do anúncio: o original_media_id não pode desviá-la."""
+    automacao = _automacao(db, conexao, media_id=ANUNCIO_MEDIA_ID)
+
+    resultado = await _processar(db, _comentario_em_anuncio("c1", original=OUTRO_MEDIA_ID))
+
+    assert resultado["status"] == "enviado"
+    evento = db.query(InstagramEvent).filter(InstagramEvent.comment_id == "c1").one()
+    assert evento.automation_id == automacao.id
+    assert evento.media_id == ANUNCIO_MEDIA_ID
+
+
+@pytest.mark.asyncio
+async def test_automacao_no_anuncio_responde_dark_post_sem_campos_de_anuncio(db, conexao, cliente):
+    """Anúncio do Gerenciador que chega só com media.id — sem ad_id nem original."""
+    _automacao(db, conexao, media_id=ANUNCIO_MEDIA_ID)
+    resultado = await _processar(db, _comentario("c1", media_id=ANUNCIO_MEDIA_ID))
+    assert resultado["status"] == "enviado"
+
+
+@pytest.mark.asyncio
+async def test_comentario_sem_automacao_registra_a_midia_e_conta(db, conexao, cliente):
+    await _processar(db, _comentario("c1", media_id=ANUNCIO_MEDIA_ID))
+    await _processar(db, _comentario("c2", commenter="9002", media_id=ANUNCIO_MEDIA_ID))
+
+    midia = db.query(InstagramMidiaDetectada).one()
+    assert midia.media_id == ANUNCIO_MEDIA_ID
+    assert midia.comentarios == 2
+    assert midia.eh_anuncio is None, "sem ad_id, quem decide é a listagem contra as orgânicas"
+
+
+@pytest.mark.asyncio
+async def test_ad_id_no_webhook_marca_anuncio_com_titulo(db, conexao, cliente):
+    await _processar(db, _comentario_em_anuncio("c1", original=OUTRO_MEDIA_ID))
+
+    midia = db.query(InstagramMidiaDetectada).one()
+    assert midia.eh_anuncio is True
+    assert midia.ad_title == "Calcinhas Algodão"
+    assert midia.original_media_id == OUTRO_MEDIA_ID
+
+
+@pytest.mark.asyncio
+async def test_post_organico_coberto_nao_registra_midia(db, conexao, cliente):
+    _automacao(db, conexao, media_id=MEDIA_ID)
+    await _processar(db, _comentario("c1", media_id=MEDIA_ID))
+    assert db.query(InstagramMidiaDetectada).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_comentario_da_propria_conta_nao_registra_midia(db, conexao, cliente):
+    """As respostas públicas NOSSAS não podem inflar a contagem do anúncio."""
+    await _processar(db, _comentario("c1", commenter=IG_USER_ID, media_id=ANUNCIO_MEDIA_ID))
+    assert db.query(InstagramMidiaDetectada).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_falha_ao_registrar_midia_nao_muda_o_desfecho(db, conexao, cliente, monkeypatch):
+    _automacao(db, conexao, media_id=MEDIA_ID)
+
+    def _quebra(*args, **kwargs):
+        raise RuntimeError("tabela ausente")
+
+    monkeypatch.setattr(InstagramAutomationRepository, "registrar_midia_comentada", _quebra)
+
+    resultado = await _processar(db, _comentario_em_anuncio("c1"))
+
+    assert resultado["status"] == "enviado"
+    assert len(cliente.dms) == 1
+

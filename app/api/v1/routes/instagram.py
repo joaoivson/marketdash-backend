@@ -38,6 +38,7 @@ from app.schemas.instagram_automation import (
     InstagramRetroativoPrevia,
     InstagramRetroativoReconciliacao,
 )
+from app.services.instagram_anuncios_service import InstagramAnunciosService
 from app.services.instagram_automation_service import InstagramAutomationService
 from app.services.instagram_connection_service import InstagramConnectionService
 from app.services.instagram_retroativo_service import InstagramRetroativoService
@@ -144,6 +145,15 @@ async def listar_midias(
 ):
     """Publicações do perfil para a grade de seleção."""
     return await _automacoes(db).listar_midias(current_user.id, cursor=cursor, forcar=refresh)
+
+
+@router.get("/anuncios", response_model=InstagramMediaPage)
+async def listar_anuncios(
+    current_user: User = Depends(exige_plano_max),
+    db: Session = Depends(get_db),
+):
+    """Anúncios descobertos pelo comentário — não aparecem em /media (migration 085)."""
+    return await InstagramAnunciosService(InstagramAutomationRepository(db)).listar(current_user.id)
 
 
 # --------------------------------------------------------------------------- #
@@ -289,6 +299,18 @@ async def admin_reconciliar_contador(
 ):
     """Registra expirados e duplicados no contador. NUNCA envia direct."""
     return await _retroativos(db).reconciliar_admin(automation_id)
+
+
+@router.get("/admin/midias/{media_id}")
+async def admin_inspecionar_midia(
+    media_id: str,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """O que a Graph devolve para uma mídia detectada (anúncio). Só leitura, sem texto."""
+    return await InstagramAnunciosService(InstagramAutomationRepository(db)).inspecionar_admin(
+        media_id
+    )
 
 
 @router.delete("/automations/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)

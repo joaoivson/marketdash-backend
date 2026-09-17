@@ -190,6 +190,7 @@ class InstagramCommentPipeline:
         # "nenhuma automação cobre este post" (automação 12, 17/09/2026).
         media_original = str(media.get("original_media_id") or "")
         ad_id = str(media.get("ad_id") or "")
+        ad_title = media.get("ad_title")
         media_id = media_original or media_entregue
         origem_anuncio = (
             f" (anúncio ad_id={ad_id or '?'}, mídia={media_entregue or '?'}, "
@@ -210,7 +211,15 @@ class InstagramCommentPipeline:
 
         # 3) Automações ativas que cobrem o post
         ativas = self.repo.active_automations_for_connection(conexao.id)
-        candidatas = [a for a in ativas if a.cobre_media(media_id)]
+        # A automação pode ter sido criada NO ANÚNCIO (mídia detectada, sem post
+        # no feed) ou no POST que o anúncio impulsiona — as duas valem.
+        candidatas = [
+            a
+            for a in ativas
+            if a.cobre_media(media_entregue) or (media_original and a.cobre_media(media_original))
+        ]
+        if ad_id or media_original or not candidatas:
+            self._registrar_midia(conexao, media_entregue, ad_id, ad_title, media_original)
         if not candidatas:
             # O prefixo é fixo: as consultas do ledger agrupam por ele. O sufixo
             # do anúncio separa "anúncio de post sem automação" de "post sem
@@ -228,6 +237,10 @@ class InstagramCommentPipeline:
         #    todas as específicas e manda o link errado para a cliente.
         candidatas = ordenar_por_especificidade(candidatas)
         automacao = next((a for a in candidatas if automacao_dispara(a, texto)), None)
+        if automacao is not None and automacao.media_id:
+            # O evento e o dedupe por pessoa são da mídia DA AUTOMAÇÃO — é por ela
+            # que o card conta e que o retroativo compara.
+            media_id = automacao.media_id
         if automacao is None:
             self._registrar(
                 conexao, None, comment_id, media_id, commenter_id, commenter_username,
@@ -457,6 +470,38 @@ class InstagramCommentPipeline:
         return REPLY_ENVIADO
 
     # ------------------------------ registro ----------------------------- #
+
+    def _registrar_midia(
+        self,
+        conexao: InstagramConnection,
+        media_id: str,
+        ad_id: str,
+        ad_title: Optional[str],
+        media_original: str,
+    ) -> None:
+        """Guarda a mídia comentada (migration 085). NUNCA muda o desfecho.
+
+        É assim que um anúncio — que não aparece em /me/media — passa a existir
+        na tela de seleção. Falhar aqui (tabela ausente, banco lento) desfaz só
+        este registro: roda antes de qualquer outra escrita do comentário.
+        """
+        if not media_id:
+            return
+        try:
+            self.repo.registrar_midia_comentada(
+                conexao,
+                media_id,
+                ad_id=ad_id or None,
+                ad_title=ad_title,
+                original_media_id=media_original or None,
+            )
+            self.db.commit()
+        except Exception as exc:
+            self.db.rollback()
+            logger.warning(
+                "Instagram: não registrei a mídia comentada %s (conexão %s): %s",
+                media_id, conexao.id, exc,
+            )
 
     def _registrar(
         self,
