@@ -244,3 +244,17 @@ def test_contagem_nunca_impede_redirect_no_fallback(servico):
          patch("app.core.cache.cache_get", return_value=None), patch("app.core.cache.cache_set"):
         assert svc.handle_redirect("x", ip="1.1.1.1", user_agent="Mozilla/5.0") == {"url": "https://shopee.com.br/produto"}
     svc.repository.db.rollback.assert_called_once()
+
+
+# ---- observabilidade --------------------------------------------------------
+
+def test_tamanho_pendente_reflete_a_fila(redis):
+    assert cb.tamanho_pendente() == 0
+    for _ in range(4):
+        cb.registrar(7, 3, agendar=Mock())
+    assert cb.tamanho_pendente() == 4, "sinal de worker parado no /health"
+
+
+def test_tamanho_pendente_sem_redis_devolve_zero():
+    with patch.object(cb, "get_client", return_value=None):
+        assert cb.tamanho_pendente() == 0

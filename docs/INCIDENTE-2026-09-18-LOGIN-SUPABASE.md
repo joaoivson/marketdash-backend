@@ -97,6 +97,49 @@ Verificar em Supabase → Settings → API → *JWT Keys* se o projeto já está
 6. Rollback: `deploy-production.yml` com o SHA anterior (`440fad1`), ou por env
    `AUTH_VALIDACAO_LOCAL=false` / `CLIQUES_BUFFER_REDIS=false` sem redeploy de código.
 
+## Dependência de Redis — conferido em 18/09
+
+A pergunta veio da migração do build para o GitHub Actions: o pipeline teria
+desabilitado o Redis? **Não.** O que foi medido hoje:
+
+- `GET https://api.marketdash.com.br/health` → `"redis":"connected"`
+- `GET https://api.hml.marketdash.com.br/health` → `"redis":"connected"`
+- O pipeline não gerencia Redis. Os workflows só constroem a imagem, empurram
+  para o GHCR e fazem PATCH da tag na app do Coolify. Redis é um **recurso
+  separado**, nunca declarado nos workflows nem no `Dockerfile`; o
+  `docker-compose.yml` com serviço `redis` é só ambiente local.
+- O que provavelmente gerou a impressão está documentado em
+  `.claude/memoria/STATUS-painel-infra-admin.md`: o Coolify oscila o status dos
+  Redis entre `running:healthy` e `exited:unhealthy` **com o serviço
+  funcionando o tempo todo** — foi por isso que o painel de infra passou a
+  cruzar o status do Coolify com o `/health` real.
+- Segue de pé o achado da etapa 16b: existem **duas** instâncias de Redis, e só
+  a `h0cw0gc8owws004480g0sog8` é usada (api prod, worker prod e api hml apontam
+  para ela). A `y4so0kk48sg8woskskok8owo` não tem referência conhecida. Apagar
+  a nº 2 continua pendente — e é ação destrutiva em infra compartilhada, a ser
+  feita sozinha, nunca junto deste hotfix.
+
+### O que o `/health` NÃO prova
+
+Ele testa o Redis a partir da **API**. O worker Celery é outra app, com suas
+próprias envs, e é ele quem descarrega o buffer de cliques. Por isso o `/health`
+passou a devolver `cliques_pendentes` (`LLEN` do buffer): número que cresce e
+não drena = worker sem consumir. Antes do deploy em produção, confirmar que o
+worker tem o mesmo `REDIS_URL` da API.
+
+### Se o Redis cair, o que acontece
+
+| Cenário | Efeito | Perda de dado |
+|---|---|---|
+| Redis indisponível para a API | `registrar()` devolve False → incremento atômico direto no banco (fix de 17/09). Dedup de 60 s também para, então clique duplicado pode contar duas vezes | Nenhuma |
+| Redis de pé, worker parado | Cliques acumulam no buffer; contador do painel congela até o worker voltar | Nenhuma |
+| Redis reiniciado sem persistência | Perde o que estava no buffer: no máximo ~15 s de contagem de cliques | Só contador de clique |
+| Banco lento na descarga | Lote volta ao Redis e a task tenta de novo com backoff | Nenhuma |
+
+Em nenhum cenário o redirecionamento falha, e nada disso toca dado de usuária,
+dataset, assinatura ou campanha — o buffer só carrega `(link_id, user_id,
+timestamp)` de clique.
+
 ## Depois do hotfix
 - Alertas no Supabase (IO budget, RAM, conexões) e sonda sintética de login a cada 5 min.
 - Medir uma semana em Micro; decidir Small com dados (ver `docs/PLANO_ESCALA_100_USUARIAS.md`).
