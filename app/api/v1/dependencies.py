@@ -7,6 +7,7 @@ from sqlalchemy import text
 from supabase import create_client, Client
 
 from app.core.config import settings
+from app.core import supabase_jwt
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
 from app.repositories.subscription_repository import SubscriptionRepository
@@ -67,6 +68,41 @@ def get_supabase_service_client() -> Client:
     return _supabase_service
 
 
+def _email_do_token(token: str) -> str:
+    """Valida o Bearer token e devolve o e-mail da usuária.
+
+    Caminho quente = verificação LOCAL (assinatura + exp + aud), sem rede e
+    sem tocar o banco do Supabase — ver app/core/supabase_jwt.py e o
+    incidente de 18/09/2026. `auth.get_user` fica só como retaguarda para
+    quando não há chave configurada (deploy antes da variável existir) ou a
+    flag AUTH_VALIDACAO_LOCAL está desligada.
+    """
+    if settings.AUTH_VALIDACAO_LOCAL:
+        try:
+            claims = supabase_jwt.verificar_token(token)
+            email = supabase_jwt.email_das_claims(claims)
+            if not email:
+                raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+            return email
+        except supabase_jwt.TokenInvalido as e:
+            logger.warning(f"Token Supabase rejeitado na verificação local: {e}")
+            raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+        except supabase_jwt.TokenNaoVerificavelLocalmente as e:
+            logger.warning(f"Verificação local indisponível ({e}); usando auth.get_user")
+
+    try:
+        supabase = get_supabase_client()
+        user_supabase = supabase.auth.get_user(token)
+        if not user_supabase or not user_supabase.user or not user_supabase.user.email:
+            raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+        return user_supabase.user.email
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro ao validar token no Supabase: {e}")
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+
+
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
@@ -80,18 +116,7 @@ def get_current_user(
         )
     
     token = credentials.credentials
-    
-    # Validar token com Supabase Auth
-    try:
-        supabase = get_supabase_client()
-        user_supabase = supabase.auth.get_user(token)
-        if not user_supabase or not user_supabase.user:
-            raise HTTPException(status_code=401, detail="Token inválido ou expirado")
-        
-        email = user_supabase.user.email
-    except Exception as e:
-        logger.error(f"Erro ao validar token no Supabase: {e}")
-        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+    email = _email_do_token(token)
 
     # Buscar usuário no banco local pelo email (Link por Email)
     user = UserRepository(db).get_by_email(email)

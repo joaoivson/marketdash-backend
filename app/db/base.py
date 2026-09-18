@@ -7,7 +7,18 @@ Base = declarative_base()
 
 
 def _apply_safe_migrations(engine, logger):
-    """Add missing columns to existing tables. Each statement is idempotent."""
+    """Rede de proteção de schema para DEV/HML — NUNCA para produção.
+
+    Cada statement é idempotente no resultado, mas NÃO é de graça: todo
+    `ALTER TABLE` pega ACCESS EXCLUSIVE na tabela mesmo quando não há nada a
+    mudar, e `ALTER COLUMN ... TYPE` pode reescrever a tabela. No incidente de
+    18/09/2026 isso rodou 20x em 24h num banco já sufocado (a API reiniciava em
+    loop) e ajudou a derrubar o Auth junto.
+
+    Continua existindo porque o módulo de Grupos depende dela em HML: lá o
+    código costuma chegar antes da migration, e sem a coluna QUALQUER query da
+    tabela quebra. Em produção a ordem é a inversa — migration primeiro — então
+    o chamador só executa isto com `DB_SCHEMA_NO_STARTUP=true`."""
     migrations = [
         "ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS facebook_pixel_id VARCHAR",
         "ALTER TABLE facebook_integrations ADD COLUMN IF NOT EXISTS ad_accounts_json TEXT",
@@ -76,39 +87,56 @@ def _apply_safe_migrations(engine, logger):
         logger.warning(f"Safe migrations skipped: {e}")
 
 
-def init_db():
-    """Initialize database tables."""
-    # Import engine here to avoid circular import
-    from app.db.session import engine
-    from sqlalchemy import text
-    import time
-    import logging
-    
-    # Import all models to register them with Base.metadata
-    # This must happen before create_all()
+def _importar_modelos() -> None:
+    """Registra todos os modelos em Base.metadata (necessário para create_all)."""
     from app.models import User, Dataset, DatasetRow, Subscription, AdSpend, ClickRow, Job, JobChunk, CaptureSite, CustomLink, CustomLinkEvent, PageEvent  # noqa: F401
     from app.models.user_settings import UserSettings  # noqa: F401
     from app.models.shopee_integration import ShopeeIntegration  # noqa: F401
     from app.models.facebook_integration import FacebookIntegration  # noqa: F401
     from app.models.campaign import Campaign, CampaignDailyInsight  # noqa: F401
-    
+
+
+def init_db():
+    """Verifica a conexão com o banco no startup.
+
+    Incidente de 18/09/2026: este startup rodava `create_all` (dezenas de
+    consultas ao catálogo) mais dois `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+    a CADA boot da API e do worker. Com o healthcheck do Coolify reiniciando o
+    container porque o banco estava lento, foram 20 execuções em 24h — cada
+    `ALTER TABLE` pega lock exclusivo na tabela, mesmo sem alterar nada, e
+    bloqueava tudo que usava `capture_sites` e `facebook_integrations` num
+    banco já sufocado.
+
+    Agora, por padrão, o startup só confirma que o banco responde. Schema é
+    migration (`migrations/*.sql`); as colunas de `capture_sites` e
+    `facebook_integrations` viraram a 087.
+
+    `DB_SCHEMA_NO_STARTUP=true` devolve `create_all` + `_apply_safe_migrations`
+    — é o modo de DEV e HML, onde o código costuma chegar antes da migration e
+    a rede de proteção do módulo de Grupos ainda é necessária. Em produção a
+    variável NÃO existe.
+    """
+    from app.db.session import engine
+    from app.core.config import settings
+    from sqlalchemy import text
+    import time
+    import logging
+
     logger = logging.getLogger(__name__)
-    
-    # Retry logic to wait for database to be ready
+
     max_retries = 30
     retry_delay = 2
-    
+
     for attempt in range(max_retries):
         try:
-            # Test connection
-            with engine.begin() as conn:
+            with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-                logger.info("Database connection successful")
-            # If connection successful, create tables (no-op for existing)
-            Base.metadata.create_all(bind=engine)
-            # Add missing columns to existing tables (create_all doesn't do this)
-            _apply_safe_migrations(engine, logger)
-            logger.info("Database tables created/updated successfully")
+            logger.info("Database connection successful")
+            if settings.DB_SCHEMA_NO_STARTUP:
+                _importar_modelos()
+                Base.metadata.create_all(bind=engine)
+                _apply_safe_migrations(engine, logger)
+                logger.info("Schema garantido no startup (DB_SCHEMA_NO_STARTUP=true)")
             return
         except Exception as e:
             if attempt < max_retries - 1:
@@ -117,4 +145,3 @@ def init_db():
             else:
                 logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
                 raise
-

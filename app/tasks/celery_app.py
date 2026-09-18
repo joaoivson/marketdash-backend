@@ -120,6 +120,7 @@ celery_app.conf.include = [
     "app.tasks.roteiro_tasks",
     "app.tasks.monitoramento_tasks",
     "app.tasks.proxy_tasks",
+    "app.tasks.click_tasks",
 ]
 
 # Auto-discover any other tasks under app.tasks
