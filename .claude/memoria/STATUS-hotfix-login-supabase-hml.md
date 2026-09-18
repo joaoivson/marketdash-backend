@@ -371,3 +371,42 @@ classificador do Claude Code bloqueou, corretamente — ler credencial de arquiv
 e disparar requisição de auth tem a cara de abuso. Não contornei. A validação
 foi feita exercitando os ramos com códigos simulados, e a checagem real fica
 para o primeiro ciclo depois que o secret existir.
+
+## 3.4 — sonda de login NO AR (18/09 15:50 UTC)
+
+Secret `SUPABASE_ANON_KEY_PROD` gravado (chave publicável, `role: anon`, ref
+`iprdyorxqdiivthtcvxf`) e `monitor-producao.yml` levada para a `main`.
+
+### Par de SHAs do cherry-pick (para o merge futuro)
+
+| Branch | SHA |
+|---|---|
+| `develop` | `84d3993` |
+| `main` | `f27d982` |
+
+Somado ao da vigia (`8341926`+`03d826b` ↔ `0072ffa`), são **dois** arquivos de
+workflow que vão reconflitar no próximo merge de promoção. Resolver mantendo o
+lado da `develop` nos dois.
+
+### Medição real (run 35364572964, contra produção)
+
+```
+api:      http=200 tempo=0.494s tipo=application/json
+auth:     http=400 tempo=0.526s      <- a sonda nova
+frontend: http=200
+```
+
+`auth: 400` em 0,53s é o caminho feliz: o GoTrue recusou a senha, o que só é
+possível se ele consultou o Postgres. Nenhuma issue foi aberta, nenhum alerta
+disparado, deploy de produção não foi tocado (último segue o de 17/09).
+
+**Linha de base para comparar depois:** Auth recusa senha errada em ~0,5s medido
+do runner do GitHub. O alarme de lentidão está em 3s — folga de ~6x.
+
+### Um falso alarme descartado na hora
+
+O `/health` de produção marcou 0,49s no runner, contra os ~0,12s documentados
+como normal — que é justamente o sintoma de CPU estrangulada da Hostinger. Medi
+daqui: 0,39s na primeira amostra (handshake TLS) e **0,10s estável** nas quatro
+seguintes. Ou seja, é distância de rede do runner, não throttling. Vale lembrar
+disto quando alguém olhar o log da sonda e se assustar com o número.
