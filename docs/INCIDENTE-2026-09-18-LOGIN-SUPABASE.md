@@ -80,16 +80,44 @@ Três problemas de código que se reforçam, sobre uma instância subdimensionad
 Verificar em Supabase → Settings → API → *JWT Keys* se o projeto já está em
 **ES256** (chaves assimétricas). Se sim, nada a configurar — o JWKS é público.
 
+## Duas branches (a `develop` divergiu da `main`)
+
+`main` e `develop` conflitam em 9 arquivos por conta do módulo de Grupos, então
+o hotfix existe em duas versões, com os mesmos 4 commits:
+
+| Branch | Base | Destino |
+|---|---|---|
+| `hotfix/login-supabase-io-esgotado` | `main` | produção |
+| `hotfix/login-supabase-io-esgotado-develop` | `develop` | HML |
+
+**Decisão tomada na versão da `develop` — revisar.** Lá o
+`_apply_safe_migrations` cresceu para ~20 statements, com a justificativa
+documentada de que o código do módulo de Grupos costuma chegar antes da
+migration e sem a coluna qualquer query da tabela quebra. Removê-lo por
+completo quebraria HML. A resolução: a função **continua existindo**, mas só
+roda com `DB_SCHEMA_NO_STARTUP=true` — ligado em HML e dev, ausente em
+produção. Consequência prática: em HML o boot continua pegando lock exclusivo
+nessas tabelas (aceitável, dados sintéticos); em produção, nunca mais.
+
+Dois statements dessa lista merecem atenção à parte, independentemente do
+hotfix: `ALTER TABLE whatsapp_grupos ALTER COLUMN sub_id TYPE VARCHAR(64)` não
+é `IF NOT EXISTS` — o Postgres pode reescrever a tabela inteira a cada boot em
+que ele rodar.
+
 ## Plano de deploy
 
-1. **HML primeiro.** Merge desta branch em `develop` → deploy automático em HML.
+1. **HML primeiro.** Merge de `hotfix/login-supabase-io-esgotado-develop` em
+   `develop` → deploy automático em HML. Definir `DB_SCHEMA_NO_STARTUP=true`
+   nas envs de HML (API e worker) ANTES do deploy, senão o módulo de Grupos
+   perde a rede de proteção de schema.
 2. **Teste de carga em HML:** `k6 run tests/load/k6_redirect_cliques.js` (500 req/min no
    mesmo slug por 5 min). Critérios: p95 do redirect < 300 ms; zero 5xx; no Supabase de HML,
    **nenhum** `UPDATE custom_links` por clique nos logs (só 1 a cada ~15 s por link); login
    funcionando durante o teste.
 3. Validar no log da API: `Autenticação Supabase OK` sem `usando auth.get_user` (se aparecer,
    falta `SUPABASE_JWT_SECRET` ou o JWKS não respondeu).
-4. **Produção em horário de baixo uso** (após 22h). Merge em `main` dispara
+4. **Produção em horário de baixo uso** (após 22h). Merge de
+   `hotfix/login-supabase-io-esgotado` em `main` dispara
    `deploy-production.yml`. Confirmar `version` em `https://api.marketdash.com.br/health`
    igual ao SHA do merge.
 5. Acompanhar 30 min: Supabase → Reports → Database (IO, conexões) e Auth logs (`GET /user`
