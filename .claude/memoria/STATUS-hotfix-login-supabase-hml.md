@@ -410,3 +410,55 @@ como normal — que é justamente o sintoma de CPU estrangulada da Hostinger. Me
 daqui: 0,39s na primeira amostra (handshake TLS) e **0,10s estável** nas quatro
 seguintes. Ou seja, é distância de rede do runner, não throttling. Vale lembrar
 disto quando alguém olhar o log da sonda e se assustar com o número.
+
+---
+
+## Branch de PRODUÇÃO importada e PR aberto (18/09 16:05 UTC) — NÃO mergeada
+
+Bundle `hotfix-login-supabase-io-esgotado.bundle` importado. Confere com o que
+o João anunciou: **7 commits, 20 arquivos, +1364/−92**. Base `440fad1`, que
+segue ancestral da `main` (hoje `f27d982`) — não precisou rebase.
+
+**PR #64** → `main`. `MERGEABLE` / `CLEAN`. **Parado de propósito.**
+
+| Verificação | Resultado |
+|---|---|
+| 5 arquivos de teste do hotfix | **43 passed** |
+| `tests/unit` completa nesta branch | **871 passed, 0 failed** |
+| Merge de teste contra `main` atual | automático, **sem conflito** |
+| Os 2 workflows novos sobrevivem ao merge | ✅ |
+| Push da branch disparou deploy? | Não (só merge em `main` dispara) |
+
+### Duas armadilhas que a comparação entre as branches revelou
+
+**1. `DB_SCHEMA_NO_STARTUP` NÃO é inócua em produção.** O João descreveu a
+remoção do `_apply_safe_migrations` como se a variável perdesse efeito lá. Ela
+perdeu os 22 `ALTER TABLE`, mas **ainda controla `create_all`**:
+
+```python
+if settings.DB_SCHEMA_NO_STARTUP:
+    _importar_modelos()
+    Base.metadata.create_all(bind=engine)
+```
+
+E `create_all` em produção cria toda tabela de model novo **sem RLS** — a
+armadilha do CLAUDE.md. A variável tem de ficar AUSENTE lá, não `false`. Se
+alguma coisa, é a metade MAIS perigosa que sobrou.
+
+**2. A linha de log é OUTRA, e a checagem planejada daria falso positivo.**
+
+| Branch | String |
+|---|---|
+| develop (HML) | `Schema garantido no startup (DB_SCHEMA_NO_STARTUP=true)` |
+| main (produção) | `Database tables created (DB_SCHEMA_NO_STARTUP=true)` |
+
+Procurar a ausência da string de HML nos logs de produção "passaria" sempre —
+ela não existe nesta branch. A verificação correta é a ausência de
+**`Database tables created`**.
+
+### Nota: lixo local sem efeito no CI
+
+A suíte completa quebra na coleção no meu disco por causa de 7 arquivos
+`* 2.py` (duplicatas do macOS) em `tests/unit/`. **Não são rastreados em
+nenhuma branch** — o CI faz checkout limpo e não os vê. Rodando com
+`--ignore-glob="* 2.py"`, 871 passam.
