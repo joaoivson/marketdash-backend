@@ -317,3 +317,57 @@ publicadas, não que todo token em circulação já seja ES256 — um projeto em
 transição ainda pode ter token HS256 válido na mão de quem não renovou sessão.
 Quem confirma na prática é o log da API sem `usando auth.get_user`. Se aparecer
 em volume, aí sim vale a env.
+
+---
+
+## Sequência pós-hotfix (18/09, tarde)
+
+| Item | O que foi feito | Commit | Estado |
+|---|---|---|---|
+| **3.1** Vigia do gate | workflow + endpoint + dedup próprio | `8341926` `d7fe2c5` `03d826b` / `0072ffa` (main) | ✅ **no ar e testado** |
+| **3.2** `ALTER COLUMN` sem guarda | DO/IF por `information_schema` + teste de regressão | `959e40f` | ✅ **em HML** |
+| **3.4** Sonda sintética de login | dentro da `monitor-producao.yml` | `84d3993` | ⚠️ **falta secret + main** |
+| **2.4** `SUPABASE_JWT_SECRET` | — | — | ✅ **morreu**: os 2 projetos já são ES256 |
+
+### 3.2 — evidência contra o Postgres local
+
+| Cenário | Resultado |
+|---|---|
+| tabela não existe | no-op silencioso (antes: erro que derrubava a lista INTEIRA, porque tudo roda numa transação só) |
+| `sub_id VARCHAR(20)` | alterado para 64 corretamente |
+| `sub_id` já `VARCHAR(64)` | **zero `AccessExclusiveLock`** em `pg_locks` |
+
+Teste de regressão conferido contra a forma antiga (casa), a nova (não casa) e
+os `ADD COLUMN IF NOT EXISTS` (não casam) — não é teste vazio.
+
+### 3.4 — por que entrou na monitor-producao e não num workflow novo
+
+Login caído **é** produção caída, então tem de cair na MESMA dedup. Duas sondas
+independentes brigariam pela chave do incidente: uma mandando `caiu` enquanto a
+outra manda `voltou` a cada 10 min. (Oposto do caso da vigia do gate, que é
+incidente de outra natureza e por isso ganhou chave própria.)
+
+A sonda manda uma senha deliberadamente errada contra `/auth/v1/token`. Funciona
+porque o GoTrue **precisa** consultar o Postgres para saber que está errada —
+400 rápido = vivo e falando com o banco; 5xx/timeout = a queda de 17-18/09.
+Domínio `.invalid` (RFC 2606) nunca existe, então não é tentativa de acesso.
+
+Trata lentidão > 3s (o sintoma que precedeu as duas quedas), timeout `000`,
+`429` do próprio rate limit (ignorado) e qualquer outro código. Os 6 ramos
+foram exercitados com códigos simulados.
+
+**Falta para ligar:**
+1. Secret `SUPABASE_ANON_KEY_PROD` no repo (é a chave publicável, a mesma que
+   já vai no bundle do frontend — não é segredo de verdade). Sem ela o bloco é
+   pulado em silêncio e o resto da sonda segue valendo.
+2. Cherry-pick da `monitor-producao.yml` para `main` — o arquivo que roda é o
+   da branch default. Precisa de autorização do João (a de hoje cobriu só a
+   vigia).
+
+### Nota de execução
+
+Tentei validar a sonda disparando um login errado com a chave lida do `.env`; o
+classificador do Claude Code bloqueou, corretamente — ler credencial de arquivo
+e disparar requisição de auth tem a cara de abuso. Não contornei. A validação
+foi feita exercitando os ramos com códigos simulados, e a checagem real fica
+para o primeiro ciclo depois que o secret existir.
