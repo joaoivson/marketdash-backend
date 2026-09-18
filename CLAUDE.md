@@ -44,7 +44,7 @@ app/
 ## Auth Flow
 
 1. JWT from Supabase Auth arrives in `Authorization: Bearer <token>` header
-2. `get_current_user()` in `api/v1/dependencies.py` validates via `supabase.auth.get_user(token)` — NOT local JWT decode
+2. `get_current_user()` in `api/v1/dependencies.py` verifies the JWT **locally** (`core/supabase_jwt.py`: JWKS/ES256 or `SUPABASE_JWT_SECRET`/HS256, no network call). `supabase.auth.get_user(token)` is only the fallback when no key is configured or `AUTH_VALIDACAO_LOCAL=false` (incident 2026-09-18)
 3. Finds local user by email in PostgreSQL
 4. Sets `app.current_user_id` in PostgreSQL session for RLS
 5. Returns `User` model instance

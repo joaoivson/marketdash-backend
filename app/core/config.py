@@ -34,9 +34,27 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: Optional[str] = None          # service_role (antigo)
     SUPABASE_PUBLISHABLE_KEY: Optional[str] = None      # sb_publishable_… (novo)
     SUPABASE_SECRET_KEY: Optional[str] = None           # sb_secret_… (novo)
-    # Só é necessária para verificar o JWT LOCALMENTE, o que não fazemos hoje.
-    # Declarada para o `.env` do time não precisar ser podado.
+    # Verificação LOCAL do token (app/core/supabase_jwt.py) — incidente de
+    # 18/09/2026. `SUPABASE_JWKS_URL` é opcional: sem ela, deriva de
+    # `SUPABASE_URL` (…/auth/v1/.well-known/jwks.json). `SUPABASE_JWT_SECRET`
+    # só é usado por projetos ainda em HS256 (Settings → API → JWT Secret).
+    # Com `AUTH_VALIDACAO_LOCAL=false` volta ao `auth.get_user` de antes.
     SUPABASE_JWKS_URL: Optional[str] = None
+    SUPABASE_JWT_SECRET: Optional[str] = None
+    AUTH_VALIDACAO_LOCAL: bool = True
+
+    # Startup NÃO mexe no schema em produção (incidente 18/09/2026): o
+    # `create_all` + `ALTER TABLE` a cada boot rodaram 20x em 24h, cada um
+    # pegando lock exclusivo num banco já sufocado. Schema é migration em
+    # `migrations/`. Ligue só em dev/test para criar tabelas do zero.
+    DB_SCHEMA_NO_STARTUP: bool = False
+
+    # Cliques dos links: buffer no Redis + descarga em lote pelo worker
+    # (app/services/click_buffer.py). Desligado, cai no incremento atômico
+    # direto no banco (fix de 17/09).
+    CLIQUES_BUFFER_REDIS: bool = True
+    CLIQUES_FLUSH_INTERVALO_S: int = 15
+    CLIQUES_CACHE_LINK_S: int = 60
 
     @property
     def supabase_chave_publica(self) -> Optional[str]:
