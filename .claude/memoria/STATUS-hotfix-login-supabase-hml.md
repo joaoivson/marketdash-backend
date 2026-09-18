@@ -658,3 +658,57 @@ O critério "k6 verde" **é atingido na taxa alvo** quando a concorrência do
 cliente não é artificialmente inflada. A leitura honesta: o hotfix entrega o que
 promete (mediana 27ms, p95 99ms, zero perda de clique), e o comportamento ruim
 da 1ª rodada não foi reproduzido em condições normais.
+
+---
+
+## HOTFIX EM PRODUÇÃO (18/09 18:09 UTC) — merge `ccdbcf5`, PR #64
+
+Gate aprovado pelo João. Run `35377933803`.
+
+| Critério | Resultado |
+|---|---|
+| `version` == SHA do merge | ✅ `ccdbcf5` |
+| `/health/live` | ✅ **200** (era 404) |
+| `cliques_pendentes` presente | ✅ |
+| `database` / `redis` | ✅ connected |
+| **Worker drenando** | ✅ buffer oscila 0↔4, chegou a **0** em 32s |
+
+O worker de produção compartilha o Redis com a API — era o maior risco de falha
+silenciosa e está descartado com evidência, não com suposição.
+
+## ⚠️ ACHADO: `DATABASE_URL` de produção NÃO usa o pooler
+
+Print enviado pelo João mostra:
+
+```
+…@db.iprdyorxqdiivthtcvxf.supabase.co:5432/postgres?sslmode=require
+```
+
+É a **conexão direta** (`db.<ref>…:5432`). O dossiê pedia explicitamente
+`…pooler.supabase.com:6543` em modo transaction, e este item estava no
+checklist como "conferir, não assumir". **Conferido: está errado.**
+
+Por que importa: a conexão direta tem teto de conexões atrelado ao tamanho do
+compute. O incidente de 17-18/09 registrou **852 × `could not accept SSL
+connection: EOF detected`** — esgotamento de conexões. A API roda gunicorn com 2
+workers e o Celery com concorrência 8, cada um com pool SQLAlchemy próprio.
+
+**NÃO trocar agora.** Motivos:
+1. Seriam duas mudanças na mesma noite, logo após um deploy — se algo quebrar,
+   não se sabe qual foi.
+2. Pooler em modo transaction tem armadilhas próprias (prepared statements).
+   `SET LOCAL app.current_user_id` do RLS **sobrevive** (é transaction-scoped),
+   mas isso precisa ser confirmado em HML antes, não descoberto em produção.
+
+Vira item de rodada própria: trocar em HML, validar RLS e sync, depois produção.
+
+## Como ver o log de boot (pendência do João)
+
+Coolify → projeto → aplicação **API de produção** → aba **Logs**. Procurar, nas
+linhas do startup:
+
+- `Database connection successful` — deve aparecer
+- `Database tables created (DB_SCHEMA_NO_STARTUP=true)` — **NÃO pode aparecer**
+
+Atenção: a string em produção é `Database tables created`, diferente da de HML
+(`Schema garantido no startup`). Procurar a de HML aqui daria falso positivo.
