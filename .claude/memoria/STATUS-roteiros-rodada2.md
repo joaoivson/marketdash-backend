@@ -4,6 +4,10 @@ Documento de origem: `marketdash_roteiros_alteracoes` (rodada 2), 18/09/2026.
 Plano: `~/.claude/plans/marketdash-roteiros-swift-shore.md`.
 Branches: `develop` nos dois repos.
 
+**NO AR EM HOMOLOGAÇÃO** desde 18/09 20:29 UTC — confirmado pela URL real, não
+só por CI verde: `api.hml` devolve `446aded` no `/health` e serve
+`/api/v1/uploads/midia` no openapi; `hml` devolve `d01850b` no `version.json`.
+
 Legenda — **Código**: ⬜ não começou · 🔄 em andamento · ✅ escrito com `pytest`/`tsc`/`lint` verdes.
 **API**: ✅ só depois de conferir a resposta real do backend. **Tela**: ✅ só depois de validar no navegador via Playwright, comparando linha concreta (API × célula).
 
@@ -24,7 +28,8 @@ Legenda — **Código**: ⬜ não começou · 🔄 em andamento · ✅ escrito c
 | L | Estado vazio + "Início" | Texto novo; rótulo "Início" no passo 1 | eu | ✅ | — | ✅ "Passo 1 de 1 · Início" |
 | D | Coluna "Cheio" | Sim/Não resolvido + cadeado no override | eu | ✅ | ✅ `cheio` já vinha da API | ✅ "Não" em 901/1000 |
 | N | Passo enviado travado | Era só verificar — **e estava quebrado** | eu | ✅ | — | ✅ cadeado, sem setas nem ✕ |
-| — | Documentação | CHANGELOG + memória + runbook | eu | 🔄 | — | — |
+| — | Documentação | CHANGELOG + memória + runbook | eu | ✅ | — | — |
+| — | **Deploy em hml** | push na `develop` nos 2 repos | eu | ✅ | ✅ `/health` = `446aded`, `/uploads/midia` no openapi | ✅ `version.json` = `d01850b` |
 
 ## Decisões desta rodada (confirmadas com o João em 18/09)
 
