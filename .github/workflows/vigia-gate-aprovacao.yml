@@ -14,6 +14,17 @@ name: Vigia do gate de aprovação
 # e o Actions é, nas palavras do monitor-producao.yml, "onde ninguém olha".
 #
 # Este workflow não muda o gate. Ele só avisa que há alguém esperando.
+#
+# ⚠️ SÓ FUNCIONA A PARTIR DA BRANCH DEFAULT (`main`).
+#
+# `schedule` e `workflow_dispatch` são lidos exclusivamente da branch default do
+# repositório. Enquanto este arquivo existir só na `develop`, ele NÃO roda — e
+# nem aparece em `gh workflow run` (devolve 404 "not found on the default
+# branch"). É o mesmo motivo pelo qual monitor-producao.yml vive na `main`.
+#
+# Ou seja: mergear isto na develop não liga a vigia. Ela só passa a existir de
+# verdade quando o arquivo chegar na `main` — por cherry-pick ou pelo próximo
+# merge de promoção. Até lá, o gate continua silencioso.
 
 on:
   schedule:
