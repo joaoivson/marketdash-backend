@@ -6,55 +6,50 @@ Base = declarative_base()
 # Models are imported in app/models/__init__.py to avoid circular imports
 
 
-def _apply_safe_migrations(engine, logger):
-    """Add missing columns to existing tables. Each statement is idempotent."""
-    migrations = [
-        "ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS facebook_pixel_id VARCHAR",
-        "ALTER TABLE facebook_integrations ADD COLUMN IF NOT EXISTS ad_accounts_json TEXT",
-    ]
-    from sqlalchemy import text
-    try:
-        with engine.begin() as conn:
-            for stmt in migrations:
-                conn.execute(text(stmt))
-        logger.info("Safe migrations applied successfully")
-    except Exception as e:
-        logger.warning(f"Safe migrations skipped: {e}")
-
-
-def init_db():
-    """Initialize database tables."""
-    # Import engine here to avoid circular import
-    from app.db.session import engine
-    from sqlalchemy import text
-    import time
-    import logging
-    
-    # Import all models to register them with Base.metadata
-    # This must happen before create_all()
+def _importar_modelos() -> None:
+    """Registra todos os modelos em Base.metadata (necessário para create_all)."""
     from app.models import User, Dataset, DatasetRow, Subscription, AdSpend, ClickRow, Job, JobChunk, CaptureSite, CustomLink, CustomLinkEvent, PageEvent  # noqa: F401
     from app.models.user_settings import UserSettings  # noqa: F401
     from app.models.shopee_integration import ShopeeIntegration  # noqa: F401
     from app.models.facebook_integration import FacebookIntegration  # noqa: F401
     from app.models.campaign import Campaign, CampaignDailyInsight  # noqa: F401
-    
+
+
+def init_db():
+    """Verifica a conexão com o banco no startup.
+
+    Incidente de 18/09/2026: este startup rodava `create_all` (dezenas de
+    consultas ao catálogo) mais dois `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+    a CADA boot da API e do worker. Com o healthcheck do Coolify reiniciando o
+    container porque o banco estava lento, foram 20 execuções em 24h — cada
+    `ALTER TABLE` pega lock exclusivo na tabela, mesmo sem alterar nada, e
+    bloqueava tudo que usava `capture_sites` e `facebook_integrations` num
+    banco já sufocado.
+
+    Agora o startup só confirma que o banco responde. Schema é migration
+    (`migrations/*.sql`); as duas colunas viraram a 087. `create_all` fica
+    atrás de `DB_SCHEMA_NO_STARTUP=true`, para dev/test subir do zero.
+    """
+    from app.db.session import engine
+    from app.core.config import settings
+    from sqlalchemy import text
+    import time
+    import logging
+
     logger = logging.getLogger(__name__)
-    
-    # Retry logic to wait for database to be ready
+
     max_retries = 30
     retry_delay = 2
-    
+
     for attempt in range(max_retries):
         try:
-            # Test connection
-            with engine.begin() as conn:
+            with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-                logger.info("Database connection successful")
-            # If connection successful, create tables (no-op for existing)
-            Base.metadata.create_all(bind=engine)
-            # Add missing columns to existing tables (create_all doesn't do this)
-            _apply_safe_migrations(engine, logger)
-            logger.info("Database tables created/updated successfully")
+            logger.info("Database connection successful")
+            if settings.DB_SCHEMA_NO_STARTUP:
+                _importar_modelos()
+                Base.metadata.create_all(bind=engine)
+                logger.info("Database tables created (DB_SCHEMA_NO_STARTUP=true)")
             return
         except Exception as e:
             if attempt < max_retries - 1:
@@ -63,4 +58,3 @@ def init_db():
             else:
                 logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
                 raise
-

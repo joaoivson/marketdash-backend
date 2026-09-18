@@ -9,6 +9,8 @@ from app.repositories.custom_link_repository import CustomLinkRepository
 from app.repositories.custom_link_event_repository import CustomLinkEventRepository
 from app.utils.bot_detection import is_bot
 from app.utils.tracking_dedup import should_count
+from app.services import click_buffer
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +78,36 @@ class CustomLinkService:
                 random_suffix = uuid.uuid4().hex[:4]
                 link_in.slug = f"{link_in.slug}-{random_suffix}"
 
-        return self.repository.update(link, link_in)
+        slug_antigo = link.slug
+        atualizado = self.repository.update(link, link_in)
+        self._invalidar_cache(slug_antigo, getattr(atualizado, "slug", None))
+        return atualizado
 
     def delete_link(self, link_id: int, user_id: int) -> bool:
         link = self.repository.get(link_id)
         if not link or link.user_id != user_id:
             return False
 
+        slug = link.slug
         self.repository.delete(link_id)
+        self._invalidar_cache(slug)
         return True
+
+    @staticmethod
+    def _invalidar_cache(*slugs: Optional[str]) -> None:
+        """Remove a decisão de redirect em cache (ver _resolver_slug)."""
+        from app.core.cache import get_client
+
+        client = get_client()
+        if client is None:
+            return
+        chaves = [f"link:redirect:{s}" for s in slugs if s]
+        if not chaves:
+            return
+        try:
+            client.delete(*chaves)
+        except Exception as exc:
+            logger.warning("Falha ao invalidar cache de redirect %s: %s", chaves, exc)
 
     def get_insight(
         self, link_id: int, user_id: int, granularity: str
@@ -145,6 +168,60 @@ class CustomLinkService:
             series_started_at=first_click.isoformat() if first_click else None,
         )
 
+    def _resolver_slug(self, slug: str) -> tuple[dict, Optional[CustomLink]]:
+        """Decide o destino de um slug: {"url", "link_id", "user_id"} ou
+        {"error", "status_code"}. A decisão fica em cache no Redis por
+        CLIQUES_CACHE_LINK_S segundos, então o caminho quente do redirect não
+        toca o Postgres (incidente de 18/09/2026). Efeito colateral aceito:
+        desativar/expirar um link demora até esse tempo para valer.
+
+        Devolve também o objeto CustomLink quando ele veio do banco, para o
+        fallback de contagem síncrona não precisar de uma segunda consulta."""
+        from app.core.cache import cache_get, cache_set
+
+        chave = f"link:redirect:{slug}"
+        cached = cache_get(chave)
+        if isinstance(cached, dict) and ("url" in cached or "error" in cached):
+            return cached, None
+
+        link = self.repository.get_by_slug(slug)
+        if not link:
+            decisao = {"error": "Link não encontrado", "status_code": 404}
+            cache_set(chave, decisao, settings.CLIQUES_CACHE_LINK_S)
+            return decisao, None
+
+        # Defesa extra: URL com espaço/quebra de linha nas pontas manda o comprador
+        # para a página de erro da Shopee. O schema já limpa na criação; aqui cobre
+        # registros antigos gravados antes do fix.
+        target_url = (link.original_url or "").strip()
+
+        if not link.is_active:
+            decisao = {"error": "Este link está desativado", "status_code": 403}
+        elif link.expires_at and link.expires_at < datetime.now(timezone.utc):
+            decisao = {"error": "Este link expirou", "status_code": 410}
+        else:
+            decisao = {"url": target_url, "link_id": link.id, "user_id": link.user_id}
+            # Cancelamento: links continuam 30 dias após assinatura_status=cancelada
+            try:
+                from app.repositories.subscription_repository import SubscriptionRepository
+
+                sub = SubscriptionRepository(self.repository.db).get_by_user_id(link.user_id)
+                if sub and (sub.assinatura_status or "").lower() == "cancelada" and not sub.is_active:
+                    cutoff = sub.updated_at or sub.assinatura_vence_em or sub.expires_at
+                    if cutoff:
+                        if cutoff.tzinfo is None:
+                            cutoff = cutoff.replace(tzinfo=timezone.utc)
+                        if datetime.now(timezone.utc) > cutoff + timedelta(days=30):
+                            decisao = {
+                                "error": "Este link não está mais disponível",
+                                "status_code": 410,
+                            }
+            except Exception:
+                pass
+
+        cache_set(chave, decisao, settings.CLIQUES_CACHE_LINK_S)
+        return decisao, link
+
     def handle_redirect(
         self,
         slug: str,
@@ -157,39 +234,16 @@ class CustomLinkService:
         Handle redirect for a given slug.
         Returns dict with 'url' on success, or 'error' and 'status_code' on failure.
         Clicks are ignored for bots, browser prefetch, and duplicate hits within 60s.
+
+        O clique vai para o buffer no Redis (app/services/click_buffer.py) e é
+        gravado em lote pelo worker. Só sem Redis cai no incremento atômico
+        direto no banco (fix de 17/09/2026).
         """
-        link = self.repository.get_by_slug(slug.strip())
-        if not link:
-            return {"error": "Link não encontrado", "status_code": 404}
+        decisao, link = self._resolver_slug(slug.strip())
+        if "error" in decisao:
+            return {"error": decisao["error"], "status_code": decisao["status_code"]}
 
-        # Defesa extra: URL com espaço/quebra de linha nas pontas manda o comprador
-        # para a página de erro da Shopee. O schema já limpa na criação; aqui cobre
-        # registros antigos gravados antes do fix.
-        target_url = (link.original_url or "").strip()
-
-        if not link.is_active:
-            return {"error": "Este link está desativado", "status_code": 403}
-
-        if link.expires_at and link.expires_at < datetime.now(timezone.utc):
-            return {"error": "Este link expirou", "status_code": 410}
-
-        # Cancelamento: links continuam 30 dias após assinatura_status=cancelada
-        try:
-            from app.repositories.subscription_repository import SubscriptionRepository
-
-            sub = SubscriptionRepository(self.repository.db).get_by_user_id(link.user_id)
-            if sub and (sub.assinatura_status or "").lower() == "cancelada" and not sub.is_active:
-                cutoff = sub.updated_at or sub.assinatura_vence_em or sub.expires_at
-                if cutoff:
-                    if cutoff.tzinfo is None:
-                        cutoff = cutoff.replace(tzinfo=timezone.utc)
-                    if datetime.now(timezone.utc) > cutoff + timedelta(days=30):
-                        return {
-                            "error": "Este link não está mais disponível",
-                            "status_code": 410,
-                        }
-        except Exception:
-            pass
+        target_url = decisao["url"]
 
         if "prefetch" in (purpose or "").lower():
             return {"url": target_url}
@@ -197,18 +251,24 @@ class CustomLinkService:
         if is_bot(user_agent):
             return {"url": target_url}
 
-        if not should_count("clk", link.id, ip, user_agent, 60):
+        link_id = decisao["link_id"]
+        if not should_count("clk", link_id, ip, user_agent, 60):
             return {"url": target_url}
 
+        if click_buffer.registrar(link_id, decisao["user_id"]):
+            return {"url": target_url}
+
+        # Fallback: Redis indisponível. Conta direto no banco, sem nunca deixar
+        # a contagem impedir o redirecionamento.
         try:
-            self.repository.increment_click_count(link)
+            if link is None:
+                link = self.repository.get_by_slug(slug.strip())
+            if link is not None:
+                self.repository.increment_click_count(link)
         except Exception as exc:
-            # Contar é secundário; levar a pessoa ao produto não. Banco lento ou
-            # linha travada perde ESTE clique na contagem, nunca o redirecionamento
-            # (incidente de 17/09/2026).
             try:
                 self.repository.db.rollback()
             except Exception:
                 pass
-            logger.warning("Clique não contado no link %s: %s", getattr(link, "id", "?"), exc)
+            logger.warning("Clique não contado no link %s: %s", link_id, exc)
         return {"url": target_url}

@@ -154,6 +154,18 @@ def custom_link_og(slug: str, db: Session = Depends(get_db)):
     return HTMLResponse(content=html)
 
 
+@app.get("/health/live")
+def liveness():
+    """Liveness para o HEALTHCHECK do container: só diz se o processo responde.
+
+    Incidente de 18/09/2026: o Coolify usava /health, que consulta o banco.
+    Banco lento → "unhealthy" → restart → startup rodando DDL no banco lento →
+    mais lento ainda. O container não deve ser reiniciado por causa do banco;
+    /health continua existindo para monitoramento e readiness.
+    """
+    return {"status": "alive", "version": settings.APP_VERSION}
+
+
 @app.get("/health")
 def health_check():
     """
@@ -206,7 +218,18 @@ def health_check():
         except Exception as e:
             logger.warning(f"Redis health check failed: {str(e)}")
             health_status["redis"] = "disconnected"
-    
+
+        # Profundidade do buffer de cliques: é o sinal honesto de "o worker está
+        # consumindo?" (incidente de 18/09). Com o worker fora, o número cresce e
+        # não drena — nenhum clique se perde, mas o contador do painel congela.
+        # Redis sem buffer ou indisponível devolve 0, que é o estado saudável.
+        try:
+            from app.services.click_buffer import tamanho_pendente
+
+            health_status["cliques_pendentes"] = tamanho_pendente()
+        except Exception as e:
+            logger.warning(f"Não foi possível ler o buffer de cliques: {e}")
+
     # Return appropriate status code
     status_code = status.HTTP_200_OK if health_status["status"] == "healthy" else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(
