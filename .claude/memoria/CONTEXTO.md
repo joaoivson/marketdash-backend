@@ -130,6 +130,30 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 
 ## Em voo / pendente de humano
 
+- **Roteiros: rodada 2 (18/09) EM HOMOLOGAÇÃO.** Migration **088** aplicada em
+  hml (`whatsapp_grupos.descricao` + tick do pg_cron de 5min → **1min**).
+  Produção **PENDENTE** e propositalmente não promovida.
+
+  ⚠️ **A 088 e a 061 andam juntas em produção.** A 088 só reagenda; quem cria
+  `trigger_roteiros_tick` é a 061, que **nunca rodou lá**. E o código da rodada
+  2 sem a 088 **desliga o envio na prática**: a tolerância de atraso é de 3
+  minutos (`ROTEIRO_ATRASO_MAX_S`) e não cabe num tick de 5.
+
+  **O motor mudou de contrato:** roteiro NUNCA envia atrasado. Passou de 3 min
+  sem o passo ter COMEÇADO, a mensagem vira `falhou` — e janela fechada, teto
+  diário e campanha pausada deixam de adiar. A trava mede o **passo**, não cada
+  mensagem: lote que começou no horário drena até o fim.
+
+  **Dívida da rodada 1 quitada:** `marcar_todos` agora vira `mentions: ["all"]`
+  (palavra-chave do WAHA, suportada no GOWS, **escondida do OpenAPI**), e os
+  blocos `audio`/`video`/`arquivo` saem de verdade — áudio sempre como nota de
+  voz, via `sendVoice` com `convert: true`, sem ffmpeg do nosso lado.
+
+  ⚠️ **Falta número conectado em hml** para provar 4 coisas contra o WAHA real:
+  menção chegando como menção, legenda de imagem aceitando menção, `sendVoice`
+  virando bolha de áudio, e a chave da descrição no payload do GOWS. Detalhe em
+  `.claude/memoria/STATUS-roteiros-rodada2.md`.
+
 - **Roteiros: rodada de 06/09 EM HOMOLOGAÇÃO.** Migration **082** aplicada em
   hml (`passo_blocos`, `offset_segundos`/`offset_unidade`,
   `acao_descontinuada`, `blocos_enviados`, `tipo_conteudo` texto/midia →

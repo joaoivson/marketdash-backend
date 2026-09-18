@@ -441,7 +441,11 @@ da Meta.
    código velho porque o CI só deployava a API e um `|| echo` mascarava a falha
 8. **Separar o gating** de Instagram e Grupos (3.5) e liberar só o de Grupos
 9. **Merge do frontend** → deploy
-10. **Crons**: agendar `061`/`064`/`069` em produção e **desagendar em hml no mesmo ato**
+10. **Crons**: agendar `061`/`064`/`069` em produção e **desagendar em hml no mesmo ato**.
+    Logo em seguida, **a `088` no mesmo passo** — ela reagenda o tick de roteiros
+    para 1 minuto e só funciona depois da `061`, que é quem cria a função
+    `trigger_roteiros_tick`. Subir o código da rodada 2 sem a `088` desliga o
+    envio na prática (a tolerância de 3 min não cabe num tick de 5).
 11. Observar 48h (seção 6)
 
 > **CI verde ≠ deployado** — mas só para app ainda **não** migrada para Docker
@@ -568,6 +572,7 @@ homologação.
 | 17 | `081_fallback_lotado_e_subid_legivel.sql` | `campanha_link_eventos.resultado` + índice parcial · `whatsapp_grupos.sub_id` para `VARCHAR(64)` | **PENDENTE** | OK (05/09) |
 | 18 | `082_roteiros_blocos_tempo_status.sql` | `roteiro_passos.offset_segundos`/`offset_unidade`/`acao_descontinuada` · **`passo_blocos`** (tabela) · `roteiro_mensagens.blocos_enviados` · backfill de `data_fixa` · `tipo_conteudo` texto/midia → `mensagem` · índice único `uq_roteiro_execucao_ativa` | **PENDENTE** | OK (06/09) |
 | 19 | `083_instagram_webhook_entregas.sql` | **`instagram_webhook_entregas`** (tabela): ledger do que a Meta ENTREGOU no webhook do Instagram, item a item, com o desfecho carimbado pela task | **APLICADA 11/09** (via Management API, antes do push) | **PENDENTE** |
+| 20 | `088_roteiros_rodada2.sql` | `whatsapp_grupos.descricao` (o sync passa a trazê-la) · **reagenda o `pg_cron` do motor de roteiros de `*/5` para `* * * * *`** | **PENDENTE** | OK (18/09) |
 
 > ⚠️ **A `082` (06/09) é da rodada de Roteiros e tem DUAS armadilhas.**
 >
@@ -582,6 +587,33 @@ homologação.
 > `tipo_conteudo` que o código novo não reconhece. Medido em 06/09: **produção
 > tem 0 linhas em todas as 6 tabelas de roteiros**, então a conversão é no-op lá
 > — mas a ordem continua importando pelo `create_all`.
+>
+
+> ⚠️ **A `088` (18/09) MEXE NO pg_cron, e por isso não é uma migration comum.**
+>
+> Ela faz duas coisas sem relação entre si. A primeira é aditiva e inofensiva:
+> `ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS descricao TEXT`.
+>
+> A segunda **troca o job do motor de roteiros de 5 em 5 minutos para 1 em 1
+> minuto**, e é ela que exige atenção na promoção:
+>
+> - **A `061` precisa rodar ANTES da `088` em produção.** É a `061` que cria a
+>   função `public.trigger_roteiros_tick`, e produção **nunca a rodou** (medido
+>   em 06/09). Sem ela, a `088` agenda um job que chama uma função inexistente:
+>   erro silencioso a cada minuto, e nenhum roteiro dispara. Como a `061` mora
+>   no **passo 10** da seção 5 (junto das outras de `pg_cron`), a `088` tem de ir
+>   junto dela, não no lote inicial.
+> - O `unschedule` está dentro de `DO $$ ... EXCEPTION WHEN OTHERS THEN NULL $$`
+>   exatamente porque produção **não tem** o `roteiros-tick-5min`: sem o guard,
+>   a migration abortaria lá.
+> - **Por que 1 minuto.** A rodada 2 estabelece que roteiro NUNCA envia
+>   atrasado: passou de `ROTEIRO_ATRASO_MAX_S` (180 s) sem o passo ter começado,
+>   a mensagem vira `falhou`. Com tick de 5 minutos a própria cadência gastaria
+>   a tolerância inteira e **nada sairia**. Os dois andam juntos: subir o código
+>   da rodada 2 sem a `088` desliga o envio na prática.
+> - O tick continua barato: um UPDATE sobre índice parcial que normalmente
+>   devolve zero linhas. Nada a ver com o sync horário que derrubou o banco
+>   compartilhado em 20/07.
 >
 > ⚠️ **E o `roteiros-tick-5min` NÃO EXISTE em produção** (medido em 06/09: hml
 > tem o jobid 102 ativo, produção não tem o job). Sem ele nenhum roteiro

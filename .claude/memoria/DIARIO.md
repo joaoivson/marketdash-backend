@@ -1793,3 +1793,92 @@ De quebra sumiu a leitura de 13 páginas de `/me/media`.
 **Correção do 13/09:** o "ALGODÃO que era cópia" (`Dc7cCO7AzNW`) é **anúncio**.
 Por dois dias o diagnóstico foi "a aluna republica o produto e a automação fica
 na cópia errada". Era anúncio desde o começo.
+
+## 2026-09-18 — Roteiros, rodada 2: a tela dizia o que o motor não fazia
+
+Documento de 14 itens, 5 deles 🔴. Subiu só na `develop` (hml); produção ficou
+preparada no runbook. Migration **088** aplicada em hml. Quadro em
+`STATUS-roteiros-rodada2.md`.
+
+### Dois achados que encolheram o trabalho antes de escrever código
+
+- **O WAHA tem `mentions: ["all"]`** e funciona no GOWS. Não precisamos montar
+  array de 900 JIDs — o que seria impossível de qualquer jeito, porque
+  `grupo_participantes` só é populada para grupo **ativado**. ⚠️ O campo é
+  **escondido do OpenAPI** do WAHA (`@ApiHideProperty` desde 2023): não aparece
+  no Swagger nem em cliente gerado. Quem procurar por ele na spec conclui que
+  não existe.
+- **`sendVoice` aceita `convert: true`** — o WAHA converte para OGG/Opus. Isso
+  matou o requisito de pôr **ffmpeg na nossa imagem** (~100 MB a mais na imagem
+  que o VPS puxa, e o Dockerfile não tem).
+
+### O item mais delicado: "nunca envia atrasado" quase quebrou a operação
+
+A tolerância de 3 min aplicada a **cada mensagem** teria falhado lotes normais.
+As N mensagens de um passo nascem com o MESMO `agendado_para`, e o lote é serial
+por desenho: pausa de 2-5 s entre blocos, fatia com orçamento de 15 min. Um
+passo para 60 grupos leva minutos só para drenar — os últimos 40 falhariam
+**porque a fila é fila**, não porque houve atraso.
+
+A regra virou: **expira se passou do prazo E nenhuma mensagem daquele
+`(execução, passo)` saiu ainda**. Não é invenção — é a mesma regra que a janela
+de envio já aplicava, com a justificativa escrita no código desde a rodada 1:
+*"metade dos grupos com a oferta, metade sem, que é exatamente o corte no meio
+que a regra existe para evitar"*.
+
+**Segundo detalhe do mesmo item:** a varredura genérica tem de rodar **depois**
+dos guards de janela e campanha pausada, não no topo da fatia. Na primeira
+versão ela rodava antes e carimbava tudo com "passou do horário" — a causa real
+("fora da janela de envio") se perdia. O teste pegou.
+
+### `EXEC_FALHOU` existia desde a 060 e nunca era atribuído
+
+O chip "Falhou" estava no `CHIP_DA_EXECUCAO` do frontend, com cor e rótulo, sem
+nenhum caminho no backend capaz de produzi-lo. Um roteiro em que tudo deu errado
+aparecia como "Concluído com falhas", que é outra coisa.
+
+### Duas premissas do documento que não se confirmaram
+
+1. *"Ajustar datas lista só os passos vencidos"* — nunca listou. Filtra por
+   `tipo_tempo === "ancora"` desde sempre. A tela pareceu vazia porque o roteiro
+   duplicado tinha **um** passo âncora e o modal abre sozinho sobre uma tela em
+   branco. O conserto foi o outro meio do item: duplicar não abre mais o modal.
+2. *"❓ Passo já enviado precisa aparecer travado — ainda não observado"* — foi
+   observado agora, e **estava quebrado**, mas não pelo motivo suposto.
+   `passos_intocaveis` olha a execução **ATIVA**, e roteiro concluído não tem
+   nenhuma: `travado` vinha `false` e a linha mostrava setas e ✕, oferecendo
+   ações que o backend recusa com 409. A trava é do roteiro inteiro depois que
+   ele termina, não só dos passos que saíram.
+
+### O risco que a decisão 2 escondia
+
+"Janela/teto/campanha pausada falham em vez de adiar" parecia uniforme. Medindo:
+
+- **janela de envio nasce DESLIGADA** (`ConfigJanela.ativo = False`) — só morde
+  quem ligou o toggle;
+- **campanha pausada** é intenção explícita dela;
+- **teto diário morde de verdade**: 80 msgs/dia por número, 240 no MAX, e um
+  roteiro de 4 passos para 60 grupos são 240 exatas.
+
+Por isso o aviso de teto no Agendar virou obrigatório, não "bom ter".
+
+### Validação
+
+Playwright contra hml, 1440px e 390px, comparando API × célula:
+
+- roteiro 7 (concluído): API devolve `passos_no_passado: [1]` — a data REALMENTE
+  passou — e a tela **não** mostra mais o aviso nem o vermelho. É o bug 🔴 do
+  documento, e a prova é justamente o campo continuar vindo;
+- ciclo duplicar → agendar → cancelar: banco confirma `cancelada`, **0
+  mensagens** pendentes, roteiro de volta a `rascunho`, e o roteiro 7 intacto;
+- toggle "Marcar todos" desabilita ao apagar o texto e reabilita ao digitar;
+- coluna "Cheio" mostrando "Não" para 901/1000.
+
+Campanha 16 devolveu "Campanha não encontrada" na conta de teste — é de outra
+usuária. O isolamento por `user_id` funcionando.
+
+### Fica pendente (de terceiro: número conectado em hml)
+
+Menção real no GOWS, legenda de imagem aceitar menção, `sendVoice` virar bolha
+de áudio, e a chave da descrição no payload do GOWS. Detalhe no STATUS.
+

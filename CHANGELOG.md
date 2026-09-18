@@ -11,6 +11,107 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-18 (Roteiros — rodada 2)
+
+Segunda rodada do módulo de disparo em grupos, escrita depois de usar a tela.
+**Só em homologação**; produção fica preparada no runbook, sem promoção.
+Migration **088** aplicada em hml. Quadro item a item em
+`.claude/memoria/STATUS-roteiros-rodada2.md`.
+
+O fio comum: **a tela afirmava coisas que o motor não fazia.**
+
+### Nunca envia atrasado
+
+Chegou o horário, tenta uma vez. Deu certo, Concluído; não deu, Falhou com o
+motivo, e não tenta de novo. Antes não havia limite nenhum: o motor pegava
+`agendado_para <= agora` e uma mensagem de seis horas atrás saía normalmente.
+
+A trava mede **o passo ter começado**, não cada mensagem ter saído — as N
+mensagens de um passo nascem com o mesmo horário e o lote é serial por desenho.
+Se o passo começou dentro dos 3 minutos, o lote drena até o fim; metade do
+grupo com a oferta e metade sem é o corte que a regra existe para evitar.
+
+Janela fechada, teto diário e campanha pausada deixam de adiar em bloco:
+expiram o que venceu **com o motivo real** e reagendam só o que sobrou. Antes a
+execução ficava parqueada até o dia seguinte e a tela dizia "Na fila 60" a noite
+inteira. Em troca, o Agendar avisa antes — passo fora da janela, e roteiro maior
+que o teto diário restante (80 msgs/dia por número; 4 passos × 60 grupos já são
+as 240 do MAX).
+
+O chip "Falhou" da listagem existia no frontend sem nenhum caminho no backend
+que o produzisse. Execução que fecha sem nenhum envio e com erro agora é
+`falhou`, não "concluído com falhas".
+
+### Cancelar agendamento, e roteiro que já rodou vira leitura
+
+Roteiro agendado não tinha como ser cancelado — só Editar e Duplicar. Agora
+cada estado oferece a ação que faz sentido nele:
+
+| Estado | Ações |
+|---|---|
+| Rascunho | Editar · Duplicar · Agendar |
+| Agendado · Pausado | Editar · Duplicar · Cancelar agendamento |
+| Enviando | Duplicar · Cancelar envio |
+| Concluído · Falhou | Duplicar |
+
+Cancelar **tira as pendentes da fila** e devolve o roteiro para rascunho; o que
+já saiu fica, porque é o registro do que chegou nos grupos. Concluído e falhou
+não têm Editar: editar um roteiro que já rodou faz a tela deixar de refletir o
+que foi realmente enviado. Refazer é duplicar.
+
+### Marcar todos funciona
+
+Era campo morto: gravado, validado, devolvido na API, copiado no duplicar — e
+nunca lido no envio. Ela ligava o toggle, a mensagem chegava sem marcar
+ninguém, e nada registrava o problema. Agora vira `mentions: ["all"]` no
+primeiro bloco com texto (a menção precisa de um corpo de texto para existir);
+sem nenhum bloco com texto, o toggle fica desabilitado em vez de ligado e inerte.
+
+### Blocos de vídeo, áudio e arquivo
+
+`texto · imagem · vídeo · áudio · arquivo`. Áudio sai **sempre como nota de
+voz** — quem quiser mandar áudio como arquivo usa o bloco de arquivo. Limites
+declarados antes de o botão existir: 5 / 16 / 16 / 25 MB, checados no cliente
+antes do upload.
+
+### Vermelho parou de dizer a coisa errada
+
+Roteiro concluído aparecia com os três passos em chip verde dentro de linhas
+**vermelhas**, sob "Os passos 1, 2, 3 já passaram. Ajuste as datas para
+agendar." A mesma linha dizia que deu certo e que deu errado. Agora vermelho é
+exclusivo de falha, data vencida é âmbar, passo bloqueado é neutro (apagado,
+com cadeado) — e roteiro encerrado sai desse jogo por completo.
+
+### E mais
+
+- **"Na fila" ≠ "Agendadas"**: o card dizia "Na fila 3" com o roteiro marcado
+  para daqui a 25 minutos. Agora são dois números; "na fila há 20 minutos" é
+  problema, "agendada para daqui a 25" é o roteiro funcionando.
+- **Editor de passo reorganizado**: barra fixa (Voltar · nome · Passo X de Y ·
+  Concluir) e faixa de configuração horizontal. O Concluir flutuava sobre o
+  conteúdo e não havia Voltar em lugar nenhum.
+- **Validação de data no campo**, com mínimo no minuto seguinte, travando o
+  Concluir ali — antes só o Agendar barrava, dois passos depois.
+- **Duplicar vai direto ao roteiro**, sem o modal de datas que abria sobre uma
+  tela em branco.
+- **Nome, descrição e imagem do grupo** sincronizam, e o passo de ação grava no
+  registro local na hora. O sync roda 1×/dia: ela renomeava às 10:26 e o painel
+  mostrava o nome antigo — sem ter como saber se o passo funcionou.
+- **Coluna "Cheio" mostra Sim/Não**, com cadeado quando a escolha foi dela.
+  "Automático" é o nome do mecanismo, não a resposta da pergunta.
+- **Linha "Envios" na visão geral**, com a falha clicável. Cobre o ponto cego do
+  modelo sem retry: número caído uma tarde derruba todos os passos do período.
+- Passo já enviado agora aparece **travado de verdade** (sem setas e sem ✕) —
+  a trava olhava só a execução ativa, e roteiro concluído não tem nenhuma.
+
+### Pendente de número conectado em hml
+
+Quatro coisas estão provadas por teste unitário e **não** contra o WAHA real,
+porque não há número pareado em homologação: a menção chegar como menção no
+GOWS, a legenda de imagem aceitar menção, `sendVoice` com `convert:true` virar
+bolha de áudio (e não arquivo anexado), e qual chave o GOWS usa para a descrição
+do grupo.
+
 ## [Não versionado] - 2026-09-18 (Hotfix — login fora do ar pela 2ª vez em 24h)
 
 Branch `hotfix/login-supabase-io-esgotado`. Dossiê completo, logs e plano de
