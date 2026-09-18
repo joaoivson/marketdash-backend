@@ -38,6 +38,25 @@ Novas envs (todas opcionais, com fallback seguro): `SUPABASE_JWT_SECRET`,
 `SUPABASE_JWKS_URL`, `AUTH_VALIDACAO_LOCAL`, `CLIQUES_BUFFER_REDIS`,
 `CLIQUES_FLUSH_INTERVALO_S`, `CLIQUES_CACHE_LINK_S`, `DB_SCHEMA_NO_STARTUP`.
 
+**No ar em homologação** em 18/09 14:46 UTC (merge `cdb5ed0`, PR #63, run
+`35357933332`). Conferido: `/health` com o SHA do merge, `redis: connected`,
+campo novo `cliques_pendentes`, e `/health/live` respondendo 200 (era 404).
+
+**`DB_SCHEMA_NO_STARTUP` só tem efeito na API.** `init_db()` é chamada apenas
+em `app/main.py`; o worker roda `celery -A app.tasks.celery_app worker`, que não
+importa `app.main`. Nos workers a variável é inócua — e a linha de log
+`Schema garantido no startup` sai só no log da API. Em **produção a variável
+fica AUSENTE**: ligá-la lá devolve `create_all` (que cria tabela nova sem RLS) e
+22 `ALTER TABLE` com lock exclusivo a cada boot, que é a causa nº 3 do próprio
+incidente. Cuidado com o nome: é "no" do português (*schema NO startup*), não
+negação.
+
+**Achado operacional:** o fix de 17/09 (`440fad1`) ficou **20h50min retido no
+gate de aprovação** — build publicado no GHCR às 17:43 de 17/09, deploy só às
+14:33 de 18/09. A segunda queda aconteceu dentro desse intervalo, com a
+correção pronta e não aplicada. Falta um alerta de "deploy de produção
+aguardando aprovação há N horas".
+
 ## [Não versionado] - 2026-09-17 (Incidente: banco de produção travado por fila de cliques)
 
 **17:00–17:37 UTC.** Login, API e Auth do Supabase caíram de forma intermitente

@@ -28,11 +28,15 @@ Sequência idêntica nas duas quedas, hora de Brasília:
    eram `GET /auth/v1/user` — a API validando o token de *cada* requisição com
    `supabase.auth.get_user()`. Essa chamada lê o banco. Banco travado = usuária logada
    também recebe 401/504.
-6. **Restart em loop.** `ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS …` e
+6. **Restart em loop — da API.** `ALTER TABLE capture_sites ADD COLUMN IF NOT EXISTS …` e
    `ALTER TABLE facebook_integrations …` rodaram **20 vezes cada** em 24h (14 numa hora):
    é `init_db()` no startup. O `HEALTHCHECK` do container batia em `/health`, que consulta
    o banco → banco lento → *unhealthy* → Coolify reinicia → startup roda `create_all` +
    `ALTER TABLE` (lock exclusivo) no banco já sufocado → mais lento.
+   **Só a API.** `init_db()` é chamada exclusivamente em `app/main.py` (evento de
+   startup do FastAPI); o worker executa `celery -A app.tasks.celery_app worker`,
+   que não importa `app.main`. Os workers nunca rodaram DDL no boot — foram os
+   reboots da API sozinha que geraram as 20 execuções.
 7. **Por que o reset "resolve".** Reiniciar o projeto devolve o crédito de IO e derruba as
    conexões presas. Dura até a próxima campanha.
 
@@ -74,7 +78,7 @@ Três problemas de código que se reforçam, sobre uma instância subdimensionad
 | `SUPABASE_JWKS_URL` | vazio (deriva de `SUPABASE_URL`) | Não |
 | `AUTH_VALIDACAO_LOCAL` | `true` (default) | Não — `false` desliga o caminho novo |
 | `CLIQUES_BUFFER_REDIS` | `true` (default) | Não — `false` volta ao incremento atômico |
-| `DB_SCHEMA_NO_STARTUP` | ausente em prod/hml | Não — só `true` em dev |
+| `DB_SCHEMA_NO_STARTUP` | **ausente em produção**; `true` na **API** de HML e em dev | Não — e só tem efeito na API (ver abaixo) |
 | `DATABASE_URL` | **Conferir** que aponta para o pooler (`…pooler.supabase.com:6543`, modo transaction), não para `db.<ref>.supabase.co:5432` | — |
 
 Verificar em Supabase → Settings → API → *JWT Keys* se o projeto já está em
@@ -108,9 +112,12 @@ que ele rodar.
 
 1. **HML primeiro.** Merge de `hotfix/login-supabase-io-esgotado-develop` em
    `develop` → deploy automático em HML. Definir `DB_SCHEMA_NO_STARTUP=true`
-   nas envs de HML (API e worker) ANTES do deploy, senão o módulo de Grupos
-   perde a rede de proteção de schema.
-2. **Teste de carga em HML:** `k6 run tests/load/k6_redirect_cliques.js` (500 req/min no
+   na env da **API de HML** ANTES do deploy, senão o módulo de Grupos perde a
+   rede de proteção de schema. Nos workers a variável é inócua (não rodam
+   `init_db()`); deixá-la lá não faz mal, mas não protege. Consequência:
+   a linha `Schema garantido no startup (DB_SCHEMA_NO_STARTUP=true)` sai
+   **só no log da API** — não achá-la nos workers é o esperado.
+2. **Teste de carga em HML:** `k6 run -e BASE=https://api.hml.marketdash.com.br -e SLUG=<slug> tests/load/k6_redirect_cliques.js` (500 req/min no
    mesmo slug por 5 min). Critérios: p95 do redirect < 300 ms; zero 5xx; no Supabase de HML,
    **nenhum** `UPDATE custom_links` por clique nos logs (só 1 a cada ~15 s por link); login
    funcionando durante o teste.
@@ -176,6 +183,68 @@ worker tem o mesmo `REDIS_URL` da API.
 Em nenhum cenário o redirecionamento falha, e nada disso toca dado de usuária,
 dataset, assinatura ou campanha — o buffer só carrega `(link_id, user_id,
 timestamp)` de clique.
+
+## O fix de 17/09 ficou 21h parado no gate de aprovação
+
+Descoberto em 18/09 ao investigar por que produção rodava código antigo durante
+a queda da manhã. Cronologia do run
+[35254271771](https://github.com/joaoivson/marketdash-backend/actions/runs/35254271771):
+
+| Etapa | Quando (UTC) |
+|---|---|
+| `440fad1` empurrado para `main` | 17/09 17:41 |
+| `Validate Code` ✓ | 17/09 17:42:13 |
+| `Build e publicar imagens` ✓ (imagem no GHCR) | **17/09 17:43:04** |
+| — **gate de aprovação: 20h50min parado** — | |
+| `Deploy em produção` ✓ | **18/09 14:33:32 → 14:35:02** |
+
+**A queda de 18/09 (7h–8h BRT = 10h–11h UTC) caiu dentro desse intervalo.**
+Produção passou o incidente inteiro no código pré-`440fad1` — o que confirma,
+por cronologia e não por inferência, a observação dos logs (`click_count=4712`
+com valor literal). O `gh run view` mostra "✓ success" e engana: a imagem foi
+construída e publicada ontem; só o job de deploy ficou retido.
+
+### Teria evitado a queda?
+
+Teria amortecido; não dá para afirmar que teria evitado.
+
+| `440fad1` ataca | Estava nos logs de 18/09? |
+|---|---|
+| `UPDATE … click_count=62480` em 117 s com valor literal | sim — vira incremento atômico com `lock_timeout` 2 s |
+| `still waiting for ShareLock` | sim — deixa de acumular |
+| 852 conexões abortadas (`SSL EOF`) | sim, em boa parte como consequência de transação presa |
+
+| `440fad1` **não** ataca | Estava nos logs de 18/09? |
+|---|---|
+| Esgotamento do budget de IO (`checkpoint … total=217 s`, 5 MB/s) | sim — o fix barateia a TRAVA, não o IO: seguem 2 escritas por clique |
+| `auth.get_user` por requisição (5.895 de 6.622) | sim — qualquer lentidão do banco derruba a API inteira |
+| Loop de restart com DDL no boot | sim |
+
+### A lição operacional
+
+Um fix de incidente **ativo** ficou 21h parado, em silêncio, com a imagem pronta
+no GHCR a um clique de distância. O gate está certo em existir — nasceu porque
+build no VPS derrubou produção 2× em 5 dias. O que falta é o aviso: *"há deploy
+de produção aguardando aprovação há N horas"*. Sem ele, o gate vira uma forma
+silenciosa de não aplicar a correção.
+
+## Estado em 18/09 — hotfix no ar em HML
+
+Merge `cdb5ed0` (PR #63) → run `35357933332` verde, deploy em `finished`,
+incluindo API, worker Celery e worker de WhatsApp.
+
+| Critério | Antes (14:06 UTC) | Depois (14:46 UTC) |
+|---|---|---|
+| `version` == SHA do merge | `953014a` (build anterior) | `cdb5ed0` ✅ |
+| `redis` | connected | connected ✅ |
+| `cliques_pendentes` | **ausente** | `0` ✅ |
+| `/health/live` | **404** | **200** ✅ |
+
+Testes do hotfix: `43 passed`, zero falhas.
+
+Pendente de validação humana em HML: log de boot da API com `Schema garantido
+no startup`, log da API sem `usando auth.get_user`, k6, e conferir que o worker
+usa o mesmo `REDIS_URL` da API (o `/health` testa o Redis **da API**).
 
 ## Depois do hotfix
 - Alertas no Supabase (IO budget, RAM, conexões) e sonda sintética de login a cada 5 min.
