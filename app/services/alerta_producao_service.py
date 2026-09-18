@@ -40,6 +40,16 @@ CHAVE_INCIDENTE = "alerta_producao:incidente_aberto"
 #: bem-vindo: significa que ninguém agiu.
 TTL_INCIDENTE = 24 * 3600
 
+#: Prefixo do dedup do gate de aprovação. Chave SEPARADA de CHAVE_INCIDENTE de
+#: propósito: são incidentes diferentes e podem coexistir. Compartilhar a chave
+#: faria um deploy parado silenciar o aviso de produção caída — exatamente o
+#: cenário de 18/09, em que as duas coisas aconteceram no mesmo dia.
+PREFIXO_GATE = "alerta_gate:run:"
+
+#: 4 h. Deploy que segue parado depois disso merece um segundo toque: em
+#: 17-18/09 um fix de incidente ficou 20h50min retido sem ninguém perceber.
+TTL_GATE = 4 * 3600
+
 
 def _destinos() -> list[str]:
     """Números que recebem o aviso, do env (csv), em E.164 sem '+'."""
@@ -194,6 +204,56 @@ def registrar(estado: str, detalhe: str = "") -> dict:
         return resultado
 
     return {"enviado": False, "motivo": f"Estado desconhecido: {estado!r}"}
+
+
+def avisar_deploy_parado(run_id: str, detalhe: str = "") -> dict:
+    """Avisa que há deploy de produção retido no gate de aprovação.
+
+    Por que isto existe: em 17/09/2026 o fix do incidente de cliques
+    (`440fad1`) foi construído e publicado no GHCR às 17:43, e o job de deploy
+    só rodou às 14:33 do dia seguinte — **20h50min** parados no gate. A segunda
+    queda do login aconteceu dentro desse intervalo, com a correção pronta a um
+    clique de distância. O gate está certo em existir (build no VPS derrubou
+    produção 2x em 5 dias); o que faltava era alguém ser avisado.
+
+    Dedup por `run_id`, com chave própria: um deploy parado NÃO pode fechar nem
+    silenciar o incidente de produção caída, e vice-versa. TTL de 4 h faz o
+    aviso se repetir enquanto ninguém aprovar, que é o ponto.
+
+    Responde sempre 200 pelo mesmo motivo de `registrar`: a sonda não pode
+    ficar vermelha no caminho em que está funcionando.
+    """
+    redis = _redis()
+    if redis is None:
+        return {"enviado": False, "motivo": "Redis indisponível — sem dedup, não envio."}
+
+    chave = f"{PREFIXO_GATE}{run_id}"
+    try:
+        if redis.get(chave):
+            return {"enviado": False, "motivo": "Este run já foi avisado.",
+                    "avisado_ha_min": _minutos_desde(redis.get(chave))}
+    except Exception as e:  # noqa: BLE001
+        return {"enviado": False, "motivo": f"Redis: {type(e).__name__}"}
+
+    resultado = _enviar(_texto_gate(detalhe))
+    if resultado.get("enviado"):
+        try:
+            redis.set(chave, datetime.now(timezone.utc).isoformat(), ex=TTL_GATE)
+        except Exception:  # noqa: BLE001 — falhar o dedup não pode desfazer o envio
+            logger.warning("Aviso de gate enviado, mas dedup não gravou (run %s)", run_id)
+    return resultado
+
+
+def _texto_gate(detalhe: str) -> str:
+    agora = datetime.now(timezone.utc).astimezone().strftime("%d/%m às %H:%M")
+    return (
+        "⏸️ *MarketDash — deploy de produção parado no gate*\n\n"
+        f"{detalhe or 'Há deploy aguardando aprovação.'}\n\n"
+        f"Detectado em {agora}. A imagem já está pronta no GHCR: falta só "
+        "aprovar em Actions → o run → *Review deployments*.\n\n"
+        "_Em 17-18/09 um fix de incidente ficou 20h50min aqui, e a segunda "
+        "queda do login aconteceu nesse intervalo._"
+    )
 
 
 def testar(texto: Optional[str] = None) -> dict:

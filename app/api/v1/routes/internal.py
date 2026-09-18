@@ -74,6 +74,37 @@ def alerta_de_producao(
     return resultado
 
 
+@router.post("/alertas/deploy-parado")
+def alerta_de_deploy_parado(
+    payload: dict,
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_cron_secret: str | None = Header(default=None, alias="X-Cron-Secret"),
+):
+    """Avisa por WhatsApp que há deploy de produção retido no gate.
+
+    Chamado por `.github/workflows/vigia-gate-aprovacao.yml`. Vive em
+    homologação pelo mesmo motivo do alerta de queda: é o ambiente com a sessão
+    de WhatsApp conectada.
+
+    Dedup por `run_id`, com chave separada da do incidente de produção — as
+    duas coisas podem acontecer no mesmo dia (e aconteceram, em 18/09).
+    """
+    _validate_cron_secret(
+        _extract_secret(authorization, x_cron_secret),
+        request.client.host if request.client else None,
+    )
+    from app.services import alerta_producao_service
+
+    run_id = str(payload.get("run_id") or "").strip()
+    detalhe = str(payload.get("detalhe") or "")[:1500]
+    if not run_id:
+        return {"enviado": False, "motivo": "run_id ausente."}
+    resultado = alerta_producao_service.avisar_deploy_parado(run_id, detalhe)
+    logger.info("Alerta de gate (run %s): %s", run_id, resultado)
+    return resultado
+
+
 @router.post("/alertas/producao/teste")
 def testar_alerta_de_producao(
     request: Request,
