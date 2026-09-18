@@ -32,14 +32,20 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.ambiente import identidade_do_banco
 from app.core.cache import get_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-CHAVE_CONTAGEM = "cliques:contagem"      # hash  link_id -> n
-CHAVE_EVENTOS = "cliques:eventos"        # list  "link_id:user_id:epoch"
-CHAVE_AGENDADO = "cliques:flush:agendado"  # lock curto: 1 task por janela
+# As chaves levam a identidade do BANCO, como a fila do Celery (ver
+# app/core/ambiente.py). Homologação e produção dividem o MESMO Redis: sem o
+# prefixo, o worker de hml descarregaria clique de produção no banco de hml —
+# o UPDATE não acharia a linha e o INSERT quebraria por FK, perdendo contagem.
+_ID = identidade_do_banco()
+CHAVE_CONTAGEM = f"cliques:{_ID}:contagem"      # hash  link_id -> n
+CHAVE_EVENTOS = f"cliques:{_ID}:eventos"        # list  "link_id:user_id:epoch"
+CHAVE_AGENDADO = f"cliques:{_ID}:flush:agendado"  # lock curto: 1 task por janela
 LOTE_MAX_EVENTOS = 5000
 
 

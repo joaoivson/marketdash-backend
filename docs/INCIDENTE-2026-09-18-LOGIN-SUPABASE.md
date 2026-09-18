@@ -147,6 +147,15 @@ desabilitado o Redis? **Não.** O que foi medido hoje:
   a nº 2 continua pendente — e é ação destrutiva em infra compartilhada, a ser
   feita sozinha, nunca junto deste hotfix.
 
+### hml e produção dividem o mesmo Redis
+
+As chaves do buffer levam a identidade do banco (`cliques:<ref>:…`), pelo mesmo
+motivo que a fila do Celery deriva do `DATABASE_URL`. Sem isso, com os dois
+ambientes no código novo, o worker de hml poderia pegar clique de produção: o
+UPDATE não acharia a linha e o INSERT quebraria por FK, perdendo contagem.
+Subir só hml é seguro de qualquer forma enquanto produção estiver no código
+antigo — o prefixo é a garantia para quando os dois estiverem no novo.
+
 ### O que o `/health` NÃO prova
 
 Ele testa o Redis a partir da **API**. O worker Celery é outra app, com suas
