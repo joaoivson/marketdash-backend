@@ -269,3 +269,51 @@ Caminho quando for a hora: cherry-pick só do arquivo do workflow para `main`
 então funciona mesmo antes de o backend chegar em produção; a perna de WhatsApp
 liga quando o endpoint existir no ambiente apontado por `ALERTA_API_BASE`, que
 é **hml**, onde já está no ar).
+
+---
+
+## Vigia do gate NO AR (18/09 15:19 UTC)
+
+Autorizada pelo João como exceção pontual à regra "nada de `main`" da rodada:
+**só o arquivo do workflow** foi para produção, nenhum código do hotfix junto.
+
+### Par de SHAs do cherry-pick (para o merge futuro)
+
+Conforme o CLAUDE.md: cherry-pick deixa rastro, e o merge futuro da `develop`
+vai reconflitar neste arquivo. **Resolver mantendo o lado da `develop`.**
+
+| Branch | SHA | Conteúdo |
+|---|---|---|
+| `develop` | `8341926` + `03d826b` | workflow + nota do cabeçalho |
+| `main` | `0072ffa` | os dois achatados em um commit |
+
+O arquivo é idêntico nas duas pontas nesta data.
+
+### Verificado depois do push
+
+| Checagem | Resultado |
+|---|---|
+| Deploy de produção disparou? | **Não** — último run de prod segue o de 17/09 (`.github/**` está no `paths-ignore`) |
+| `gh workflow run` funciona agora? | ✅ — o 404 de "not found on the default branch" sumiu |
+| Run de teste `35361680954` | ✅ `success`, imprimiu "Nenhum run aguardando aprovação" |
+| Criou issue indevida? | Não — caminho feliz não abre nada |
+
+## Produção e HML JÁ estão em ES256 — item 2.4 morre
+
+Consultados os JWKS públicos dos dois projetos:
+
+| Ambiente | ref | kid | alg |
+|---|---|---|---|
+| produção | `iprdyorxqdiivthtcvxf` | `23b3f134-…` | **ES256** (EC) |
+| hml | `ytjpdvjuxtvxacredekk` | `1eb02daf-…` | **ES256** (EC) |
+
+Consequência: **`SUPABASE_JWT_SECRET` não precisa ser configurado em lugar
+nenhum.** O JWKS é público e a URL é derivada de `SUPABASE_URL` pelo próprio
+código (`_CacheJWKS.url()`). A verificação local do JWT engata sozinha nos dois
+ambientes.
+
+Ressalva honesta: o JWKS em ES256 prova como as chaves ASSIMÉTRICAS estão
+publicadas, não que todo token em circulação já seja ES256 — um projeto em
+transição ainda pode ter token HS256 válido na mão de quem não renovou sessão.
+Quem confirma na prática é o log da API sem `usando auth.get_user`. Se aparecer
+em volume, aí sim vale a env.
