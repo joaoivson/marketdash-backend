@@ -1,0 +1,172 @@
+name: Vigia do gate de aprovação
+
+# Por que este workflow existe.
+#
+# Em 17/09/2026 o fix do incidente de cliques (440fad1) foi validado e teve a
+# imagem publicada no GHCR às 17:43. O job de deploy só rodou às 14:33 do dia
+# seguinte: 20h50min retido no gate de aprovação de produção. A SEGUNDA queda
+# do login (18/09, 10h-11h UTC) aconteceu dentro desse intervalo — com a
+# correção pronta, testada e a um clique de distância.
+#
+# O gate está certo em existir: ele nasceu porque build dentro do VPS derrubou
+# produção 2x em 5 dias. O problema é que ele é SILENCIOSO. `gh run view` mostra
+# "✓ success" para um run cujo deploy nunca rodou (os jobs anteriores passaram),
+# e o Actions é, nas palavras do monitor-producao.yml, "onde ninguém olha".
+#
+# Este workflow não muda o gate. Ele só avisa que há alguém esperando.
+
+on:
+  schedule:
+    # 30 min. Diferente da sonda de queda, aqui não há urgência de segundos: o
+    # gate espera um humano de qualquer jeito. O agendador do GitHub é
+    # best-effort (ver a nota em monitor-producao.yml — pedimos 10 min e veio
+    # em 37), então o LIMITE_MIN abaixo é o que define o alarme, não o cron.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: vigia-gate-aprovacao
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  actions: read
+
+# Obrigatório: este workflow não faz checkout, então o `gh` não tem repositório
+# git de onde inferir o alvo. A falta disto custou o alerta de 15/09 no
+# monitor-producao.yml — mesma armadilha, mesma cura.
+env:
+  GH_REPO: ${{ github.repository }}
+  # A partir de quantos minutos parado vira aviso. 30 min tolera "a pessoa foi
+  # almoçar" sem tolerar "ninguém viu até amanhã".
+  LIMITE_MIN: '30'
+
+jobs:
+  vigiar:
+    name: Procurar deploy retido no gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Listar runs aguardando aprovação
+        id: vigia
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+
+          # `status=waiting` é exatamente "parado num gate de environment".
+          # Não confundir com `queued` (esperando runner) nem `in_progress`.
+          runs=$(gh api "/repos/${GH_REPO}/actions/runs?status=waiting&per_page=50" \
+                   --jq '.workflow_runs[] | [.id, .name, (.run_started_at), (.html_url), (.head_sha[0:7])] | @tsv' \
+                 2>/dev/null || true)
+
+          if [ -z "$runs" ]; then
+            echo "Nenhum run aguardando aprovação."
+            echo "parado=nao" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          agora=$(date -u +%s)
+          relatorio=""
+          pior_id=""
+          pior_min=0
+
+          # IFS explícito + read -r: nome de workflow tem espaço ("Deploy to
+          # Production") e sem isto o campo quebra em pedaços.
+          while IFS=$'\t' read -r id nome inicio url sha; do
+            [ -z "$id" ] && continue
+            # run_started_at, não updated_at: o updated_at muda a cada
+            # reavaliação do run e não serve para medir espera. O started_at é
+            # anterior ao início da espera pelo tempo do build (~90s), então
+            # esta conta SUPERESTIMA um pouco — erra para o lado de avisar.
+            ini=$(date -u -d "$inicio" +%s 2>/dev/null || echo 0)
+            [ "$ini" = "0" ] && continue
+            min=$(( (agora - ini) / 60 ))
+
+            echo "run $id ($nome) parado ha ${min} min"
+            if [ "$min" -ge "${LIMITE_MIN}" ]; then
+              relatorio="${relatorio}- **${nome}** (\`${sha}\`) parado ha **${min} min** aguardando aprovacao: ${url}\n"
+              if [ "$min" -gt "$pior_min" ]; then
+                pior_min="$min"
+                pior_id="$id"
+              fi
+            fi
+          done <<EOF
+          $runs
+          EOF
+
+          if [ -z "$relatorio" ]; then
+            echo "Ha runs aguardando, mas nenhum passou de ${LIMITE_MIN} min."
+            echo "parado=nao" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # printf "$relatorio" NAO serve: o texto comeca com "-" e o printf
+          # trata como opcao, saindo vazio. Mesma pegadinha do monitor.
+          { echo 'relatorio<<FIM'; printf '%b' "$relatorio"; echo 'FIM'; } >> "$GITHUB_OUTPUT"
+          echo "parado=sim" >> "$GITHUB_OUTPUT"
+          echo "run_id=${pior_id}" >> "$GITHUB_OUTPUT"
+          echo "minutos=${pior_min}" >> "$GITHUB_OUTPUT"
+
+      # ── WhatsApp ────────────────────────────────────────────────────────
+      #
+      # Mesmo caminho do alerta de queda: quem envia é a API de HOMOLOGAÇÃO,
+      # que tem a sessão do WhatsApp conectada (o WAHA não é alcançável de
+      # fora). Endpoint e dedup são SEPARADOS dos da sonda de queda: um deploy
+      # parado não pode silenciar um aviso de produção caída, e as duas coisas
+      # aconteceram no mesmo dia em 18/09.
+      #
+      # `|| true` no curl pelo motivo de sempre: alerta que não sai não pode
+      # pintar a vigia de vermelho e fazer com que a ignorem.
+      - name: Avisar no WhatsApp
+        if: steps.vigia.outputs.parado == 'sim'
+        env:
+          BASE: ${{ secrets.ALERTA_API_BASE }}
+          SEGREDO: ${{ secrets.CRON_SECRET }}
+          RELATORIO: ${{ steps.vigia.outputs.relatorio }}
+          RUN_ID: ${{ steps.vigia.outputs.run_id }}
+        run: |
+          if [ -z "$BASE" ] || [ -z "$SEGREDO" ]; then
+            echo "::warning::ALERTA_API_BASE/CRON_SECRET ausentes — WhatsApp não enviado."
+            exit 0
+          fi
+          corpo=$(jq -nc --arg r "$RUN_ID" --arg d "$RELATORIO" '{run_id:$r, detalhe:$d}')
+          resposta=$(curl -s -m 25 -X POST "$BASE/api/v1/internal/alertas/deploy-parado" \
+                       -H "Authorization: Bearer $SEGREDO" \
+                       -H "Content-Type: application/json" \
+                       -d "$corpo" || true)
+          echo "resposta do alerta: ${resposta:-<vazia>}"
+
+      - name: Abrir/atualizar issue
+        if: steps.vigia.outputs.parado == 'sim'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELATORIO: ${{ steps.vigia.outputs.relatorio }}
+          MINUTOS: ${{ steps.vigia.outputs.minutos }}
+        run: |
+          TITULO="⏸️ Deploy de produção parado no gate"
+          existente=$(gh issue list --state open --search "$TITULO in:title" \
+                        --json number --jq '.[0].number' 2>/dev/null || true)
+
+          corpo=$(printf 'Há deploy aguardando aprovação há mais de %s minutos.\n\n%b\n\n---\n\n**Como aprovar:** Actions → o run → **Review deployments** → marcar `production` → *Approve and deploy*.\n\n**Por que isto é vigiado:** em 17/09/2026 o fix do incidente de cliques (`440fad1`) ficou **20h50min** aqui. A imagem estava pronta no GHCR desde 17:43; o deploy só rodou às 14:33 do dia seguinte. A segunda queda do login aconteceu nesse intervalo, com a correção a um clique de distância.\n\n**Se for proposital** (esperando janela de baixo uso, por exemplo), é só fechar esta issue — ela reabre sozinha se o run continuar parado no próximo ciclo.\n\nDetalhes: `docs/INCIDENTE-2026-09-18-LOGIN-SUPABASE.md`\n' \
+                    "$MINUTOS" "$RELATORIO")
+
+          if [ -n "$existente" ] && [ "$existente" != "null" ]; then
+            gh issue comment "$existente" --body "$corpo"
+          else
+            gh issue create --title "$TITULO" --label incidente --body "$corpo" \
+              || gh issue create --title "$TITULO" --body "$corpo"
+          fi
+
+      - name: Fechar issue quando o gate esvaziar
+        if: steps.vigia.outputs.parado == 'nao'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Caminho FELIZ, roda a cada 30 min. Falhar aqui pinta o repo de
+          # vermelho com tudo certo — daí o `|| true` em tudo.
+          n=$(gh issue list --state open \
+                --search "Deploy de produção parado no gate in:title" \
+                --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$n" ] && [ "$n" != "null" ]; then
+            gh issue close "$n" --comment "✅ Nenhum deploy aguardando aprovação." || true
+          fi
