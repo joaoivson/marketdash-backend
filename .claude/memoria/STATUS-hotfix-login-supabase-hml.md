@@ -216,3 +216,56 @@ Consequência real: HML reiniciou uma vez a mais e o SHA mudou de `cdb5ed0` para
 **O SHA a conferir na validação agora é `efea46f`**, não `cdb5ed0`. A diferença
 entre os dois é exclusivamente comentário e docstring — nenhuma mudança de
 comportamento.
+
+---
+
+## Item 3.1 — vigia do gate de aprovação (18/09, 15:30 UTC)
+
+Construída a pedido do João, para fechar o ponto cego que a rodada revelou.
+
+| Peça | Arquivo | Commit |
+|---|---|---|
+| Workflow que varre runs em `status=waiting` | `.github/workflows/vigia-gate-aprovacao.yml` | `8341926` + `03d826b` |
+| Endpoint + dedup próprios do aviso | `app/api/v1/routes/internal.py`, `app/services/alerta_producao_service.py` | `d7fe2c5` |
+
+**Desenho:** a cada 30 min lista runs em `waiting`; passados 30 min de espera,
+manda WhatsApp (mesmo caminho do alerta de queda: API de hml → WAHA) e abre
+issue. Dedup por `run_id` em chave **separada** (`alerta_gate:run:<id>`) da do
+incidente de produção (`alerta_producao:incidente_aberto`) — compartilhar faria
+um deploy parado silenciar o aviso de produção caída, e em 18/09 as duas coisas
+aconteceram no mesmo dia. TTL de 4h para reavisar enquanto ninguém aprova.
+
+Seguiu as convenções duramente aprendidas do `monitor-producao.yml`: `GH_REPO`
+no env (sem checkout o `gh` não infere o repo — custou o alerta de 15/09),
+`printf '%b'` em vez de `printf "$var"` (o relatório começa com `-` e o printf
+o trata como opção, saindo vazio), e `|| true` nos avisos.
+
+### O que foi testado
+
+| Teste | Resultado |
+|---|---|
+| Parsing com nome de workflow com espaço | ✅ `'Deploy to Production'` inteiro |
+| Cálculo de espera no caso real (440fad1) | ✅ **1253 min** — bate com os 20h53 medidos |
+| Run com início no futuro | ✅ ignorado, não vira alerta |
+| Lógica contra a API real do GitHub | ✅ "nenhum run aguardando" → fecharia a issue |
+| Endpoint novo em HML | ✅ responde, e recusa sem o segredo (401) |
+| Suíte de testes | ✅ 1417 passaram; as 2 falhas são **preexistentes** (confirmado em worktree da `origin/develop` limpa) |
+
+### ⛔ A vigia está INERTE, e isso é por design de hoje
+
+`schedule` e `workflow_dispatch` são lidos **só da branch default** (`main`).
+Com o arquivo apenas na `develop`, o cron nunca dispara e `gh workflow run`
+devolve 404 — foi assim que a limitação apareceu, tentando testá-la.
+É o mesmo motivo pelo qual `monitor-producao.yml` vive na `main`.
+
+**Ligar a vigia exige levar o arquivo para `main`**, o que a regra desta rodada
+proíbe ("nada de `main`, hoje é só homologação"). Então ela fica pronta e
+documentada, esperando decisão do João. O cabeçalho do próprio workflow avisa
+disso, para ninguém supor cobertura inexistente — que é exatamente o defeito
+que ela veio consertar.
+
+Caminho quando for a hora: cherry-pick só do arquivo do workflow para `main`
+(não depende de nenhum código do hotfix — a chamada ao endpoint tem `|| true`,
+então funciona mesmo antes de o backend chegar em produção; a perna de WhatsApp
+liga quando o endpoint existir no ambiente apontado por `ALERTA_API_BASE`, que
+é **hml**, onde já está no ar).
