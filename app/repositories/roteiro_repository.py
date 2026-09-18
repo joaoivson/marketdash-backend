@@ -1,5 +1,5 @@
 """Acesso a roteiros, passos, execuções e mensagens — o chão do motor (F3)."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, text
@@ -272,6 +272,81 @@ class RoteiroRepository:
         self.db.commit()
         return self.db.query(RoteiroMensagem).get(linha[0])
 
+    def expirar_passos_que_nao_comecaram(
+        self, execucao_id: int, agora: datetime, tolerancia_s: int,
+        motivo: Optional[str] = None,
+    ) -> int:
+        """Mensagem cujo passo passou da hora e NUNCA começou vira `falhou`.
+
+        "Nunca envia atrasado": mensagem de lançamento fora da hora é pior que
+        mensagem não enviada. Mas a trava mede **o passo ter começado**, não
+        cada mensagem ter saído — e a diferença é a operação inteira.
+
+        As N mensagens de um passo nascem com o MESMO `agendado_para`, e o lote
+        é serial por desenho (pausa de 2–5 s entre blocos, fatia com orçamento
+        de 15 min). Um passo para 60 grupos leva minutos só para drenar; com a
+        trava por mensagem, os últimos 40 grupos falhariam porque a fila é
+        fila, não porque houve atraso.
+
+        Por isso o `NOT EXISTS`: se ALGUMA mensagem do mesmo par
+        (execução, passo) já saiu, o passo começou no horário e o lote drena
+        até o fim. É a mesma regra que a janela de envio já aplica — "execução
+        que começa dentro da janela é concluída, mesmo que ultrapasse o horário
+        de fim" —, pelo mesmo motivo: metade dos grupos com a oferta e metade
+        sem é o corte no meio que a regra existe para evitar.
+
+        `motivo` é o da parada que causou o atraso ("fora da janela de envio",
+        "teto diário", "campanha pausada"); sem ele, o genérico.
+        """
+        n = self.db.execute(
+            text("""
+                UPDATE roteiro_mensagens m
+                   SET status = :falhou,
+                       erro_motivo = :motivo
+                 WHERE m.execucao_id = :execucao_id
+                   AND m.status = :pendente
+                   AND m.agendado_para < :limite
+                   AND NOT EXISTS (
+                         SELECT 1 FROM roteiro_mensagens x
+                          WHERE x.execucao_id = m.execucao_id
+                            AND x.passo_id    = m.passo_id
+                            AND x.status      = :enviado
+                   )
+            """),
+            {
+                "falhou": MSG_FALHOU, "pendente": MSG_PENDENTE,
+                "enviado": MSG_ENVIADA, "execucao_id": execucao_id,
+                "limite": agora - timedelta(seconds=tolerancia_s),
+                "motivo": motivo or "passou do horário",
+            },
+        ).rowcount
+        self.db.commit()
+        return int(n or 0)
+
+    def remover_pendentes(self, execucao_id: int) -> int:
+        """Tira da fila o que ainda não saiu — o cancelamento de agendamento.
+
+        DELETE, não `cancelada`: a linha pendente é fila, não histórico. O que
+        já saiu (enviado, falhou, pulado) fica, porque esse é o registro do que
+        chegou nos grupos.
+        """
+        n = (
+            self.db.query(RoteiroMensagem)
+            .filter(RoteiroMensagem.execucao_id == execucao_id,
+                    RoteiroMensagem.status == MSG_PENDENTE)
+            .delete(synchronize_session=False)
+        )
+        self.db.flush()
+        return int(n or 0)
+
+    def ultima_execucao(self, roteiro_id: int) -> Optional[RoteiroExecucao]:
+        return (
+            self.db.query(RoteiroExecucao)
+            .filter(RoteiroExecucao.roteiro_id == roteiro_id)
+            .order_by(RoteiroExecucao.id.desc())
+            .first()
+        )
+
     def liberar_presas(self, execucao_id: int) -> int:
         """Linha presa em `enviando` = worker morreu entre o claim e a
         confirmação. Vira `falhou` e NUNCA é reenviada — não há como saber se
@@ -311,6 +386,31 @@ class RoteiroRepository:
             .all()
         )
         return {status: int(n) for status, n in linhas}
+
+    def pendentes_por_vencimento(self, execucao_id: int,
+                                 agora: Optional[datetime] = None) -> Tuple[int, int]:
+        """`(agendadas, na_fila)` — as duas metades de `pendente`.
+
+        O banco tem UM status para duas situações muito diferentes: "o horário
+        ainda não chegou" e "o horário chegou e a mensagem espera a vez do
+        número". A tela somava as duas em "Na fila", e com o roteiro agendado
+        para 21:40 às 21:15 ela lia "Na fila 3" — que é o sintoma de problema,
+        não de normalidade.
+
+        A diferença importa no diagnóstico: "na fila há 20 minutos" é problema,
+        "agendada para daqui a 25 minutos" é o roteiro funcionando.
+        """
+        agora = agora or datetime.now(timezone.utc)
+        linhas = (
+            self.db.query(RoteiroMensagem.agendado_para > agora,
+                          func.count(RoteiroMensagem.id))
+            .filter(RoteiroMensagem.execucao_id == execucao_id,
+                    RoteiroMensagem.status == MSG_PENDENTE)
+            .group_by(RoteiroMensagem.agendado_para > agora)
+            .all()
+        )
+        por_futuro = {bool(futuro): int(n) for futuro, n in linhas}
+        return por_futuro.get(True, 0), por_futuro.get(False, 0)
 
     def enviadas_na_janela(self, user_id: int, inicio: datetime, fim: datetime,
                            instancia_id: Optional[int] = None) -> int:

@@ -62,6 +62,8 @@ if PG_OK:
             "acao_descontinuada BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE roteiro_mensagens ADD COLUMN IF NOT EXISTS "
             "blocos_enviados INTEGER NOT NULL DEFAULT 0",
+            # 088 (rodada 2): descrição do grupo — idem.
+            "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS descricao TEXT",
         ):
             _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
@@ -81,7 +83,8 @@ from app.models.whatsapp_grupos import (  # noqa: E402
 from app.schemas.roteiros import BlocoIn, PassoIn  # noqa: E402
 from app.services.roteiro_envio_service import RoteiroEnvioService  # noqa: E402
 from app.services.roteiro_service import (  # noqa: E402
-    ExecucaoJaAtiva, PassoJaEnviado, PassosNoPassado, RoteiroService,
+    ExecucaoJaAtiva, PassoJaEnviado, PassosNoPassado, RoteiroEncerrado,
+    RoteiroService,
 )
 from app.services.waha_client import ErroWhatsapp  # noqa: E402
 
@@ -111,6 +114,9 @@ def teto_global_fora_do_caminho(monkeypatch):
 class _FakeWaha:
     def __init__(self, erro_no_envio=None):
         self.enviadas = []
+        #: (tipo do bloco, mencionou?) por envio — o "marcar todos" precisa
+        #: cair em UM bloco só, e é isto que prova.
+        self.mencoes = []
         self.renomeados = []
         self.descricoes = []
         self.imagens = []
@@ -123,14 +129,33 @@ class _FakeWaha:
         if self.erro_no_envio == self._n:
             raise ErroWhatsapp("timeout", "fake")
 
-    def enviar_texto(self, chat_id, texto):
+    def enviar_texto(self, chat_id, texto, mencionar_todos=False):
         self._talvez_falhar()
         self.enviadas.append(("texto", chat_id, texto))
+        self.mencoes.append(("texto", bool(mencionar_todos)))
         return {"ok": True}
 
-    def enviar_imagem(self, chat_id, url, legenda=""):
+    def enviar_imagem(self, chat_id, url, legenda="", mencionar_todos=False):
         self._talvez_falhar()
         self.enviadas.append(("imagem", chat_id, url, legenda))
+        self.mencoes.append(("imagem", bool(mencionar_todos)))
+        return {"ok": True}
+
+    def enviar_video(self, chat_id, url, legenda="", mencionar_todos=False):
+        self._talvez_falhar()
+        self.enviadas.append(("video", chat_id, url, legenda))
+        self.mencoes.append(("video", bool(mencionar_todos)))
+        return {"ok": True}
+
+    def enviar_voz(self, chat_id, url):
+        self._talvez_falhar()
+        self.enviadas.append(("audio", chat_id, url))
+        return {"ok": True}
+
+    def enviar_arquivo(self, chat_id, url, legenda="", mencionar_todos=False):
+        self._talvez_falhar()
+        self.enviadas.append(("arquivo", chat_id, url, legenda))
+        self.mencoes.append(("arquivo", bool(mencionar_todos)))
         return {"ok": True}
 
     def renomear_grupo(self, jid, nome):
@@ -147,6 +172,17 @@ def _servico(db, cliente, dormir=None):
     return RoteiroEnvioService(db, dormir=dormir or (lambda s: None),
                                cliente_factory=lambda nome: cliente,
                                short_link_factory=lambda u, url, sid: "https://s.ee/x")
+
+
+def _hoje_brt():
+    from app.services.janela_envio_service import BRT
+    return datetime.now(BRT).date()
+
+
+def _daqui_a_pouco():
+    """Hora de hoje ainda no futuro — o agendar recusa passo no passado."""
+    from app.services.janela_envio_service import BRT
+    return (datetime.now(BRT) + timedelta(minutes=30)).time().replace(microsecond=0)
 
 
 def _amanha():
@@ -183,7 +219,9 @@ def _base(db, n_grupos=1):
 
 def _passo_in(ordem, *, id=None, hora=time_t(23, 30), data=None,
               blocos=(("texto", "oi"),), offset=None, unidade="minutos",
-              tipo="mensagem", acao=None, parametro=None):
+              tipo="mensagem", acao=None, parametro=None,
+              marcar_todos="nunca"):
+    """`blocos` aceita (tipo, conteudo) ou (tipo, conteudo, legenda)."""
     relativo = offset is not None
     return PassoIn(
         id=id, ordem=ordem,
@@ -192,9 +230,11 @@ def _passo_in(ordem, *, id=None, hora=time_t(23, 30), data=None,
         data_fixa=None if relativo else (data or _amanha()),
         offset_valor=offset, offset_unidade=unidade if relativo else None,
         tipo_conteudo=tipo,
-        blocos=[BlocoIn(tipo=t, conteudo=c) for t, c in blocos]
-        if tipo == "mensagem" else [],
+        blocos=[BlocoIn(tipo=b[0], conteudo=b[1],
+                        legenda=b[2] if len(b) > 2 else None)
+                for b in blocos] if tipo == "mensagem" else [],
         acao=acao, acao_parametro=parametro,
+        marcar_todos=marcar_todos,
     )
 
 
@@ -685,8 +725,13 @@ def test_excluir_passo_com_historico_de_execucao_concluida_e_recusado(db):
     db.commit()
 
     passos = servico.repo.passos(roteiro.id)
-    with pytest.raises(PassoJaEnviado):
+    # Desde a rodada 2 a recusa vem antes e é mais forte: roteiro que já rodou
+    # é SÓ LEITURA inteiro, não só nos passos que saíram. A garantia que
+    # importa continua a mesma — o CASCADE não apaga o histórico.
+    with pytest.raises(RoteiroEncerrado):
         servico.definir_passos(roteiro, [_passo_in(1, id=passos[0].id)])
+    assert db.query(RoteiroMensagem).filter(
+        RoteiroMensagem.execucao_id == execucao.id).count() == len(linhas)
 
 
 def test_bloco_sem_conteudo_no_banco_nao_derruba_a_leitura(db):
@@ -733,3 +778,293 @@ def test_trocar_os_blocos_zera_a_retomada_por_bloco(db):
         ("texto", "OUTRO um"), ("texto", "OUTRO dois")))])
     db.expire_all()
     assert db.query(RoteiroMensagem).get(linha.id).blocos_enviados == 0
+
+
+# --- Rodada 2: marcar todos, e os blocos que o motor passou a enviar ----------
+#
+# "Marcar todos" era campo morto: gravado, validado, devolvido na API, copiado
+# no duplicar — e NUNCA lido no envio. A afiliada ligava o toggle, a mensagem
+# chegava no grupo sem marcar ninguém, e nada no sistema registrava o problema.
+
+
+def test_marcar_todos_menciona_so_no_primeiro_bloco_com_texto(db):
+    """A menção viaja presa a UM corpo de texto, e só um.
+
+    O WhatsApp precisa de texto para pendurar o `mentionedJid`. Marcar em
+    todos os blocos notificaria o grupo N vezes pelo mesmo passo — num grupo de
+    900 pessoas, isso é 900 notificações vezes N.
+    """
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, marcar_todos="sempre", blocos=(
+        ("imagem", "https://img/1.jpg"),          # sem legenda: não menciona
+        ("texto", "corre que acaba"),             # ← a menção vai AQUI
+        ("texto", "link na bio"),
+    ))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert cliente.mencoes == [("imagem", False), ("texto", True), ("texto", False)]
+
+
+def test_marcar_todos_usa_a_legenda_quando_o_passo_abre_com_imagem(db):
+    """Legenda de imagem é corpo de texto — serve de âncora para a menção."""
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, marcar_todos="sempre", blocos=(
+        ("imagem", "https://img/1.jpg", "olha essa oferta"),
+        ("texto", "corre"),
+    ))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert cliente.mencoes == [("imagem", True), ("texto", False)]
+
+
+def test_marcar_todos_sem_nenhum_texto_nao_menciona_ninguem(db):
+    """Sem texto não há como mencionar — e o motor não pode depender de a tela
+    ter desabilitado o toggle."""
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, marcar_todos="sempre", blocos=(
+        ("imagem", "https://img/1.jpg"),
+        ("imagem", "https://img/2.jpg"),
+    ))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert cliente.mencoes == [("imagem", False), ("imagem", False)]
+
+
+def test_marcar_todos_desligado_nao_menciona(db):
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, blocos=(("texto", "oi"),))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert cliente.mencoes == [("texto", False)]
+
+
+def test_video_audio_e_arquivo_chamam_o_metodo_certo_do_waha(db):
+    """Áudio sai por `enviar_voz` (nota de voz), nunca por `enviar_arquivo`.
+
+    MP3 mandado como arquivo aparece como anexo, não como bolha de áudio — e é
+    a bolha que o bloco de áudio promete na tela.
+    """
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, blocos=(
+        ("video", "https://m/v.mp4", "olha isso"),
+        ("audio", "https://m/a.ogg"),
+        ("arquivo", "https://m/catalogo.pdf", "o catálogo"),
+    ))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert [e[0] for e in cliente.enviadas] == ["video", "audio", "arquivo"]
+    # Nota de voz não carrega legenda: o envio de áudio tem 3 campos, não 4.
+    assert len(cliente.enviadas[1]) == 3
+
+
+def test_marcar_todos_pula_o_audio_e_cai_no_proximo_com_texto(db):
+    """Nota de voz não tem legenda — não pode consumir a menção do passo."""
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, marcar_todos="sempre", blocos=(
+        ("audio", "https://m/a.ogg"),
+        ("texto", "ouviu? corre"),
+    ))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert cliente.mencoes == [("texto", True)]
+
+
+def test_alterar_descricao_e_imagem_gravam_no_registro_local_na_hora(db):
+    """O sync roda 1×/dia: sem a gravação imediata, ela altera a descrição às
+    10:26 e o painel segue mostrando a antiga até o dia seguinte — sem ter como
+    saber se o passo funcionou."""
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [
+        _passo_in(1, tipo="acao_grupo", acao="alterar_descricao",
+                  parametro="Carrinho aberto até domingo"),
+        _passo_in(2, tipo="acao_grupo", acao="alterar_imagem",
+                  parametro="https://img/capa-nova.jpg", offset=0),
+    ])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+
+    db.refresh(grupo)
+    assert grupo.descricao == "Carrinho aberto até domingo"
+    assert grupo.foto_url == "https://img/capa-nova.jpg"
+
+
+# --- Rodada 2: cancelar agendamento e roteiro encerrado ----------------------
+#
+# Antes desta rodada, roteiro AGENDADO não tinha ação nenhuma além de Editar e
+# Duplicar: não havia como cancelar. E o `POST /cancelar` que existia só trocava
+# o status da execução — as mensagens pendentes continuavam na fila.
+
+
+def test_cancelar_apaga_as_pendentes_e_devolve_o_roteiro_para_rascunho(db):
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(db.query(Roteiro).get(roteiro.id),
+                           [_passo_in(1), _passo_in(2, offset=5)])
+    execucao, _ = servico.agendar(roteiro)
+    assert roteiro.status == "pronto"
+    assert db.query(RoteiroMensagem).filter(
+        RoteiroMensagem.execucao_id == execucao.id).count() == 2
+
+    servico.cancelar_execucao(execucao)
+
+    db.expire_all()
+    assert execucao.status == "cancelada"
+    assert db.query(RoteiroMensagem).filter(
+        RoteiroMensagem.execucao_id == execucao.id).count() == 0
+    # O botão "Agendar" volta para a linha da listagem.
+    assert db.query(Roteiro).get(roteiro.id).status == "rascunho"
+
+
+def test_cancelar_preserva_o_que_ja_saiu(db):
+    """A metade enviada é o registro do que chegou nos grupos — apagá-la faria
+    a tela deixar de refletir a realidade."""
+    servico = RoteiroService(db)
+    user, roteiro, grupos = _base(db, n_grupos=2)
+    servico.definir_passos(roteiro, [_passo_in(1)])
+    execucao, _ = servico.agendar(roteiro)
+    linhas = (db.query(RoteiroMensagem)
+              .filter(RoteiroMensagem.execucao_id == execucao.id)
+              .order_by(RoteiroMensagem.id).all())
+    linhas[0].status = MSG_ENVIADA
+    db.commit()
+
+    servico.cancelar_execucao(execucao)
+
+    db.expire_all()
+    restantes = (db.query(RoteiroMensagem)
+                 .filter(RoteiroMensagem.execucao_id == execucao.id).all())
+    assert [l.status for l in restantes] == [MSG_ENVIADA]
+    # Os contadores acompanham: `total` que continua contando mensagem apagada
+    # é a assinatura do bug de 06/09 ao contrário.
+    assert execucao.total == 1 and execucao.enviados == 1
+
+
+def test_cancelar_permite_agendar_de_novo(db):
+    """Cancelar NÃO encerra o roteiro — encerrar é concluir ou falhar."""
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1)])
+    execucao, _ = servico.agendar(roteiro)
+    servico.cancelar_execucao(execucao)
+
+    nova, _ = servico.agendar(db.query(Roteiro).get(roteiro.id))
+    assert nova.id != execucao.id
+
+
+def test_roteiro_concluido_recusa_editar_ajustar_e_agendar(db):
+    """Editar um roteiro que já rodou faria a tela deixar de refletir o que foi
+    realmente enviado: ela muda o texto do passo 2 e passa a ver uma mensagem
+    que nunca saiu naquela execução. Refazer é duplicar."""
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1)])
+    execucao, _ = servico.agendar(roteiro)
+    for m in db.query(RoteiroMensagem).filter(
+            RoteiroMensagem.execucao_id == execucao.id):
+        m.status = MSG_ENVIADA
+    execucao.status = EXEC_CONCLUIDA
+    db.commit()
+
+    assert servico.roteiro_encerrado(roteiro.id) is True
+    passos = servico.repo.passos(roteiro.id)
+    with pytest.raises(RoteiroEncerrado):
+        servico.definir_passos(roteiro, [_passo_in(1, id=passos[0].id)])
+    with pytest.raises(RoteiroEncerrado):
+        servico.ajustar_datas(roteiro, {passos[0].id: (_amanha(), None)})
+    with pytest.raises(RoteiroEncerrado):
+        servico.agendar(roteiro)
+
+
+def test_contadores_separam_agendadas_de_na_fila(db):
+    """"Na fila 3" com o roteiro agendado para daqui a 25 minutos é o sintoma
+    de problema, não de normalidade — a diferença importa no diagnóstico."""
+    servico = RoteiroService(db)
+    user, roteiro, grupos = _base(db, n_grupos=3)
+    servico.definir_passos(roteiro, [_passo_in(1)])
+    execucao, _ = servico.agendar(roteiro)
+
+    # Tudo agendado para o futuro: nada está "na fila".
+    agendadas, na_fila = servico.repo.pendentes_por_vencimento(execucao.id)
+    assert (agendadas, na_fila) == (3, 0)
+
+    # Uma vence: passa para "na fila", aguardando a vez do número.
+    primeira = (db.query(RoteiroMensagem)
+                .filter(RoteiroMensagem.execucao_id == execucao.id)
+                .order_by(RoteiroMensagem.id).first())
+    primeira.agendado_para = datetime.now(timezone.utc) - timedelta(seconds=30)
+    db.commit()
+
+    agendadas, na_fila = servico.repo.pendentes_por_vencimento(execucao.id)
+    assert (agendadas, na_fila) == (2, 1)
+
+
+def test_agendar_avisa_quando_o_roteiro_passa_do_teto_diario(db):
+    """Contrapartida obrigatória de "nunca envia atrasado".
+
+    O excedente do teto diário FALHA em vez de sair amanhã. 80 mensagens/dia
+    por número — se ela não vir o número antes do clique, descobre pela metade
+    dos grupos sem receber.
+    """
+    servico = RoteiroService(db)
+    user, roteiro, grupos = _base(db, n_grupos=3)
+    servico.definir_passos(roteiro, [_passo_in(1, data=_hoje_brt(),
+                                               hora=_daqui_a_pouco())])
+
+    # Teto de 2 com 3 grupos: uma mensagem sobra.
+    for inst in db.query(WhatsappInstancia).filter(
+            WhatsappInstancia.user_id == user.id):
+        inst.teto_diario = 2
+    db.commit()
+
+    execucao, avisos = servico.agendar(roteiro)
+    assert execucao is None, "o agendamento para para ela confirmar"
+    assert any("teto diário" in a for a in avisos), avisos
+    assert any("3 mensagens hoje" in a for a in avisos), avisos
+
+    # Com `ignorar_avisos` ela segue em frente — é decisão dela.
+    execucao, _ = servico.agendar(roteiro, ignorar_avisos=True)
+    assert execucao is not None
+
+
+def test_agendar_nao_avisa_de_teto_quando_cabe(db):
+    servico = RoteiroService(db)
+    user, roteiro, grupos = _base(db, n_grupos=2)
+    servico.definir_passos(roteiro, [_passo_in(1, data=_hoje_brt(),
+                                               hora=_daqui_a_pouco())])
+
+    execucao, avisos = servico.agendar(roteiro)
+    assert execucao is not None
+    assert not any("teto diário" in a for a in avisos), avisos

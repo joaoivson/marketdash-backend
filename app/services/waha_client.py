@@ -116,6 +116,26 @@ def chat_id_de_numero(numero: str) -> str:
     return f"{numero}@c.us"
 
 
+def _mencoes(mencionar_todos: bool, destino_grupo: bool) -> Dict[str, Any]:
+    """O corpo do `mentions` quando o passo pede "marcar todos".
+
+    `["all"]` é palavra-chave do WAHA: ele resolve para o `mentionedJid` de
+    todos os participantes do grupo. Por isso NÃO montamos a lista de JIDs
+    aqui — `grupo_participantes` só é populada para grupo `ativado`, e um
+    grupo não ativado não teria fonte nenhuma.
+
+    ⚠️ O campo é **escondido do OpenAPI** do WAHA (`@ApiHideProperty` desde
+    2023), então ele não aparece no Swagger nem no cliente gerado. Existe, é
+    aceito no GOWS, e é a única forma de mencionar sem enumerar.
+
+    Fora de grupo não faz sentido e o WAHA pode recusar o corpo — mencionar
+    numa DM é mencionar a própria pessoa.
+    """
+    if not (mencionar_todos and destino_grupo):
+        return {}
+    return {"mentions": ["all"]}
+
+
 def campo(dados: Any, *nomes: str) -> Any:
     """
     Primeiro campo presente no payload, ignorando maiúsculas/minúsculas.
@@ -581,14 +601,16 @@ class WahaClient:
             return ErroWhatsapp("desconectado", detalhe)
         return ErroWhatsapp("envio", f"status {status}: {detalhe}")
 
-    def enviar_texto(self, chat_id: str, texto: str) -> Dict[str, Any]:
+    def enviar_texto(self, chat_id: str, texto: str,
+                     mencionar_todos: bool = False) -> Dict[str, Any]:
         """chat_id: '5511...@c.us' (DM) ou '12036...@g.us' (grupo)."""
         destino_grupo = chat_id.endswith("@g.us")
         if destino_grupo:
             validar_jid_de_grupo(chat_id)
+        corpo = {"session": self.sessao, "chatId": chat_id, "text": texto}
+        corpo.update(_mencoes(mencionar_todos, destino_grupo))
         status, dados = self._pedir(
-            "POST", "/api/sendText",
-            {"session": self.sessao, "chatId": chat_id, "text": texto},
+            "POST", "/api/sendText", corpo,
             auth_em_403=False,
         )
         if status >= 400:
@@ -597,20 +619,77 @@ class WahaClient:
 
     def enviar_imagem(self, chat_id: str, url_imagem: str, legenda: str = "",
                       mimetype: str = "image/jpeg",
-                      nome_arquivo: str = "imagem.jpeg") -> Dict[str, Any]:
+                      nome_arquivo: str = "imagem.jpeg",
+                      mencionar_todos: bool = False) -> Dict[str, Any]:
+        return self._enviar_midia("/api/sendImage", chat_id, url_imagem,
+                                  mimetype, nome_arquivo, legenda=legenda,
+                                  mencionar_todos=mencionar_todos)
+
+    def enviar_video(self, chat_id: str, url_video: str, legenda: str = "",
+                     mimetype: str = "video/mp4",
+                     nome_arquivo: str = "video.mp4",
+                     mencionar_todos: bool = False) -> Dict[str, Any]:
+        """POST /api/sendVideo.
+
+        `asNote=False` de propósito: `True` manda vídeo redondo (a "nota de
+        vídeo"), que não é o que o bloco de vídeo promete na tela.
+        """
+        return self._enviar_midia("/api/sendVideo", chat_id, url_video,
+                                  mimetype, nome_arquivo, legenda=legenda,
+                                  mencionar_todos=mencionar_todos,
+                                  extras={"asNote": False})
+
+    def enviar_voz(self, chat_id: str, url_audio: str,
+                   mimetype: str = "audio/ogg; codecs=opus",
+                   nome_arquivo: str = "audio.ogg") -> Dict[str, Any]:
+        """POST /api/sendVoice — nota de voz, a bolha com a onda sonora.
+
+        `convert=True` é o que torna o bloco possível sem ffmpeg do nosso lado:
+        o WhatsApp só aceita OPUS em contêiner OGG, e MP3 ou WebM enviados
+        assim aparecem como ARQUIVO ANEXADO, não como áudio. Quem converte é o
+        WAHA. Gravação do navegador sai em WebM, então a conversão vale para os
+        dois caminhos (gravar e anexar), não só para o arquivo solto.
+
+        Sem `caption` e sem menção: nota de voz não carrega texto, e o WhatsApp
+        precisa de um corpo de texto para pendurar o `mentionedJid`.
+        """
+        return self._enviar_midia("/api/sendVoice", chat_id, url_audio,
+                                  mimetype, nome_arquivo,
+                                  extras={"convert": True})
+
+    def enviar_arquivo(self, chat_id: str, url_arquivo: str, legenda: str = "",
+                       mimetype: str = "application/octet-stream",
+                       nome_arquivo: str = "arquivo",
+                       mencionar_todos: bool = False) -> Dict[str, Any]:
+        """POST /api/sendFile — documento anexado, com o nome que ela subiu."""
+        return self._enviar_midia("/api/sendFile", chat_id, url_arquivo,
+                                  mimetype, nome_arquivo, legenda=legenda,
+                                  mencionar_todos=mencionar_todos)
+
+    def _enviar_midia(self, caminho: str, chat_id: str, url: str,
+                      mimetype: str, nome_arquivo: str,
+                      legenda: str = "", mencionar_todos: bool = False,
+                      extras: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Corpo comum de sendImage/sendVideo/sendVoice/sendFile.
+
+        Todos mandam a URL e é o WAHA que baixa o arquivo — o worker nunca
+        carrega bytes de mídia na memória. Mesmo contrato do `alterar_imagem`.
+        """
+        if not (url or "").strip():
+            raise ErroWhatsapp("envio", f"{caminho} sem URL")
         destino_grupo = chat_id.endswith("@g.us")
         if destino_grupo:
             validar_jid_de_grupo(chat_id)
-        status, dados = self._pedir(
-            "POST", "/api/sendImage",
-            {
-                "session": self.sessao,
-                "chatId": chat_id,
-                "file": {"mimetype": mimetype, "url": url_imagem, "filename": nome_arquivo},
-                "caption": legenda or None,
-            },
-            auth_em_403=False,
-        )
+        corpo: Dict[str, Any] = {
+            "session": self.sessao,
+            "chatId": chat_id,
+            "file": {"mimetype": mimetype, "url": url, "filename": nome_arquivo},
+        }
+        if legenda:
+            corpo["caption"] = legenda
+        corpo.update(extras or {})
+        corpo.update(_mencoes(mencionar_todos, destino_grupo))
+        status, dados = self._pedir("POST", caminho, corpo, auth_em_403=False)
         if status >= 400:
             raise self._classificar_erro_envio(status, str(dados)[:200], destino_grupo)
         return dados if isinstance(dados, dict) else {}

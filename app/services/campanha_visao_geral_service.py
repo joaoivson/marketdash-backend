@@ -24,6 +24,10 @@ from app.models.campanha_grupos import Campanha, CampanhaGrupo
 from app.models.campanha_link import (
     EVENTO_ENTRADA, ORIGEM_LINK, CampanhaLink, CampanhaLinkEvento, GrupoEvento,
 )
+from app.models.roteiro import (
+    EXEC_ATIVAS, MSG_ENVIADA, MSG_FALHOU, Roteiro, RoteiroExecucao,
+    RoteiroMensagem,
+)
 from app.models.whatsapp_grupos import WhatsappGrupo
 from app.repositories.campanha_link_repository import cheio_efetivo
 from app.services.admin_metrics_service import BRT, _brt_date
@@ -97,6 +101,58 @@ class CampanhaVisaoGeralService:
             "participantes": participantes,
             "grupos": self._estado_dos_grupos(campanha.id),
             "serie": serie,
+            "envios": self._envios(campanha, ini_utc, fim_utc),
+        }
+
+    def _envios(self, campanha: Campanha, ini_utc, fim_utc) -> Dict[str, object]:
+        """Roteiros agendados agora + o que saiu e o que falhou no período.
+
+        `roteiros_agendados` é estado do AGORA (não do período): a pergunta é
+        "tem coisa marcada para sair?". Enviadas e falhas são do período, como
+        o resto do payload.
+        """
+        agendados = (
+            self.db.query(func.count(Roteiro.id))
+            .join(RoteiroExecucao, RoteiroExecucao.roteiro_id == Roteiro.id)
+            .filter(Roteiro.campanha_id == campanha.id,
+                    Roteiro.user_id == campanha.user_id,
+                    RoteiroExecucao.status.in_(EXEC_ATIVAS))
+            .scalar()
+        ) or 0
+
+        # `enviado_em` para o que saiu (o fato) e `agendado_para` para a falha
+        # (o que não saiu não tem `enviado_em`) — datas diferentes porque são
+        # perguntas diferentes.
+        base = (
+            self.db.query(RoteiroMensagem)
+            .join(RoteiroExecucao,
+                  RoteiroExecucao.id == RoteiroMensagem.execucao_id)
+            .join(Roteiro, Roteiro.id == RoteiroExecucao.roteiro_id)
+            .filter(Roteiro.campanha_id == campanha.id,
+                    RoteiroMensagem.user_id == campanha.user_id)
+        )
+        enviadas = (
+            base.filter(RoteiroMensagem.status == MSG_ENVIADA,
+                        RoteiroMensagem.enviado_em >= ini_utc,
+                        RoteiroMensagem.enviado_em <= fim_utc)
+            .count()
+        )
+        falhadas = base.filter(RoteiroMensagem.status == MSG_FALHOU,
+                               RoteiroMensagem.agendado_para >= ini_utc,
+                               RoteiroMensagem.agendado_para <= fim_utc)
+        falhas = falhadas.count()
+        # A linha é clicável: leva ao roteiro da falha mais recente, que é o
+        # que ela quer abrir primeiro.
+        com_falha = (
+            falhadas.with_entities(RoteiroExecucao.roteiro_id)
+            .order_by(RoteiroMensagem.agendado_para.desc())
+            .first()
+        )
+        return {
+            "roteiros_agendados": int(agendados),
+            "mensagens_enviadas": int(enviadas),
+            "falhas": int(falhas),
+            "roteiro_com_falha_id": com_falha[0] if com_falha else None,
         }
 
     # --- pedaços -------------------------------------------------------------

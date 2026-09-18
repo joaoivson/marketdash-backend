@@ -18,10 +18,23 @@ ROTULO_DA_ACAO = {
 }
 
 
+# O que falta quando o bloco vem vazio, na concordância de cada palavra —
+# "precisa da imagem", "precisa do vídeo". Texto solto no f-string erraria o
+# gênero na metade dos tipos.
+_FALTANDO = {
+    "texto": "o texto",
+    "imagem": "a imagem",
+    "video": "o vídeo",
+    "audio": "o áudio",
+    "arquivo": "o arquivo",
+    "oferta": "o conteúdo",
+}
+
+
 class BlocoIn(BaseModel):
     """Um pedaço do que sai no passo. Um envio real é frequentemente 4 imagens
     + um texto — e isso é diferente de 4 passos com `+0s`."""
-    tipo: Literal["texto", "imagem", "audio", "video", "oferta"]
+    tipo: Literal["texto", "imagem", "audio", "video", "arquivo", "oferta"]
     conteudo: Optional[str] = Field(default=None, max_length=4000)
     legenda: Optional[str] = Field(default=None, max_length=4000)
     template_id: Optional[int] = None
@@ -29,15 +42,14 @@ class BlocoIn(BaseModel):
     @model_validator(mode="after")
     def _conteudo_coerente(self):
         if self.tipo not in BLOCOS_ENVIAVEIS:
-            # `audio`/`video`/`oferta` existem no schema para quando a fila de
-            # ofertas for definida. Aceitar aqui e falhar no disparo viraria
-            # uma linha `pulado` com motivo críptico horas depois.
+            # `oferta` existe no schema para quando a fila de ofertas for
+            # definida. Aceitar aqui e falhar no disparo viraria uma linha
+            # `pulado` com motivo críptico horas depois.
             raise ValueError(
-                "Por enquanto o passo aceita blocos de texto e de imagem."
+                "O passo aceita blocos de texto, imagem, vídeo, áudio e arquivo."
             )
         if not (self.conteudo or "").strip():
-            faltando = "a imagem" if self.tipo == "imagem" else "o texto"
-            raise ValueError(f"Um bloco de {self.tipo} precisa d{faltando}.")
+            raise ValueError(f"Um bloco de {self.tipo} precisa d{_FALTANDO[self.tipo]}.")
         return self
 
 
@@ -207,6 +219,13 @@ class ExecucaoResumo(BaseModel):
     enviados: int
     erros: int
     pulados: int
+    #: As duas metades de `pendente`. O banco tem UM status para duas situações
+    #: muito diferentes, e somá-las fazia o card dizer "Na fila 3" com o
+    #: roteiro agendado para daqui a 25 minutos — que é o sintoma de problema,
+    #: não de normalidade. "Na fila há 20 minutos" é problema; "agendada para
+    #: daqui a 25" é o roteiro funcionando.
+    agendadas: int = 0   # o horário ainda não chegou
+    na_fila: int = 0     # o horário chegou, aguardando a vez do número
     proxima_execucao_em: Optional[datetime]
     concluido_em: Optional[datetime]
 
@@ -229,6 +248,11 @@ class RoteiroDetalheOut(RoteiroOut):
     passos: List[PassoOut]
     avisos: List[str] = []
     passos_no_passado: List[int] = []
+    #: O roteiro já rodou: a tela abre em LEITURA (passos, horários reais,
+    #: status e quais grupos falharam), sem editar, mover ou excluir. E sem o
+    #: destaque de data vencida — roteiro concluído não é rascunho quebrado,
+    #: não há data a ajustar nem agendamento a fazer.
+    encerrado: bool = False
 
 
 class AgendarIn(BaseModel):
@@ -274,6 +298,13 @@ class ExecucaoOut(BaseModel):
     enviados: int
     erros: int
     pulados: int
+    #: As duas metades de `pendente`. O banco tem UM status para duas situações
+    #: muito diferentes, e somá-las fazia o card dizer "Na fila 3" com o
+    #: roteiro agendado para daqui a 25 minutos — que é o sintoma de problema,
+    #: não de normalidade. "Na fila há 20 minutos" é problema; "agendada para
+    #: daqui a 25" é o roteiro funcionando.
+    agendadas: int = 0   # o horário ainda não chegou
+    na_fila: int = 0     # o horário chegou, aguardando a vez do número
     proxima_execucao_em: Optional[datetime]
     iniciado_em: Optional[datetime]
     concluido_em: Optional[datetime]

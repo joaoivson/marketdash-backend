@@ -65,6 +65,10 @@ class WhatsappGrupo(Base):
                      nullable=False, index=True)
     jid = Column(String(64), nullable=False)
     nome = Column(String(255), nullable=True)
+    # Descrição (migration 088). Vem do sync junto com nome e foto, e a ação
+    # `alterar_descricao` do roteiro grava aqui na hora — sem isso o painel
+    # mostra o valor de antes e ela não sabe se o passo funcionou.
+    descricao = Column(Text, nullable=True)
     foto_url = Column(Text, nullable=True)
     # AGREGADO (contagem) — a lista de membros nunca toca o banco (LGPD).
     participantes = Column(Integer, nullable=False, default=0)

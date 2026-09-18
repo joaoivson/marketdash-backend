@@ -23,10 +23,12 @@ from app.schemas.roteiros import (
     RoteiroDetalheOut, RoteiroOut, StatusDoPasso,
 )
 from app.services.janela_envio_service import BRT
+from app.repositories.roteiro_repository import RoteiroRepository
 from app.services.roteiro_service import (
-    CampanhaInvalida, ExecucaoJaAtiva, PassoJaEnviado, PassosNoPassado,
-    RoteiroInvalido, RoteiroService, estimativa_de_duracao_s, ordens_no_passado,
-    resolver_horarios, segundos_para_offset,
+    CampanhaInvalida, ExecucaoEncerrada, ExecucaoJaAtiva, PassoJaEnviado,
+    PassosNoPassado, RoteiroEncerrado, RoteiroInvalido, RoteiroService,
+    estimativa_de_duracao_s, ordens_no_passado, resolver_horarios,
+    segundos_para_offset,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,12 +58,14 @@ def execucao_da_usuaria(
     return execucao
 
 
-def _resumo(e: Optional[RoteiroExecucao]) -> Optional[ExecucaoResumo]:
+def _resumo(db: Session, e: Optional[RoteiroExecucao]) -> Optional[ExecucaoResumo]:
     if e is None:
         return None
+    agendadas, na_fila = RoteiroRepository(db).pendentes_por_vencimento(e.id)
     return ExecucaoResumo(
         id=e.id, status=e.status, total=e.total, enviados=e.enviados,
         erros=e.erros, pulados=e.pulados,
+        agendadas=agendadas, na_fila=na_fila,
         proxima_execucao_em=e.proxima_execucao_em, concluido_em=e.concluido_em,
     )
 
@@ -82,7 +86,7 @@ def _roteiro_out(db: Session, r: Roteiro, *, total_passos: Optional[int] = None,
         total_passos=(total_passos if total_passos is not None
                       else len(servico.repo.passos(r.id))),
         criado_em=r.criado_em,
-        execucao_ativa=_resumo(ativa), ultima_execucao=_resumo(ultima),
+        execucao_ativa=_resumo(db, ativa), ultima_execucao=_resumo(db, ultima),
     )
 
 
@@ -156,18 +160,22 @@ def _detalhe(db: Session, roteiro: Roteiro) -> RoteiroDetalheOut:
         ],
         avisos=avisos,
         passos_no_passado=atrasados,
+        encerrado=servico.roteiro_encerrado(roteiro.id),
     )
 
 
 def _execucao_out(db: Session, e, avisos=None,
                   passos: Optional[Dict[int, StatusDoPasso]] = None) -> ExecucaoOut:
-    pendentes = max(e.total - e.enviados - e.erros - e.pulados, 0)
+    agendadas, na_fila = RoteiroRepository(db).pendentes_por_vencimento(e.id)
     return ExecucaoOut(
         id=e.id, roteiro_id=e.roteiro_id, data_ancora=e.data_ancora,
         status=e.status, total=e.total, enviados=e.enviados, erros=e.erros,
-        pulados=e.pulados, proxima_execucao_em=e.proxima_execucao_em,
+        pulados=e.pulados, agendadas=agendadas, na_fila=na_fila,
+        proxima_execucao_em=e.proxima_execucao_em,
         iniciado_em=e.iniciado_em, concluido_em=e.concluido_em,
-        duracao_estimada_s=estimativa_de_duracao_s(pendentes),
+        # A estimativa é de quanto falta SAIR: mensagem agendada para daqui a
+        # três dias não entra na duração do que está rodando agora.
+        duracao_estimada_s=estimativa_de_duracao_s(agendadas + na_fila),
         avisos=avisos or [], passos=passos or {},
     )
 
@@ -187,6 +195,12 @@ def _erro_de_roteiro(e: RoteiroInvalido) -> HTTPException:
         return HTTPException(status_code=409, detail={
             "erro": "execucao_ja_ativa", "mensagem": str(e),
             "execucao_id": e.execucao_id,
+        })
+    if isinstance(e, RoteiroEncerrado):
+        # A tela usa o código para abrir em LEITURA em vez de mostrar erro —
+        # ela não "errou", o roteiro é que já rodou.
+        return HTTPException(status_code=409, detail={
+            "erro": "roteiro_encerrado", "mensagem": str(e),
         })
     return HTTPException(status_code=422, detail=str(e))
 
@@ -417,8 +431,10 @@ def retomar(execucao=Depends(execucao_da_usuaria), db: Session = Depends(get_db)
 
 @router.post("/execucoes/{execucao_id}/cancelar", response_model=ExecucaoOut)
 def cancelar(execucao=Depends(execucao_da_usuaria), db: Session = Depends(get_db)):
-    if execucao.status in ("concluida", "cancelada"):
-        raise HTTPException(status_code=409, detail="Essa execução já terminou.")
-    execucao.status = "cancelada"
-    db.commit()
+    """Cancelar agendamento: tira as pendentes da fila e devolve o roteiro
+    para rascunho. O que já saiu fica — é o registro do que chegou nos grupos."""
+    try:
+        execucao = RoteiroService(db).cancelar_execucao(execucao)
+    except ExecucaoEncerrada as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return _execucao_out(db, execucao)

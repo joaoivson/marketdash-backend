@@ -74,12 +74,15 @@ if PG_OK:
             "acao_descontinuada BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE roteiro_mensagens ADD COLUMN IF NOT EXISTS "
             "blocos_enviados INTEGER NOT NULL DEFAULT 0",
+            # 088 (rodada 2): descrição do grupo — idem.
+            "ALTER TABLE whatsapp_grupos ADD COLUMN IF NOT EXISTS descricao TEXT",
         ):
             _conn.execute(text(_alter))
     Sessao = sessionmaker(bind=ENGINE)
 
 from app.models.roteiro import (   # noqa: E402
-    EXEC_AGENDADA, EXEC_CONCLUIDA, EXEC_ENVIANDO, EXEC_PAUSADA, MSG_ENVIADA,
+    EXEC_AGENDADA, EXEC_CANCELADA, EXEC_CONCLUIDA, EXEC_ENVIANDO, EXEC_PAUSADA,
+    MSG_ENVIADA,
     MSG_ENVIANDO, MSG_FALHOU, MSG_PENDENTE, MSG_PULADA, Roteiro,
     RoteiroExecucao, RoteiroMensagem, RoteiroPasso,
 )
@@ -100,15 +103,24 @@ class _FakeWaha:
         self.enviadas = []
         self.plano = dict(plano_de_erros or {})   # jid -> ErroWhatsapp
 
-    def enviar_texto(self, chat_id, texto):
+    def enviar_texto(self, chat_id, texto, mencionar_todos=False):
         erro = self.plano.get(chat_id)
         if erro:
             raise erro
         self.enviadas.append((chat_id, texto))
         return {"ok": True}
 
-    def enviar_imagem(self, chat_id, url, legenda=""):
+    def enviar_imagem(self, chat_id, url, legenda="", mencionar_todos=False):
         return self.enviar_texto(chat_id, f"[img] {legenda}")
+
+    def enviar_video(self, chat_id, url, legenda="", mencionar_todos=False):
+        return self.enviar_texto(chat_id, f"[video] {legenda}")
+
+    def enviar_voz(self, chat_id, url):
+        return self.enviar_texto(chat_id, "[audio]")
+
+    def enviar_arquivo(self, chat_id, url, legenda="", mencionar_todos=False):
+        return self.enviar_texto(chat_id, f"[arquivo] {legenda}")
 
 
 @pytest.fixture
@@ -440,13 +452,22 @@ def test_disjuntor_desconecta_e_failover_para_o_outro_numero(db):
             self.nome = nome
             return self
 
-        def enviar_texto(self, chat_id, texto):
+        def enviar_texto(self, chat_id, texto, mencionar_todos=False):
             if self.nome == ruim.nome_instancia:
                 raise ErroWhatsapp("desconectado", "sessão caiu")   # fatal
             self.enviadas.append((self.nome, chat_id))
             return {"ok": True}
 
         def enviar_imagem(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+        def enviar_video(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+        def enviar_voz(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+        def enviar_arquivo(self, *a, **k):
             return self.enviar_texto(a[0], "")
 
     seletivo = _WahaSeletivo()
@@ -611,7 +632,11 @@ def test_renomear_sem_admin_nasce_pulado_no_agendar(db):
                                              sou_admin=False)
     # a materialização acontece no agendar; aqui exercitamos a regra direto
     roteiro = db.query(Roteiro).filter(Roteiro.user_id == user.id).one()
-    execucao.status = EXEC_CONCLUIDA      # 082: uma execução ativa por roteiro
+    # `cancelada`, não `concluida`: desde a rodada 2 roteiro CONCLUÍDO é só
+    # leitura e recusa agendar (refazer é duplicar). Cancelar é o estado que
+    # legitimamente devolve o roteiro para rascunho e libera um agendamento
+    # novo — e é só disso que este teste precisa.
+    execucao.status = EXEC_CANCELADA      # 082: uma execução ativa por roteiro
     db.commit()
     nova, _avisos = RoteiroService(db).agendar(roteiro,
                                                datetime.now(timezone.utc).date(),
@@ -675,7 +700,11 @@ def test_admin_vem_do_vinculo_por_numero_nao_do_flag_do_grupo(db):
     db.commit()
 
     roteiro = db.query(Roteiro).filter(Roteiro.user_id == user.id).one()
-    execucao.status = EXEC_CONCLUIDA      # 082: uma execução ativa por roteiro
+    # `cancelada`, não `concluida`: desde a rodada 2 roteiro CONCLUÍDO é só
+    # leitura e recusa agendar (refazer é duplicar). Cancelar é o estado que
+    # legitimamente devolve o roteiro para rascunho e libera um agendamento
+    # novo — e é só disso que este teste precisa.
+    execucao.status = EXEC_CANCELADA      # 082: uma execução ativa por roteiro
     db.commit()
     nova, _a = RoteiroService(db).agendar(roteiro,
                                           datetime.now(timezone.utc).date(),
@@ -728,10 +757,19 @@ def test_rede_em_todos_os_chips_do_proxy_pausa_e_degrada_o_ip(db):
     db.commit()
 
     class _SemRede:
-        def enviar_texto(self, chat_id, texto):
+        def enviar_texto(self, chat_id, texto, mencionar_todos=False):
             raise ErroWhatsapp("timeout", "conexão morreu")
 
         def enviar_imagem(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+        def enviar_video(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+        def enviar_voz(self, *a, **k):
+            return self.enviar_texto(a[0], "")
+
+        def enviar_arquivo(self, *a, **k):
             return self.enviar_texto(a[0], "")
 
     r = _servico(db, _SemRede()).processar_fatia(execucao.id)
@@ -769,7 +807,7 @@ def test_rede_pontual_em_um_chip_nao_derruba_o_numero(db):
             self.nome = nome
             return self
 
-        def enviar_texto(self, chat_id, texto):
+        def enviar_texto(self, chat_id, texto, mencionar_todos=False):
             if self.nome == ruim.nome_instancia:
                 raise ErroWhatsapp("timeout", "instabilidade")
             self.enviadas.append(chat_id)
@@ -802,7 +840,7 @@ def test_desconectado_nao_troca_proxy_e_mantem_o_disjuntor(db):
     db.commit()
 
     class _Caiu:
-        def enviar_texto(self, chat_id, texto):
+        def enviar_texto(self, chat_id, texto, mencionar_todos=False):
             raise ErroWhatsapp("desconectado", "sessão caiu")
 
         def enviar_imagem(self, *a, **k):
@@ -826,7 +864,7 @@ def test_sem_proxy_a_rede_continua_no_disjuntor_antigo(db):
     assert inst.proxy_id is None
 
     class _SemRede:
-        def enviar_texto(self, chat_id, texto):
+        def enviar_texto(self, chat_id, texto, mencionar_todos=False):
             raise ErroWhatsapp("rede", "connection reset")
 
         def enviar_imagem(self, *a, **k):
@@ -929,3 +967,138 @@ def test_despausar_pelo_service_reagenda_sem_precisar_do_repo(db):
     db.refresh(execucao)
     assert execucao.status == EXEC_AGENDADA
     assert execucao.proxima_execucao_em <= datetime.now(timezone.utc)
+
+
+# --- Rodada 2: sem retry e sem tolerância de atraso ---------------------------
+#
+# "Chegou o horário, tenta uma vez. Nunca envia atrasado — mensagem de
+# lançamento fora da hora é pior que mensagem não enviada."
+#
+# A trava mede O PASSO TER COMEÇADO, não cada mensagem ter saído: as N
+# mensagens de um passo nascem com o mesmo horário e o lote é serial por
+# desenho. Os dois primeiros testes fixam as duas metades dessa regra.
+
+
+def test_passo_que_nao_comecou_alem_da_tolerancia_falha_sem_enviar(db):
+    user, _, grupos, execucao = _cenario(db, n_grupos=3, agendado_delta_s=-600)
+
+    cliente = _FakeWaha()
+    r = _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert cliente.enviadas == [], "mensagem de 10 min atrás não pode sair"
+    linhas = (db.query(RoteiroMensagem)
+              .filter(RoteiroMensagem.execucao_id == execucao.id).all())
+    assert {l.status for l in linhas} == {MSG_FALHOU}
+    assert {l.erro_motivo for l in linhas} == {"passou do horário"}
+    # Nada saiu e houve erro: a execução inteira é uma falha, não um
+    # "concluído com falhas".
+    assert execucao.status == "falhou"
+    assert r["enviadas"] == 0
+
+
+def test_atraso_dentro_da_tolerancia_sai_normalmente(db):
+    """O contraste do teste acima: 60 s de atraso é a operação normal.
+
+    Com tick de 1 minuto, qualquer mensagem passa por aqui antes de vencer a
+    tolerância. Se este teste cair junto com o de cima, a tolerância ficou
+    curta demais e o motor para de enviar.
+    """
+    user, _, grupos, execucao = _cenario(db, n_grupos=2, agendado_delta_s=-60)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert {c for c, _ in cliente.enviadas} == {g.jid for g in grupos}
+    assert execucao.status == EXEC_CONCLUIDA
+
+
+def test_lote_que_comecou_no_horario_drena_mesmo_passando_da_tolerancia(db):
+    """O ponto da regra: passo que COMEÇOU no horário termina o lote.
+
+    Um passo para 60 grupos leva minutos só para drenar (pausa de 2-5 s entre
+    blocos, fatia com orçamento de 15 min). Com trava por mensagem, os últimos
+    grupos falhariam porque a fila é fila — metade do grupo com a oferta e
+    metade sem, que é o corte no meio que a regra da janela já existe para
+    evitar.
+    """
+    user, _, grupos, execucao = _cenario(db, n_grupos=3, agendado_delta_s=-600)
+    # Uma linha já saiu: o passo começou no horário, o resto é drenagem.
+    primeira = (db.query(RoteiroMensagem)
+                .filter(RoteiroMensagem.execucao_id == execucao.id)
+                .order_by(RoteiroMensagem.id).first())
+    primeira.status = MSG_ENVIADA
+    primeira.enviado_em = datetime.now(timezone.utc)
+    db.commit()
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    # As duas restantes saem, atrasadas e tudo.
+    assert len(cliente.enviadas) == 2
+    restantes = (db.query(RoteiroMensagem)
+                 .filter(RoteiroMensagem.execucao_id == execucao.id,
+                         RoteiroMensagem.id != primeira.id).all())
+    assert {l.status for l in restantes} == {MSG_ENVIADA}
+    assert execucao.status == EXEC_CONCLUIDA
+
+
+def test_janela_fechada_expira_o_que_venceu_em_vez_de_adiar_em_silencio(db):
+    """Janela fechada + mensagem vencida = falha COM O MOTIVO, agora.
+
+    Antes da rodada 2 a execução era parqueada para a próxima abertura: a tela
+    dizia "Na fila 3" a noite inteira e a falha só aparecia de manhã — e aí a
+    mensagem sairia 10 horas fora da hora.
+    """
+    fechada = {"ativo": True, "dias": {str(i): {"ativo": True,
+               "inicio": "03:00", "fim": "03:30"} for i in range(7)}}
+    user, _, grupos, execucao = _cenario(db, n_grupos=2, janela_config=fechada,
+                                         agendado_delta_s=-600)
+
+    cliente = _FakeWaha()
+    r = _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert cliente.enviadas == []
+    linhas = (db.query(RoteiroMensagem)
+              .filter(RoteiroMensagem.execucao_id == execucao.id).all())
+    assert {l.status for l in linhas} == {MSG_FALHOU}
+    # O motivo é o real, em português — é o que ela lê no passo que falhou.
+    assert {l.erro_motivo for l in linhas} == {"fora da janela de envio"}
+    assert r["motivo_parada"] == "janela"
+
+
+def test_janela_fechada_nao_expira_passo_de_outro_dia(db):
+    """Roteiro que atravessa dias continua funcionando.
+
+    O passo de daqui a três dias não venceu, não expira, e é ele que define a
+    retomada — a expiração não pode transformar "roteiro longo" em "roteiro
+    que morre na primeira noite".
+    """
+    fechada = {"ativo": True, "dias": {str(i): {"ativo": True,
+               "inicio": "03:00", "fim": "03:30"} for i in range(7)}}
+    user, _, grupos, execucao = _cenario(db, n_grupos=2, janela_config=fechada,
+                                         agendado_delta_s=+3 * 86400)
+
+    _servico(db, _FakeWaha()).processar_fatia(execucao.id)
+
+    db.expire_all()
+    linhas = (db.query(RoteiroMensagem)
+              .filter(RoteiroMensagem.execucao_id == execucao.id).all())
+    assert {l.status for l in linhas} == {MSG_PENDENTE}
+    assert execucao.status == EXEC_AGENDADA
+    assert execucao.proxima_execucao_em > datetime.now(timezone.utc)
+
+
+def test_execucao_com_enviados_e_falhas_fica_concluida_nao_falhou(db):
+    """`falhou` é só quando NADA saiu — o resto é "concluído com falhas"."""
+    user, _, grupos, execucao = _cenario(db, n_grupos=2)
+    cliente = _FakeWaha(plano_de_erros={grupos[0].jid: ErroWhatsapp("envio", "x")})
+
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    db.expire_all()
+    assert execucao.enviados == 1 and execucao.erros == 1
+    assert execucao.status == EXEC_CONCLUIDA

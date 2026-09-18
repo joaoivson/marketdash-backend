@@ -75,6 +75,16 @@ NOME_NO_SUB_ID = 24
 _SUFIXO_ALFABETO = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
+# Como a descrição do grupo chega, por engine. `campo()` ignora
+# maiúsculas/minúsculas, então "Topic" (GOWS/whatsmeow) casa com "topic" e
+# "GroupTopic" com "grouptopic" — basta listar as grafias DISTINTAS.
+#
+# Ler várias é a defesa barata contra a próxima variação: foi exatamente essa
+# diferença de formato entre engines que fez o sync trazer 499 grupos e gravar
+# ZERO, sem erro nenhum, em 26/08/2026.
+CAMPOS_DA_DESCRICAO = ("topic", "grouptopic", "description", "desc")
+
+
 def _trecho_do_nome(nome: Optional[str], grupo_id: int) -> str:
     """
     Nome do grupo reduzido a [a-z0-9], sem acento nem emoji.
@@ -175,6 +185,22 @@ def jid_do_grupo(dados: Dict[str, Any]) -> Optional[str]:
         jid = ""
     jid = jid.strip()
     return jid if jid.endswith("@g.us") else None
+
+
+def _descricao_do_payload(dados: Dict[str, Any]) -> Optional[str]:
+    """Descrição do grupo, ou `None` quando o payload não traz o campo.
+
+    Distingue "não veio" (None) de "veio vazia" ("") — a segunda é ela tendo
+    apagado a descrição, e tratar as duas igual faria a descrição antiga
+    ressuscitar no painel a cada sync.
+    """
+    bruto = _valor(dados, *CAMPOS_DA_DESCRICAO)
+    if bruto is None:
+        return None
+    # GOWS às vezes devolve a descrição como objeto ({"Topic": ..., "TopicID"}).
+    if isinstance(bruto, dict):
+        bruto = _valor(bruto, "topic", "description", "value") or ""
+    return str(bruto)[:2000]
 
 
 def _extrair_agregados(dados: Dict[str, Any], meus_ids: set) -> Dict[str, Any]:
@@ -471,6 +497,7 @@ class WhatsappGrupoSyncService:
             user_id=user_id,
             jid=jid,
             nome=(_valor(dados, "subject", "name") or "")[:255] or None,
+            descricao=_descricao_do_payload(dados),
             foto_url=_valor(dados, "picture", "pictureUrl"),
             ativo=True,
             **agregados,
@@ -479,6 +506,12 @@ class WhatsappGrupoSyncService:
     def _atualizar_grupo(self, grupo: WhatsappGrupo, dados: Dict[str, Any],
                          agregados: Dict[str, Any]) -> None:
         grupo.nome = (_valor(dados, "subject", "name") or grupo.nome or "")[:255] or None
+        # Descrição com `is not None`, não truthy: string VAZIA é informação —
+        # é ela apagando a descrição no WhatsApp. `None` é "o payload não
+        # trouxe o campo", e aí o que está gravado continua valendo.
+        descricao = _descricao_do_payload(dados)
+        if descricao is not None:
+            grupo.descricao = descricao
         foto = _valor(dados, "picture", "pictureUrl")
         if foto:
             grupo.foto_url = foto

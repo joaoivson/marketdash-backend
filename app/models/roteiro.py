@@ -30,14 +30,25 @@ CONTEUDO_ACAO = "acao_grupo"
 CONTEUDO_TEXTO = "texto"    # legado (pré-082)
 CONTEUDO_MIDIA = "midia"    # legado (pré-082)
 
-# Tipo do BLOCO. `audio`/`video`/`oferta` existem no schema para quando a fila
-# de ofertas for definida; o motor de hoje envia `texto` e `imagem`.
+# Tipo do BLOCO. `oferta` continua reservado para quando a fila de ofertas for
+# definida; os cinco primeiros o motor envia de verdade desde a rodada 2.
+#
+# `audio` sai SEMPRE como nota de voz (sendVoice com `convert:true`, que é o
+# WAHA quem converte para OGG/Opus). Quem quiser mandar um arquivo de áudio
+# como arquivo usa `arquivo` — não existe opção "enviar como arquivo" dentro
+# do bloco de áudio, porque as duas coisas são mensagens diferentes no
+# WhatsApp e escolher no meio do bloco esconderia isso.
 BLOCO_TEXTO = "texto"
 BLOCO_IMAGEM = "imagem"
 BLOCO_AUDIO = "audio"
 BLOCO_VIDEO = "video"
+BLOCO_ARQUIVO = "arquivo"
 BLOCO_OFERTA = "oferta"
-BLOCOS_ENVIAVEIS = (BLOCO_TEXTO, BLOCO_IMAGEM)
+BLOCOS_ENVIAVEIS = (BLOCO_TEXTO, BLOCO_IMAGEM, BLOCO_VIDEO,
+                    BLOCO_AUDIO, BLOCO_ARQUIVO)
+# Blocos que carregam mídia por URL — o que distingue "precisa de conteúdo
+# apontando para um arquivo" de "precisa de texto".
+BLOCOS_DE_MIDIA = (BLOCO_IMAGEM, BLOCO_VIDEO, BLOCO_AUDIO, BLOCO_ARQUIVO)
 
 # Ações no grupo. `abrir_entrada`/`fechar_entrada` saíram na 082 (ambiguidade
 # com o toggle "Aberto" da aba Grupos e com o link de entrada da campanha):

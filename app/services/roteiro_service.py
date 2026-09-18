@@ -25,10 +25,11 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.roteiro import (
     ACOES_VALIDAS, BLOCO_IMAGEM, BLOCO_TEXTO, CONTEUDO_ACAO, CONTEUDO_MENSAGEM,
-    EXEC_AGENDADA, EXEC_ATIVAS, EXEC_CONCLUIDA, MSG_ENVIADA, MSG_ENVIANDO,
+    EXEC_AGENDADA, EXEC_ATIVAS, EXEC_CANCELADA, EXEC_CONCLUIDA, EXEC_FALHOU,
+    MSG_ENVIADA, MSG_ENVIANDO, MSG_FALHOU,
     MSG_PENDENTE, MSG_PULADA, ORIGEM_ENVIO_RAPIDO, PassoBloco, Roteiro,
-    RoteiroExecucao, RoteiroMensagem, RoteiroPasso, TEMPO_ANCORA, TEMPO_RELATIVO,
-    UNIDADE_MINUTOS, UNIDADES,
+    ROTEIRO_RASCUNHO, RoteiroExecucao, RoteiroMensagem, RoteiroPasso,
+    TEMPO_ANCORA, TEMPO_RELATIVO, UNIDADE_MINUTOS, UNIDADES,
 )
 from app.repositories.campanha_grupos_repository import CampanhaGruposRepository
 from app.repositories.roteiro_repository import RoteiroRepository
@@ -66,6 +67,25 @@ class PassoJaEnviado(RoteiroInvalido):
         alvo = ", ".join(str(o) for o in ordens)
         plural = "Os passos" if len(ordens) > 1 else "O passo"
         super().__init__(f"{plural} {alvo} já saiu — não dá para alterar.")
+
+
+class ExecucaoEncerrada(RoteiroInvalido):
+    """Cancelar (ou mexer em) execução que já terminou."""
+
+
+class RoteiroEncerrado(RoteiroInvalido):
+    """Editar, mover, excluir ou reagendar um roteiro que já rodou.
+
+    Editar um roteiro concluído faz a tela deixar de refletir o que foi
+    realmente enviado: ela muda o texto do passo 2 e passa a ver uma mensagem
+    que nunca saiu naquela execução. Refazer é **duplicar** — o registro da
+    execução anterior fica intacto.
+    """
+
+    def __init__(self):
+        super().__init__(
+            "Este roteiro já rodou. Duplique para montar um novo lançamento."
+        )
 
 
 class ExecucaoJaAtiva(RoteiroInvalido):
@@ -337,6 +357,11 @@ class RoteiroService:
             + [b.template_id for p in passos_in for b in (p.blocos or [])],
         )
 
+        # Roteiro que já rodou é SÓ LEITURA. `passos_intocaveis` cobre passo a
+        # passo dentro de uma execução viva; isto cobre o roteiro inteiro
+        # depois que ela terminou — editar o texto do passo 2 de um roteiro
+        # concluído faria a tela deixar de refletir o que realmente saiu.
+        self._recusar_se_encerrado(roteiro.id)
         atuais = {p.id: p for p in self.repo.passos(roteiro.id)}
         execucao = self.execucao_ativa(roteiro.id)
         intocaveis = self.passos_intocaveis(execucao)
@@ -623,6 +648,9 @@ class RoteiroService:
         ativa = self.execucao_ativa(roteiro.id)
         if ativa is not None:
             raise ExecucaoJaAtiva(ativa.id)
+        # Não existe reagendar: um roteiro tem UMA execução, do agendamento à
+        # conclusão. Refazer é duplicar.
+        self._recusar_se_encerrado(roteiro.id)
 
         passos = self.repo.passos(roteiro.id)
         if not passos:
@@ -634,6 +662,14 @@ class RoteiroService:
         atrasados = ordens_no_passado(resolvidos, agora)
         if atrasados:
             raise PassosNoPassado(atrasados)
+
+        # Contrapartida do "nunca envia atrasado": desde a rodada 2 o motor
+        # FALHA em vez de adiar quando a janela está fechada ou o teto do dia
+        # estourou. Sem avisar antes, isso transformaria em falha silenciosa o
+        # que hoje só atrasava — então os dois casos viram aviso no agendar,
+        # onde ela ainda pode mudar a data.
+        avisos = avisos + self._avisos_de_capacidade(roteiro, resolvidos)
+
         if avisos and not ignorar_avisos:
             return None, avisos   # a rota devolve 422 com os avisos
 
@@ -657,6 +693,139 @@ class RoteiroService:
         self.db.add(roteiro)
         self.db.commit()
         return execucao, avisos
+
+    def _avisos_de_capacidade(self, roteiro: Roteiro, resolvidos) -> List[str]:
+        """Os dois motivos pelos quais um passo pode não sair na hora marcada."""
+        avisos: List[str] = []
+        avisos += self._aviso_de_janela(roteiro, resolvidos)
+        avisos += self._aviso_de_teto(roteiro, resolvidos)
+        return avisos
+
+    def _aviso_de_janela(self, roteiro: Roteiro, resolvidos) -> List[str]:
+        """Passo cujo horário cai fora da janela de envio LIGADA.
+
+        A janela nasce desligada, então isto só aparece para quem configurou
+        uma — e aí o passo fora dela é erro de digitação, não intenção.
+        """
+        from app.models.user_settings import UserSettings
+        from app.services.janela_envio_service import carregar_config, janela_aberta
+
+        us = (self.db.query(UserSettings)
+              .filter(UserSettings.user_id == roteiro.user_id).first())
+        config = carregar_config(getattr(us, "whatsapp_envio_config", None))
+        if not config.ativo:
+            return []
+        fora = [p.ordem for p, momento in resolvidos
+                if not janela_aberta(config, momento)]
+        if not fora:
+            return []
+        alvo = ", ".join(str(o) for o in fora)
+        plural = "Os passos" if len(fora) > 1 else "O passo"
+        cai = "caem" if len(fora) > 1 else "cai"
+        return [f"{plural} {alvo} {cai} fora da sua janela de envio e vão falhar "
+                f"em vez de esperar a próxima abertura."]
+
+    def _aviso_de_teto(self, roteiro: Roteiro, resolvidos) -> List[str]:
+        """Roteiro maior que o teto diário restante.
+
+        80 mensagens/dia por número: com 3 números conectados são 240/dia, e um
+        roteiro de 4 passos para 60 grupos já são 240 mensagens exatas. O que
+        passar do teto FALHA (não sai amanhã), então o número precisa aparecer
+        antes do clique.
+        """
+        from datetime import datetime as _dt
+
+        from app.models.whatsapp_grupos import INSTANCIA_CONECTADA
+        from app.repositories.whatsapp_instancia_repository import (
+            WhatsappInstanciaRepository,
+        )
+        from app.services.janela_envio_service import BRT as _BRT
+
+        hoje = _dt.now(_BRT).date()
+        inicio = _dt.combine(hoje, _dt.min.time(), tzinfo=_BRT)
+        fim = inicio + timedelta(days=1)
+
+        restante = 0
+        for inst in WhatsappInstanciaRepository(self.db).por_usuario(roteiro.user_id):
+            if inst.status != INSTANCIA_CONECTADA or inst.envio_pausado:
+                continue
+            teto = inst.teto_diario or settings.WHATSAPP_TETO_POR_INSTANCIA
+            usadas = self.repo.enviadas_na_janela(roteiro.user_id, inicio, fim,
+                                                  instancia_id=inst.id)
+            restante += max(teto - usadas, 0)
+
+        # Só conta o que sai HOJE: roteiro que atravessa dias distribui a carga,
+        # e somar tudo geraria alarme falso no lançamento de uma semana.
+        do_dia = [(p, m) for p, m in resolvidos if m.astimezone(_BRT).date() == hoje]
+        if not do_dia:
+            return []
+        total = sum(len(self.grupos_do_passo(roteiro, p)) for p, _ in do_dia)
+        if total <= restante:
+            return []
+        return [f"Este roteiro manda {total} mensagens hoje e só restam "
+                f"{restante} no teto diário dos seus números. O excedente vai "
+                f"falhar em vez de sair amanhã."]
+
+    def roteiro_encerrado(self, roteiro_id: int) -> bool:
+        """O roteiro já rodou e não tem mais nada a fazer.
+
+        Não há execução ativa E a última terminou em estado terminal de
+        execução (`concluida`/`falhou`). `cancelada` NÃO encerra: cancelar
+        devolve o roteiro para rascunho de propósito, para ela poder reagendar.
+        """
+        ativa = self.execucao_ativa(roteiro_id)
+        if ativa is not None:
+            return False
+        ultima = self.repo.ultima_execucao(roteiro_id)
+        return bool(ultima and ultima.status in (EXEC_CONCLUIDA, EXEC_FALHOU))
+
+    def _recusar_se_encerrado(self, roteiro_id: int) -> None:
+        if self.roteiro_encerrado(roteiro_id):
+            raise RoteiroEncerrado()
+
+    def cancelar_execucao(self, execucao: RoteiroExecucao) -> RoteiroExecucao:
+        """Cancela o agendamento e devolve o roteiro para rascunho.
+
+        Um roteiro tem UMA execução, do agendamento à conclusão — não existe
+        reagendar. "Cancelar agendamento" desfaz o agendamento inteiro:
+
+        1. a execução vira `cancelada`;
+        2. as mensagens **pendentes** somem da fila — deixá-las era o que fazia
+           o motor continuar disparando o que ela mandou parar;
+        3. o roteiro volta a `rascunho`, e com ele o botão "Agendar" na
+           listagem.
+
+        O que já saiu (enviado, falhou, pulado) FICA: é o registro do que
+        aconteceu de verdade, e apagá-lo faria a tela deixar de refletir o que
+        chegou nos grupos.
+        """
+        if execucao.status in (EXEC_CONCLUIDA, EXEC_CANCELADA):
+            raise ExecucaoEncerrada("Essa execução já terminou.")
+
+        removidas = self.repo.remover_pendentes(execucao.id)
+        execucao.status = EXEC_CANCELADA
+        execucao.proxima_execucao_em = None
+        self.db.add(execucao)
+
+        roteiro = self.db.query(Roteiro).get(execucao.roteiro_id)
+        if roteiro:
+            roteiro.status = ROTEIRO_RASCUNHO
+            self.db.add(roteiro)
+        self._atualizar_contadores_da_execucao(execucao)
+        self.db.commit()
+        logger.info("Execução %s cancelada: %s pendentes removidas",
+                    execucao.id, removidas)
+        return execucao
+
+    def _atualizar_contadores_da_execucao(self, execucao: RoteiroExecucao) -> None:
+        """Recontagem depois de mexer na fila — `total` que continua contando
+        mensagem apagada é a assinatura do bug de 06/09 ao contrário."""
+        c = self.repo.contadores(execucao.id)
+        execucao.enviados = c.get(MSG_ENVIADA, 0)
+        execucao.erros = c.get(MSG_FALHOU, 0)
+        execucao.pulados = c.get(MSG_PULADA, 0)
+        execucao.total = sum(c.values())
+        self.db.add(execucao)
 
     def _materializar(self, roteiro: Roteiro, execucao: RoteiroExecucao,
                       resolvidos) -> List[RoteiroMensagem]:
@@ -942,6 +1111,7 @@ class RoteiroService:
         para trocar 4 ou 5 datas é onde o erro acontece — e o erro aqui agenda
         o lançamento para uma data que já passou.
         """
+        self._recusar_se_encerrado(roteiro.id)
         execucao = self.execucao_ativa(roteiro.id)
         intocaveis = self.passos_intocaveis(execucao)
         atuais = {p.id: p for p in self.repo.passos(roteiro.id)}

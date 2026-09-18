@@ -30,11 +30,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.plans import normalize_plan, plan_limit, is_unlimited
 from app.models.roteiro import (
-    ACAO_DESCRICAO, ACAO_IMAGEM, ACAO_RENOMEAR, ACOES_VALIDAS, BLOCO_IMAGEM,
-    BLOCO_TEXTO, CONTEUDO_ACAO, CONTEUDO_MENSAGEM, CONTEUDO_MIDIA,
+    ACAO_DESCRICAO, ACAO_IMAGEM, ACAO_RENOMEAR, ACOES_VALIDAS, BLOCO_ARQUIVO,
+    BLOCO_AUDIO, BLOCO_IMAGEM, BLOCO_TEXTO, BLOCO_VIDEO, BLOCOS_DE_MIDIA,
+    CONTEUDO_ACAO, CONTEUDO_MENSAGEM, CONTEUDO_MIDIA,
     CONTEUDO_OFERTA, EXEC_AGENDADA, EXEC_CANCELADA, EXEC_CONCLUIDA,
-    EXEC_ENVIANDO, EXEC_PAUSADA, MSG_ENVIADA, MSG_FALHOU, MSG_PENDENTE,
-    MSG_PULADA, RoteiroMensagem,
+    EXEC_ENVIANDO, EXEC_FALHOU, EXEC_PAUSADA, MSG_ENVIADA, MSG_FALHOU,
+    MSG_PENDENTE, MSG_PULADA, RoteiroMensagem,
 )
 from app.models.whatsapp_grupos import INSTANCIA_CONECTADA, INSTANCIA_DESCONECTADA
 from app.repositories.roteiro_repository import RoteiroRepository
@@ -194,12 +195,12 @@ class RoteiroEnvioService:
 
         saida: List[Dict] = []
         for bloco in blocos:
-            imagem = bloco.tipo == BLOCO_IMAGEM
+            midia = bloco.tipo in BLOCOS_DE_MIDIA
             saida.append({
                 "tipo": bloco.tipo,
-                "url": bloco.conteudo if imagem else None,
+                "url": bloco.conteudo if midia else None,
                 "texto": self._texto_de(execucao, mensagem,
-                                        bloco.legenda if imagem else bloco.conteudo,
+                                        bloco.legenda if midia else bloco.conteudo,
                                         bloco.template_id, None, None,
                                         com_link=False),
             })
@@ -209,7 +210,30 @@ class RoteiroEnvioService:
             saida[0]["texto"] = self._costurar(prefixo, saida[0]["texto"])
         if sufixo:
             saida[-1]["texto"] = self._costurar(saida[-1]["texto"], sufixo)
+        self._marcar_quem_menciona(passo, saida)
         return saida
+
+    @staticmethod
+    def _marcar_quem_menciona(passo, saida: List[Dict]) -> None:
+        """Decide QUAL bloco carrega o "marcar todos" — no máximo um.
+
+        A menção viaja presa a um corpo de texto: o WhatsApp precisa de texto
+        para pendurar o `mentionedJid`. Então ela vai no PRIMEIRO bloco que tem
+        texto — bloco de texto, ou legenda de imagem/vídeo/arquivo. Sem nenhum
+        bloco com texto, ninguém é mencionado (a tela desabilita o toggle nesse
+        caso, mas o motor não pode depender disso).
+
+        Marcar em todos os blocos notificaria o grupo N vezes pelo mesmo passo.
+        """
+        if getattr(passo, "marcar_todos", "nunca") != "sempre":
+            return
+        for bloco in saida:
+            # Nota de voz não tem legenda — pular sem consumir a menção.
+            if bloco["tipo"] == BLOCO_AUDIO:
+                continue
+            if (bloco.get("texto") or "").strip():
+                bloco["mencionar"] = True
+                return
 
     @staticmethod
     def _costurar(*partes) -> str:
@@ -221,8 +245,8 @@ class RoteiroEnvioService:
         fonte de reenvio (o reenvio recompõe do passo)."""
         partes = []
         for b in saida:
-            if b["tipo"] == BLOCO_IMAGEM:
-                partes.append(f"[imagem] {b['url'] or ''}".strip())
+            if b["tipo"] in BLOCOS_DE_MIDIA:
+                partes.append(f"[{b['tipo']}] {b['url'] or ''}".strip())
             if b["texto"]:
                 partes.append(b["texto"])
         return "\n\n".join(partes)[:8000]
@@ -244,18 +268,33 @@ class RoteiroEnvioService:
                 # configurável por ela — é ritmo de sistema.
                 self.dormir(random.uniform(settings.WHATSAPP_BLOCO_PAUSA_MIN_S,
                                            settings.WHATSAPP_BLOCO_PAUSA_MAX_S))
-            if bloco["tipo"] == BLOCO_IMAGEM:
-                if not bloco["url"]:
-                    raise ErroWhatsapp("acao", f"bloco {i} sem imagem")
+            tipo = bloco["tipo"]
+            mencionar = bool(bloco.get("mencionar"))
+            if tipo in BLOCOS_DE_MIDIA and not bloco["url"]:
+                raise ErroWhatsapp("acao", f"bloco {i} sem {tipo}")
+            if tipo == BLOCO_IMAGEM:
                 cliente.enviar_imagem(grupo.jid, bloco["url"],
-                                      legenda=bloco["texto"] or "")
-            elif bloco["tipo"] == BLOCO_TEXTO:
-                cliente.enviar_texto(grupo.jid, bloco["texto"] or "")
+                                      legenda=bloco["texto"] or "",
+                                      mencionar_todos=mencionar)
+            elif tipo == BLOCO_TEXTO:
+                cliente.enviar_texto(grupo.jid, bloco["texto"] or "",
+                                     mencionar_todos=mencionar)
+            elif tipo == BLOCO_VIDEO:
+                cliente.enviar_video(grupo.jid, bloco["url"],
+                                     legenda=bloco["texto"] or "",
+                                     mencionar_todos=mencionar)
+            elif tipo == BLOCO_AUDIO:
+                # Sem legenda e sem menção: nota de voz não carrega texto.
+                cliente.enviar_voz(grupo.jid, bloco["url"])
+            elif tipo == BLOCO_ARQUIVO:
+                cliente.enviar_arquivo(grupo.jid, bloco["url"],
+                                       legenda=bloco["texto"] or "",
+                                       mencionar_todos=mencionar)
             else:
-                # `audio`/`video` existem no schema para a fila de ofertas; o
-                # cliente WAHA de hoje só tem sendText e sendImage. Falhar aqui
-                # com motivo próprio é melhor que enviar coisa errada.
-                raise ErroWhatsapp("bloco_nao_suportado", bloco["tipo"])
+                # `oferta` continua reservado para quando a fila de ofertas for
+                # definida. Falhar aqui com motivo próprio é melhor que enviar
+                # coisa errada.
+                raise ErroWhatsapp("bloco_nao_suportado", tipo)
             mensagem.blocos_enviados = i
             self.db.add(mensagem)
             self.db.commit()
@@ -395,14 +434,11 @@ class RoteiroEnvioService:
         # para agora ao sair de `pausada`, e este parqueamento é só a rede
         # para o caso de ninguém despausar.
         if self._campanha_pausada(execucao):
-            execucao.status = EXEC_AGENDADA
-            execucao.proxima_execucao_em = (
+            self._adiar(
+                execucao, r, "campanha_pausada",
                 datetime.now(timezone.utc)
-                + timedelta(seconds=self.PARQUEIO_CAMPANHA_PAUSADA_S)
+                + timedelta(seconds=self.PARQUEIO_CAMPANHA_PAUSADA_S),
             )
-            self.db.commit()
-            r.motivo_parada = "campanha_pausada"
-            logger.info("Execução %s parqueada: campanha pausada", execucao.id)
             return r.to_dict()
 
         inicio_fatia = time_mod.monotonic()
@@ -441,14 +477,21 @@ class RoteiroEnvioService:
                 # motivo claro — re-agendar seria livelock no tick.
                 self._pausar(execucao, r, "janela_sem_dia_ativo")
             else:
-                execucao.status = EXEC_AGENDADA
-                execucao.proxima_execucao_em = abertura
-                self.db.commit()
-                r.motivo_parada = "janela"
-                logger.info("Execução %s fora da janela — retoma %s",
-                            execucao.id, abertura.isoformat())
+                self._adiar(execucao, r, "janela", abertura)
             self._atualizar_contadores(execucao)
             return r.to_dict()
+
+        # Irmã de `liberar_presas`: uma fecha o que ficou preso em `enviando`,
+        # a outra fecha o que passou da hora sem o passo ter começado. As duas
+        # antes de trabalhar, para a fatia não gastar número com o que não deve
+        # mais sair.
+        #
+        # DEPOIS dos guards de campanha pausada e de janela, de propósito: cada
+        # um deles expira com o SEU motivo ("campanha pausada", "fora da janela
+        # de envio"), e essa é a informação que ela lê no passo que falhou.
+        # Varrer antes carimbaria tudo com o genérico "passou do horário" e a
+        # causa se perderia.
+        self._expirar_atrasadas(execucao)
 
         sub = SubscriptionRepository(self.db).get_by_user_id(execucao.user_id)
         teto_plano = plan_limit(normalize_plan(sub.plan if sub else None),
@@ -595,6 +638,11 @@ class RoteiroEnvioService:
         if not parametro:
             raise ErroWhatsapp("acao", f"{acao} sem parâmetro")
 
+        # As três gravam no registro local ASSIM QUE o WAHA confirma, sem
+        # esperar o próximo ciclo de sync. O sync roda 1×/dia: até a rodada 2 a
+        # afiliada renomeava o grupo às 10:26 e o painel seguia mostrando o
+        # nome antigo — inclusive na prévia do passo. Sem o valor novo na tela
+        # ela não tem como saber se o passo funcionou.
         if acao == ACAO_RENOMEAR:
             cliente.renomear_grupo(grupo.jid, parametro)
             grupo.nome = parametro[:255]
@@ -602,9 +650,18 @@ class RoteiroEnvioService:
             return
         if acao == ACAO_DESCRICAO:
             cliente.alterar_descricao(grupo.jid, parametro)
+            # O mesmo corte que o cliente aplica no corpo do PUT — gravar o
+            # texto inteiro faria a tela mostrar o que o WhatsApp truncou.
+            grupo.descricao = parametro[:2000]
+            self.db.add(grupo)
             return
         if acao == ACAO_IMAGEM:
             cliente.alterar_imagem(grupo.jid, parametro)
+            # `parametro` é a URL da imagem que ela subiu — a mesma que o WAHA
+            # baixou. O sync sobrescreve depois com a URL do WhatsApp, que só
+            # existe depois de o WhatsApp processar.
+            grupo.foto_url = parametro
+            self.db.add(grupo)
             return
         raise ErroWhatsapp("acao", f"ação desconhecida: {acao!r}")
 
@@ -700,29 +757,102 @@ class RoteiroEnvioService:
         self.repo.marcar(mensagem, MSG_FALHOU, erro=e.motivo)
         r.falhas += 1
 
+    # Motivo legível por caminho de parada — é o que a afiliada lê no passo que
+    # falhou, então é português, não o slug interno.
+    MOTIVO_LEGIVEL = {
+        "janela": "fora da janela de envio",
+        "janela_sem_dia_ativo": "fora da janela de envio",
+        "teto_plano": "teto diário do plano",
+        "teto_global": "teto diário da plataforma",
+        "teto_instancias": "teto diário dos números",
+        "campanha_pausada": "campanha pausada",
+        "sem_instancia": "nenhum número conectado",
+        "proxy_degradado": "conexão do número instável",
+    }
+
+    def _expirar_atrasadas(self, execucao, motivo_parada: Optional[str] = None) -> int:
+        """Fecha como `falhou` o que passou da hora sem o passo ter começado.
+
+        Roda em TODO caminho de parada e no início de toda fatia, ao lado de
+        `liberar_presas` — as duas são a mesma ideia ("na dúvida, não manda"),
+        aplicada a momentos diferentes.
+        """
+        n = self.repo.expirar_passos_que_nao_comecaram(
+            execucao.id,
+            datetime.now(timezone.utc),
+            settings.ROTEIRO_ATRASO_MAX_S,
+            motivo=self.MOTIVO_LEGIVEL.get(motivo_parada or ""),
+        )
+        if n:
+            logger.info("Execução %s: %s mensagem(ns) expiradas (%s)",
+                        execucao.id, n, motivo_parada or "atraso")
+        return n
+
+    def _adiar(self, execucao, r: ResultadoDaFatia, motivo: str,
+               retomada: Optional[datetime]) -> None:
+        """Expira o que já venceu e reagenda SÓ o que sobrou.
+
+        Antes da rodada 2 os caminhos de parada adiavam tudo em bloco: a
+        execução ficava parqueada até amanhã, a tela dizia "Na fila 60" a noite
+        inteira, e a falha só aparecia de manhã. A afiliada precisa ver a falha
+        no minuto em que ela acontece — e "nunca envia atrasado" não pode
+        conviver com um adiamento que ressuscita mensagem de ontem.
+
+        Roteiro que atravessa dias continua funcionando: o passo de daqui a
+        três dias não venceu, não expira, e é ele que define a retomada.
+        """
+        self._expirar_atrasadas(execucao, motivo)
+        proxima = self.repo.proxima_pendente_em(execucao.id)
+        if proxima is None:
+            self._concluir(execucao)
+            r.motivo_parada = motivo
+            logger.info("Execução %s encerrada em %s — nada pendente",
+                        execucao.id, motivo)
+            return
+        execucao.status = EXEC_AGENDADA
+        # `max`: não adianta acordar antes de a janela abrir, nem antes de a
+        # próxima mensagem vencer. O que vier depois manda.
+        execucao.proxima_execucao_em = max(proxima, retomada) if retomada else proxima
+        self.db.commit()
+        r.motivo_parada = motivo
+        logger.info("Execução %s adiada por %s — retoma %s", execucao.id,
+                    motivo, execucao.proxima_execucao_em.isoformat())
+
     def _parquear_para_amanha(self, execucao, config_janela, fim_dia_utc,
                               r: ResultadoDaFatia, motivo: str) -> None:
-        """Teto diário atingido: volta a `agendada` na primeira abertura de
-        janela do PRÓXIMO dia BRT — retomada automática, sem clique."""
+        """Teto diário atingido: expira o que venceu e volta a `agendada` na
+        primeira abertura de janela do PRÓXIMO dia BRT, se ainda houver o que
+        mandar — retomada automática, sem clique."""
         retomada = proxima_abertura(config_janela, fim_dia_utc.astimezone(BRT))
         if retomada is None:
             self._pausar(execucao, r, motivo)
             return
-        execucao.status = EXEC_AGENDADA
-        execucao.proxima_execucao_em = retomada
-        self.db.commit()
-        r.motivo_parada = motivo
-        logger.info("Execução %s no %s — retoma %s", execucao.id, motivo,
-                    retomada.isoformat())
+        self._adiar(execucao, r, motivo, retomada)
 
     def _pausar(self, execucao, r: ResultadoDaFatia, motivo: str) -> None:
+        # Expira ANTES de pausar: execução pausada não recebe mais fatia (o
+        # tick só pega `agendada`), então sem isto as mensagens ficariam
+        # `pendente` para sempre, e a tela diria "Na fila" até alguém retomar.
+        #
+        # É auto-limitado: só morre o que JÁ passou da tolerância. Linha que
+        # venceu há 10 segundos sobrevive e sai se ela religar o número agora.
+        self._expirar_atrasadas(execucao, motivo)
         execucao.status = EXEC_PAUSADA
         self.db.commit()
         r.motivo_parada = motivo
         logger.warning("Execução %s pausada: %s", execucao.id, motivo)
 
     def _concluir(self, execucao) -> None:
-        execucao.status = EXEC_CONCLUIDA
+        """Fecha a execução — `falhou` quando NADA saiu e houve erro.
+
+        `EXEC_FALHOU` existia na constante desde a 060 e nunca era atribuído:
+        o chip "Falhou" da listagem estava no código do frontend sem nenhum
+        caminho no backend que o produzisse. Um roteiro em que tudo deu errado
+        aparecia como "Concluído com falhas", que é outra coisa.
+        """
+        self._atualizar_contadores(execucao)
+        tudo_falhou = execucao.enviados == 0 and (execucao.erros or 0) > 0
+        execucao.status = EXEC_FALHOU if tudo_falhou else EXEC_CONCLUIDA
         execucao.concluido_em = datetime.now(timezone.utc)
         execucao.proxima_execucao_em = None
         self.db.commit()

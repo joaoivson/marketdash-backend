@@ -129,6 +129,25 @@ class EstadoDosGruposOut(BaseModel):
     disponiveis: int
 
 
+class EnviosDaCampanhaOut(BaseModel):
+    """Uma LINHA, não um card.
+
+    Um número solto de mensagens enviadas ao lado de Cliques e Evasão misturaria
+    aquisição com operação, e ela não saberia se é muito ou pouco. Aqui a
+    pergunta é outra: "alguma coisa deixou de sair?".
+
+    Cobre o ponto cego do modelo sem retry: número desconectado uma tarde
+    inteira faz todos os passos daquele período falharem em sequência, e sem
+    isto ela só descobriria abrindo roteiro por roteiro.
+    """
+
+    roteiros_agendados: int
+    mensagens_enviadas: int
+    falhas: int
+    #: Roteiro com falha mais recente — a linha é clicável e leva até ele.
+    roteiro_com_falha_id: Optional[int] = None
+
+
 class VisaoGeralOut(BaseModel):
     """
     KPIs operacionais + ritmo. Sem comissão, lucro ou ROAS — isso é Resultados.
@@ -147,6 +166,7 @@ class VisaoGeralOut(BaseModel):
     participantes: int
     grupos: EstadoDosGruposOut
     serie: List[PontoDaSerieOut]
+    envios: EnviosDaCampanhaOut
 
 
 # --- F7: anúncios × grupos e resultados -------------------------------------

@@ -130,6 +130,26 @@ class Settings(BaseSettings):
     WHATSAPP_TETO_POR_INSTANCIA: int = 80       # msgs/dia por número (3×80=240=teto MAX)
     WHATSAPP_CAMPANHA_TETO_GLOBAL_DIA: int = 5000  # proteção da plataforma
     WHATSAPP_FATIA_ORCAMENTO_S: int = 900       # ~15min por fatia (< task_time_limit 1200)
+    # Atraso máximo antes de o passo desistir (rodada 2). Mensagem de
+    # lançamento fora da hora é pior que mensagem não enviada: passou disto sem
+    # o passo ter COMEÇADO, a linha vira `falhou` com o motivo, e não é
+    # retentada.
+    #
+    # ⚠️ Precisa ser MAIOR que o período do tick do pg_cron, senão a própria
+    # cadência gasta a tolerância e nada sai. O tick é de 1 minuto desde a
+    # migration 088 — foi ela que tornou 3 minutos viável (com o tick de 5 min
+    # da 061, o mínimo utilizável seria ~10).
+    ROTEIRO_ATRASO_MAX_S: int = 180
+    # Teto de upload por tipo de bloco, em MB. Definidos ANTES de o botão
+    # existir na tela: sem limite declarado, o upload trava sem mensagem e ela
+    # não sabe se o arquivo é grande demais ou se o sistema quebrou.
+    #
+    # Os números acompanham os limites práticos do próprio WhatsApp: acima de
+    # ~16 MB ele recusa mídia, e documento ele aceita bem mais.
+    UPLOAD_MB_IMAGEM: int = 5
+    UPLOAD_MB_AUDIO: int = 16
+    UPLOAD_MB_VIDEO: int = 16
+    UPLOAD_MB_ARQUIVO: int = 25
     WHATSAPP_HASH_SALT: Optional[str] = None    # sha256(jid+salt) p/ eventos (F6)
     # --- Proxy por sessão (anti-banimento, plano 27/08). STICKY: um IP fixo por
     # chip enquanto ele estiver saudável. "Dinâmico" é a ALOCAÇÃO (pool no
