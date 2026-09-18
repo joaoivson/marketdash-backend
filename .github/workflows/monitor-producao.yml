@@ -58,6 +58,11 @@ jobs:
     steps:
       - name: Checar API e frontend
         id: probe
+        env:
+          # Chave PUBLICÁVEL (anon) do projeto de produção — a mesma que vai no
+          # bundle do frontend. Não é segredo de verdade; está em secrets só
+          # para não ficar literal aqui e para poder ser rotacionada sem PR.
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY_PROD }}
         run: |
           set +e
           falhas=""
@@ -97,6 +102,53 @@ jobs:
           lento=$(awk -v t="$tempo" 'BEGIN { print (t > 3.0) ? "sim" : "nao" }')
           if [ "$lento" = "sim" ]; then
             falhas="${falhas}- API /health levou **${tempo}s** (normal ~0,12s). Sintoma de CPU saturada/limitada no VPS.\n"
+          fi
+
+          # --- Auth: o que caiu em 17-18/09 foi o LOGIN, e /health não vê ---
+          #
+          # /health diz "database: connected" porque a NOSSA API consegue falar
+          # com o banco. O GoTrue é outro processo, com outro pool: nas duas
+          # quedas ele acumulou 394 `context deadline exceeded` em /token
+          # enquanto a API respondia normalmente. Só um teste do caminho de
+          # login pega isso.
+          #
+          # Uma senha deliberadamente errada serve porque o GoTrue PRECISA
+          # consultar o Postgres para saber que está errada. Auth saudável
+          # devolve 400 em poucos ms; Auth sem conexão com o banco devolve 5xx
+          # ou estoura o tempo. Não é tentativa de acesso: o domínio `.invalid`
+          # é reservado pela RFC 2606 e nunca existe.
+          #
+          # Sem o secret, o passo é pulado em silêncio — a sonda continua
+          # valendo pelo resto.
+          if [ -n "${SUPABASE_ANON_KEY}" ]; then
+            ameta=$(curl -s --max-time 25 -o /tmp/auth.json \
+                      -w '%{http_code} %{time_total}' \
+                      -X POST "https://iprdyorxqdiivthtcvxf.supabase.co/auth/v1/token?grant_type=password" \
+                      -H "apikey: ${SUPABASE_ANON_KEY}" \
+                      -H 'Content-Type: application/json' \
+                      -d '{"email":"sonda-sintetica@marketdash.invalid","password":"sonda"}')
+            acod=$(echo "$ameta" | cut -d' ' -f1)
+            atempo=$(echo "$ameta" | cut -d' ' -f2)
+            echo "auth: http=$acod tempo=${atempo}s"
+            case "$acod" in
+              400|401|403)
+                # Credencial recusada = GoTrue vivo E falando com o banco.
+                # Lentidão aqui é o aviso ANTES do apagão de login.
+                alento=$(awk -v t="$atempo" 'BEGIN { print (t > 3.0) ? "sim" : "nao" }')
+                if [ "$alento" = "sim" ]; then
+                  falhas="${falhas}- **Auth do Supabase** levou **${atempo}s** para recusar uma senha errada (normal < 0,5s). É o sintoma que precedeu as duas quedas de 17-18/09.\n"
+                fi
+                ;;
+              000)
+                falhas="${falhas}- **Auth do Supabase** não respondeu dentro de 25s em \`/auth/v1/token\`. Foi exatamente assim que o login caiu em 17 e 18/09 (\`context deadline exceeded\`).\n"
+                ;;
+              429)
+                echo "::warning::Auth devolveu 429 (rate limit da sonda) — ignorado, não é queda."
+                ;;
+              *)
+                falhas="${falhas}- **Auth do Supabase** devolveu HTTP $acod em \`/auth/v1/token\` (esperado 400 para senha errada). Corpo: \`$(head -c 150 /tmp/auth.json)\`. O GoTrue provavelmente não está conseguindo conexão com o Postgres — foi a causa das quedas de 17-18/09.\n"
+                ;;
+            esac
           fi
 
           # --- CORS: o sintoma que a aluna vê é o preflight sem header ---
