@@ -75,7 +75,27 @@ def _apply_safe_migrations(engine, logger):
         # isto, gravar um clique quebra e ativar grupo com nome comprido
         # estoura `value too long` no meio da transação do toggle.
         "ALTER TABLE campanha_link_eventos ADD COLUMN IF NOT EXISTS resultado VARCHAR(24)",
-        "ALTER TABLE whatsapp_grupos ALTER COLUMN sub_id TYPE VARCHAR(64)",
+        # ÚNICO statement da lista que não é `IF NOT EXISTS`, e por isso o único
+        # que precisa de guarda própria: `ALTER COLUMN ... TYPE` pega ACCESS
+        # EXCLUSIVE na tabela TODA VEZ, mesmo quando o tipo já é o desejado e
+        # nada há a fazer. Com DB_SCHEMA_NO_STARTUP ligado em HML isso passou a
+        # rodar a cada boot. A guarda por information_schema faz o lock só
+        # acontecer quando existe trabalho de verdade — e, de quebra, não
+        # explode quando a tabela ainda não existe.
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'whatsapp_grupos'
+              AND column_name = 'sub_id'
+              AND character_maximum_length IS DISTINCT FROM 64
+          ) THEN
+            EXECUTE 'ALTER TABLE whatsapp_grupos ALTER COLUMN sub_id TYPE VARCHAR(64)';
+          END IF;
+        END $$;
+        """,
     ]
     from sqlalchemy import text
     try:

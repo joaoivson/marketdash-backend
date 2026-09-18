@@ -38,3 +38,28 @@ def test_flag_liga_schema_no_startup_para_dev_e_hml():
         base.init_db()
     create_all.assert_called_once_with(bind=eng)
     ddl.assert_called_once()
+
+
+def test_nenhum_alter_column_type_sem_guarda():
+    """`ALTER COLUMN ... TYPE` pega ACCESS EXCLUSIVE na tabela inteira MESMO
+    quando o tipo já é o desejado — e com DB_SCHEMA_NO_STARTUP ligado em HML a
+    lista roda a cada boot. Todo statement desse tipo precisa vir embrulhado num
+    DO/IF que consulte o information_schema antes.
+
+    Os `ADD COLUMN IF NOT EXISTS` não precisam: o próprio Postgres já sai cedo.
+    """
+    import inspect
+    import re
+
+    fonte = inspect.getsource(base._apply_safe_migrations)
+    # Statements "crus": uma string que começa com ALTER TABLE e contém
+    # ALTER COLUMN ... TYPE, sem estar dentro de um bloco DO.
+    crus = [
+        linha.strip()
+        for linha in fonte.splitlines()
+        if re.search(r'^\s*"ALTER TABLE .*ALTER COLUMN .*\bTYPE\b', linha)
+    ]
+    assert not crus, (
+        "ALTER COLUMN ... TYPE sem guarda de information_schema: "
+        f"{crus}. Pega lock exclusivo a cada boot de HML."
+    )
