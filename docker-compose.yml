@@ -42,6 +42,9 @@ services:
       # Upload de arquivos grandes: grava em disco e envia só o caminho ao Celery
       UPLOAD_TEMP_DIR: /app/uploads
       USE_JOBS_PIPELINE: "true"
+      # Local sobe do ZERO: sem isto o create_all não roda e nenhuma tabela
+      # existe. Em produção a variável NÃO existe (incidente de 18/09/2026).
+      DB_SCHEMA_NO_STARTUP: "true"
       S3_BUCKET: marketDash_bucket
       S3_ENDPOINT: https://rsejwvxealraianensoz.storage.supabase.co/storage/v1/s3
       S3_ACCESS_KEY: b66c95e91947d71dc6c85880b59aafd3
@@ -104,6 +107,9 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
       UPLOAD_TEMP_DIR: /app/uploads
       USE_JOBS_PIPELINE: "true"
+      # Local sobe do ZERO: sem isto o create_all não roda e nenhuma tabela
+      # existe. Em produção a variável NÃO existe (incidente de 18/09/2026).
+      DB_SCHEMA_NO_STARTUP: "true"
       # Pool menor POR PROCESSO porque são 8 processos: 8 × (2+3) = 40 conexões,
       # o mesmo total de antes (4 × 10). O Dockerfile.worker já traz isto no
       # ENV; aqui é preciso porque o compose builda o Dockerfile padrão.
@@ -154,6 +160,9 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-marketdash_local}
       UPLOAD_TEMP_DIR: /app/uploads
       USE_JOBS_PIPELINE: "true"
+      # Local sobe do ZERO: sem isto o create_all não roda e nenhuma tabela
+      # existe. Em produção a variável NÃO existe (incidente de 18/09/2026).
+      DB_SCHEMA_NO_STARTUP: "true"
       DB_POOL_SIZE: "2"
       DB_MAX_OVERFLOW: "3"
       # É SÓ isto que separa este worker do outro.
