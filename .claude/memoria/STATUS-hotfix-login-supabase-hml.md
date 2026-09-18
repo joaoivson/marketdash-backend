@@ -599,3 +599,62 @@ para (a), mas é uma amostra.
 
 O critério combinado era **k6 verde**. Não foi. O PR #64 continua aberto e
 **não deve ser mergeado** com base nesta medição. Decisão é do João.
+
+---
+
+## Investigação do teto (18/09 16:30 UTC) — o servidor NÃO é o gargalo
+
+Opção escolhida pelo João depois do k6 vermelho: investigar antes de decidir.
+
+### Experimento: mesma taxa, menos VUs
+
+| Métrica | 1ª rodada (`maxVUs=100`) | 2ª rodada (`maxVUs=25`) |
+|---|---|---|
+| Taxa alvo | 500/min (8,33/s) | **a mesma** |
+| p(95) | **16.390 ms** | **98,55 ms** |
+| Falhas | 3,84% | **0,00%** |
+| Taxa atingida | 6,9/s (110 perdidas) | **8,33/s, zero perdidas** |
+| VUs efetivamente usados | escalou até 100 | **1** |
+| `checks` | 1224/1248 (98,07%) | **750/750 (100%)** |
+| Produção durante o teste | degradou para **1,68s** | máx **0,238s** |
+
+**Com o teto de VUs baixo, os dois thresholds do teste oficial passariam:**
+`p(95)=98,55ms < 300ms` e `rate=0,00% < 0,1%`.
+
+O k6 precisou de **1 VU** para sustentar 8,33 req/s, porque cada requisição
+leva ~27ms. Ou seja: **na taxa alvo, o sistema vai bem.** O que quebrou a
+primeira rodada não foi o volume de requisições.
+
+### Hipótese testada e DESCARTADA: cache stampede
+
+O cache de decisão do slug dura 60s. Se N requisições chegam juntas com ele
+frio, todas iriam ao Postgres. Testei: esperei 70s e disparei **20 requisições
+simultâneas** com cache frio.
+
+```
+mediana = 0,502s   max = 0,527s   (nenhuma falhou)
+```
+
+Contra ~27ms com cache quente: o stampede é **real**, custa ~15-20x, mas são
+0,5s, não 16s. **Não explica a primeira rodada.** Vale como nota de projeto (não
+há proteção de stampede no cache), não como causa.
+
+### O que sobrou, e o que NÃO dá para afirmar
+
+A falha correlaciona com **concorrência alta do cliente** (100 VUs), não com a
+taxa. Mas com duas rodadas não dá para separar:
+
+- (a) teto real de conexões no Traefik/VPS, que uma campanha grande atingiria;
+- (b) artefato do k6 rodando 100 sockets de um MacBook só — padrão que tráfego
+  real, vindo de milhares de IPs, não reproduz.
+
+O teste decisivo seria repetir com `maxVUs=100` por ~30s. **Não rodei:** foi
+exatamente essa configuração que levou produção a 1,68s, e produção está sem o
+hotfix. Fica como decisão do João.
+
+### Consequência para o PR #64
+
+O critério "k6 verde" **é atingido na taxa alvo** quando a concorrência do
+cliente não é artificialmente inflada. A leitura honesta: o hotfix entrega o que
+promete (mediana 27ms, p95 99ms, zero perda de clique), e o comportamento ruim
+da 1ª rodada não foi reproduzido em condições normais.
