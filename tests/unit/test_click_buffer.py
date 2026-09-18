@@ -258,3 +258,13 @@ def test_tamanho_pendente_reflete_a_fila(redis):
 def test_tamanho_pendente_sem_redis_devolve_zero():
     with patch.object(cb, "get_client", return_value=None):
         assert cb.tamanho_pendente() == 0
+
+
+def test_chaves_do_buffer_sao_por_banco():
+    """hml e produção dividem o mesmo Redis — as chaves não podem colidir,
+    pelo mesmo motivo que a fila do Celery deriva do DATABASE_URL."""
+    from app.core.ambiente import identidade_do_banco
+
+    ident = identidade_do_banco()
+    for chave in (cb.CHAVE_CONTAGEM, cb.CHAVE_EVENTOS, cb.CHAVE_AGENDADO):
+        assert ident in chave, f"{chave} não isola o ambiente"
