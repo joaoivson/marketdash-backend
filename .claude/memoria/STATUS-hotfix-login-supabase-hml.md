@@ -185,3 +185,34 @@ no docstring de `init_db`). A parte do worker não se sustenta no código. Não
 muda o diagnóstico do incidente — o loop de restart era da API, que é quem
 tinha o `HEALTHCHECK` batendo em `/health` —, mas muda a conferência: no plano
 de produção, não há env de schema a auditar no worker.
+
+---
+
+## Documentação atualizada + redeploy não planejado (18/09 15:00 UTC)
+
+Três commits de documentação:
+
+| Commit | Conteúdo | Disparou deploy? |
+|---|---|---|
+| `abef833` | dossiê + CHANGELOG: escopo real da flag, gate de 21h, antes/depois de HML, host do k6 | não (`paths-ignore: '**.md'`) |
+| `237896f` | docstring de `init_db()` e cabeçalho do k6 — **só comentário** | sim (arquivos `.py`/`.js`) |
+| `efea46f` | este quadro | não (`.md`) |
+
+**Erro de execução meu:** eu disse que seguraria o `237896f` para não reiniciar
+HML durante a validação, commitei localmente sem empurrar — e em seguida
+`git push origin develop` levou a branch inteira, com ele no meio. Branch
+empurra todos os commits, não só o último; segurar um commit exige branch
+separada ou `push <sha>:develop`.
+
+Consequência real: HML reiniciou uma vez a mais e o SHA mudou de `cdb5ed0` para
+`efea46f`. Run `35359421923` fechou verde; os 4 critérios seguem valendo:
+
+```json
+{"status":"healthy","version":"efea46fdf27d88519b409732432585b6b6a34279",
+ "database":"connected","redis":"connected","cliques_pendentes":0}
+```
+`/health/live` → **200**
+
+**O SHA a conferir na validação agora é `efea46f`**, não `cdb5ed0`. A diferença
+entre os dois é exclusivamente comentário e docstring — nenhuma mudança de
+comportamento.
