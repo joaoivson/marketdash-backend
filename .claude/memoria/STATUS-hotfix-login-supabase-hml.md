@@ -517,3 +517,85 @@ k6 run -e BASE=https://api.hml.marketdash.com.br -e SLUG=sutia1001205 \
 
 Verde = as duas linhas de `thresholds` com `✓`:
 `http_req_duration p(95)<300` e `http_req_failed rate<0.001`.
+
+---
+
+## k6 em HML: VERMELHO — abortado aos 1m30 de 5min (18/09 16:13 UTC)
+
+`k6 run -e BASE=https://api.hml.marketdash.com.br -e SLUG=sutia1001205`.
+**Abortado por mim**, não por falha do k6: produção começou a degradar.
+
+### Por que abortei
+
+| t | prod `/health` | hml `cliques_pendentes` |
+|---|---|---|
+| 20s | 0,098s | 66 |
+| 40s | 0,123s | 109 |
+| 60s | 0,117s | 37 |
+| **80s** | **1,676s** | 34 |
+
+Linha de base de produção antes da carga: **0,096–0,129s**. Saltou ~14x.
+Matei o k6 e produção voltou a 0,09–0,14s em segundos. Produção está **sem o
+hotfix**, então não havia margem para arriscar.
+
+### Resultado do k6 (parcial, 1m30 de 5min)
+
+```
+✗ p(95)<300      -> p(95)=16.39s
+✗ rate<0.001     -> rate=3.84%
+
+http_req_duration: avg=2.81s  med=27.47ms  p(90)=13.55s  p(95)=16.39s  max=36.73s
+http_reqs: 624 (6.91/s)   dropped_iterations: 110
+checks: 1224/1248 (98,07%)  |  "redireciona (30x)": 600 ✓ / 24 ✗  |  "sem 5xx": 100% ✓
+```
+
+### A leitura que importa: a distribuição é BIMODAL
+
+**Mediana 27,47ms.** A maioria esmagadora das requisições é servida
+instantaneamente — é o buffer de cliques + cache de decisão funcionando
+exatamente como projetado, sem tocar o Postgres.
+
+**p(90) = 13,55s.** Uma minoria espera treze segundos.
+
+Isso não é "aplicação lenta" — aplicação lenta tem mediana ruim. É assinatura de
+**fila/saturação na camada de proxy ou CPU**, com a maioria passando direto e um
+subconjunto entrando numa fila. Casa com o incidente já documentado de
+**CPU a 100% derrubando a rota do Traefik**, e com produção ter degradado junto:
+hml e produção dividem o MESMO VPS.
+
+Note que `sem 5xx` passou 100%: nada retornou erro de servidor. Os 24 checks
+falhos são requisições que não completaram o 30x a tempo, não 500.
+
+### Integridade dos dados: PASSOU, inclusive sob abort
+
+| Medida | Valor |
+|---|---|
+| `click_count` antes | 95.422 |
+| `click_count` depois | **96.023** (+601) |
+| Redirects 30x bem-sucedidos no k6 | 600 |
+| Eventos gravados em 12 min | 607 (= 6 do teste manual + 601) |
+| `cliques_pendentes` após o abort | drenou para **0** |
+
+**Nenhum clique perdido**, mesmo com o processo morto a `SIGTERM` no meio do
+voo e com ~34 eventos em buffer no instante do kill. A promessa de "nada é
+perdido" sobreviveu ao pior caso.
+
+### O que isto NÃO significa
+
+Não condena o hotfix. A mediana de 27ms e a integridade perfeita dizem que o
+que ele se propôs a consertar está consertado. O que apareceu é um **segundo
+teto**, na infraestrutura, que o hotfix não endereça e que já existia — e que
+afetaria o código ATUAL de produção ainda mais, já que lá cada clique também
+escreve no Postgres.
+
+### O que NÃO dá para concluir daqui
+
+Não consigo separar, com uma medição só, entre: (a) saturação de CPU do VPS,
+(b) limite de conexões/TLS do Traefik, (c) limite da minha própria rede local
+com 100 VUs abrindo conexões. A degradação correlata de produção é evidência
+para (a), mas é uma amostra.
+
+### Consequência para a subida de produção
+
+O critério combinado era **k6 verde**. Não foi. O PR #64 continua aberto e
+**não deve ser mergeado** com base nesta medição. Decisão é do João.
