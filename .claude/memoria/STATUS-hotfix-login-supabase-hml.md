@@ -462,3 +462,58 @@ A suíte completa quebra na coleção no meu disco por causa de 7 arquivos
 `* 2.py` (duplicatas do macOS) em `tests/unit/`. **Não são rastreados em
 nenhuma branch** — o CI faz checkout limpo e não os vê. Rodando com
 `--ignore-glob="* 2.py"`, 871 passam.
+
+---
+
+## Buffer de cliques PROVADO fim a fim em HML (18/09 16:08 UTC)
+
+Sem k6, com **6 cliques** em vez de 2500. Link usado: `sutia1001205` (id 54) no
+banco de hml.
+
+| Passo | Medição |
+|---|---|
+| `cliques_pendentes` antes | `1` |
+| 5 cliques com IP/UA únicos | 5× HTTP 302, `location` da Shopee |
+| `cliques_pendentes` logo depois | **`6`** — não foram ao Postgres |
+| Drenagem | **`0` em menos de 5s** — o worker consome |
+| `click_count` no Postgres | 95416 → **95422 = +6 exatos** |
+| Eventos gravados | **6**, com 2 timestamps distintos preservados (16:07:50 e 16:08:04) |
+
+Isso fecha o circuito inteiro: redirect → Redis → worker → Postgres, com
+contabilidade exata (sem perda, sem duplicação) e `created_at` preservado do
+momento do clique, não do flush.
+
+**O item que mais preocupava — "o worker está realmente drenando?" — está
+respondido.** É o que o `/health` sozinho não prova, porque ele testa o Redis
+da API, não o do worker.
+
+### O que o k6 ainda acrescenta
+
+O teste de 6 cliques prova o mecanismo. O k6 prova o **comportamento sob carga
+sustentada**: p95 < 300ms com 500 req/min por 5 min, zero 5xx, e que em volume
+NÃO aparece um `UPDATE custom_links` por clique nos logs do Supabase — só 1 a
+cada ~15s por link.
+
+### ⚠️ Risco do k6 que o plano do dossiê não considera
+
+**hml roda no MESMO VPS que produção** (o próprio `monitor-producao.yml`
+registra isso: "hml roda no MESMO VPS. Se a máquina inteira cair, este aviso não
+sai"). E há precedente documentado de **CPU a 100% derrubar a rota do Traefik**,
+que se manifesta como 404 em produção.
+
+500 req/min = ~8,3 req/s é carga modesta, e o caminho do redirect agora é
+Redis + cache, sem Postgres. Mas não é zero. Recomendação: rodar o k6 em
+horário de baixo uso e **com o `/health` de produção sendo observado em
+paralelo** — se ele passar de ~1s ou mudar de content-type, abortar.
+
+### Para rodar
+
+k6 **não está instalado** nesta máquina (`brew install k6`).
+
+```bash
+k6 run -e BASE=https://api.hml.marketdash.com.br -e SLUG=sutia1001205 \
+  tests/load/k6_redirect_cliques.js
+```
+
+Verde = as duas linhas de `thresholds` com `✓`:
+`http_req_duration p(95)<300` e `http_req_failed rate<0.001`.
