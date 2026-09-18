@@ -154,6 +154,18 @@ def custom_link_og(slug: str, db: Session = Depends(get_db)):
     return HTMLResponse(content=html)
 
 
+@app.get("/health/live")
+def liveness():
+    """Liveness para o HEALTHCHECK do container: só diz se o processo responde.
+
+    Incidente de 18/09/2026: o Coolify usava /health, que consulta o banco.
+    Banco lento → "unhealthy" → restart → startup rodando DDL no banco lento →
+    mais lento ainda. O container não deve ser reiniciado por causa do banco;
+    /health continua existindo para monitoramento e readiness.
+    """
+    return {"status": "alive", "version": settings.APP_VERSION}
+
+
 @app.get("/health")
 def health_check():
     """

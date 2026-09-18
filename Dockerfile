@@ -111,6 +111,6 @@ FROM base AS api
 # aqui serve ao rolling update do Coolify: é o que segura o container novo
 # até ele responder, para o swap não derrubar a API por ~20s.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/health/live || exit 1
 
 CMD ["gunicorn", "app.main:app", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000"]
