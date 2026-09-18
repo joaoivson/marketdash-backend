@@ -11,6 +11,33 @@ changelogs separados.
 > e a raiz tem um symlink apontando para cá. Todos os caminhos antigos continuam
 > funcionando; a diferença é que agora existe backup, histórico e revisão em PR.
 
+## [Não versionado] - 2026-09-18 (Hotfix — login fora do ar pela 2ª vez em 24h)
+
+Branch `hotfix/login-supabase-io-esgotado`. Dossiê completo, logs e plano de
+deploy em `docs/INCIDENTE-2026-09-18-LOGIN-SUPABASE.md`.
+
+**Causa:** campanha grande → milhares de cliques no mesmo link → 1 UPDATE +
+1 INSERT síncronos por clique → disco do Supabase (compute nano) no mínimo →
+GoTrue não consegue conexão com o banco → login cai, e com ele toda a API,
+porque cada requisição validava o token com `auth.get_user()`. O healthcheck
+do container (que consulta o banco) reiniciava a API em loop, e cada boot
+rodava `create_all` + `ALTER TABLE` no banco já sufocado.
+
+- **Cliques em buffer no Redis, gravados em lote pelo worker.** O redirect não
+  escreve mais no Postgres; a decisão (url/erro) fica em cache por 60 s. 62 mil
+  cliques viram 1 UPDATE a cada 15 s. Sem Redis, cai no incremento atômico de 17/09.
+- **JWT verificado localmente** (JWKS ES256 ou `SUPABASE_JWT_SECRET`). `auth.get_user`
+  vira retaguarda. Banco lento não derruba mais quem já está logada.
+- **Startup sem DDL.** `init_db()` só testa a conexão; `create_all` atrás de
+  `DB_SCHEMA_NO_STARTUP`. Colunas do `_apply_safe_migrations` viraram `migrations/087`.
+- **`/health/live`** para o HEALTHCHECK do container (sem banco). `/health` segue
+  para readiness e monitor externo.
+- Infra (fora do código): compute nano → **Micro** em 18/09, grátis no plano Pro.
+
+Novas envs (todas opcionais, com fallback seguro): `SUPABASE_JWT_SECRET`,
+`SUPABASE_JWKS_URL`, `AUTH_VALIDACAO_LOCAL`, `CLIQUES_BUFFER_REDIS`,
+`CLIQUES_FLUSH_INTERVALO_S`, `CLIQUES_CACHE_LINK_S`, `DB_SCHEMA_NO_STARTUP`.
+
 ## [Não versionado] - 2026-09-17 (Promoção seletiva para produção)
 
 Quatro correções que estavam só na `develop` foram para produção **sem levar o
