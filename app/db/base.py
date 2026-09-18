@@ -101,7 +101,7 @@ def init_db():
 
     Incidente de 18/09/2026: este startup rodava `create_all` (dezenas de
     consultas ao catálogo) mais dois `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
-    a CADA boot da API e do worker. Com o healthcheck do Coolify reiniciando o
+    a CADA boot da API. Com o healthcheck do Coolify reiniciando o
     container porque o banco estava lento, foram 20 execuções em 24h — cada
     `ALTER TABLE` pega lock exclusivo na tabela, mesmo sem alterar nada, e
     bloqueava tudo que usava `capture_sites` e `facebook_integrations` num
@@ -115,6 +115,13 @@ def init_db():
     — é o modo de DEV e HML, onde o código costuma chegar antes da migration e
     a rede de proteção do módulo de Grupos ainda é necessária. Em produção a
     variável NÃO existe.
+
+    SÓ A API passa por aqui: esta função é chamada apenas no evento de startup
+    do FastAPI (`app/main.py`). O worker executa
+    `celery -A app.tasks.celery_app worker`, que não importa `app.main`, e
+    nenhum sinal do Celery roda schema — a variável é inócua nos workers, e a
+    linha de log abaixo sai só no log da API. Cuidado com o nome: o "no" é do
+    português (*schema NO startup* = faz o DDL ao subir), não negação.
     """
     from app.db.session import engine
     from app.core.config import settings

@@ -2,7 +2,7 @@
 // com milhares de cliques no MESMO link) e prova que o redirect não escreve no
 // Postgres por clique.
 //
-//   k6 run -e BASE=https://hml-api.marketdash.com.br -e SLUG=<slug-de-teste> tests/load/k6_redirect_cliques.js
+//   k6 run -e BASE=https://api.hml.marketdash.com.br -e SLUG=<slug-de-teste> tests/load/k6_redirect_cliques.js
 //
 // Critérios (ver docs/INCIDENTE-2026-09-18-LOGIN-SUPABASE.md): p95 < 300 ms,
 // zero 5xx, e no Supabase de HML só 1 UPDATE em custom_links a cada ~15 s.
