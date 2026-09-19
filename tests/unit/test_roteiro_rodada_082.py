@@ -117,6 +117,9 @@ class _FakeWaha:
         #: (tipo do bloco, mencionou?) por envio — o "marcar todos" precisa
         #: cair em UM bloco só, e é isto que prova.
         self.mencoes = []
+        #: (tipo, nome do arquivo, mimetype) por envio de mídia — o nome e o
+        #: tipo SÃO o conteúdo que a pessoa no grupo vê num documento.
+        self.metadados = []
         self.renomeados = []
         self.descricoes = []
         self.imagens = []
@@ -135,27 +138,34 @@ class _FakeWaha:
         self.mencoes.append(("texto", bool(mencionar_todos)))
         return {"ok": True}
 
-    def enviar_imagem(self, chat_id, url, legenda="", mencionar_todos=False):
+    def enviar_imagem(self, chat_id, url, legenda="", mimetype=None,
+                      nome_arquivo=None, mencionar_todos=False):
         self._talvez_falhar()
         self.enviadas.append(("imagem", chat_id, url, legenda))
         self.mencoes.append(("imagem", bool(mencionar_todos)))
+        self.metadados.append(("imagem", nome_arquivo, mimetype))
         return {"ok": True}
 
-    def enviar_video(self, chat_id, url, legenda="", mencionar_todos=False):
+    def enviar_video(self, chat_id, url, legenda="", mimetype=None,
+                     nome_arquivo=None, mencionar_todos=False):
         self._talvez_falhar()
         self.enviadas.append(("video", chat_id, url, legenda))
         self.mencoes.append(("video", bool(mencionar_todos)))
+        self.metadados.append(("video", nome_arquivo, mimetype))
         return {"ok": True}
 
-    def enviar_voz(self, chat_id, url):
+    def enviar_voz(self, chat_id, url, mimetype=None, nome_arquivo=None):
         self._talvez_falhar()
         self.enviadas.append(("audio", chat_id, url))
+        self.metadados.append(("audio", nome_arquivo, mimetype))
         return {"ok": True}
 
-    def enviar_arquivo(self, chat_id, url, legenda="", mencionar_todos=False):
+    def enviar_arquivo(self, chat_id, url, legenda="", mimetype=None,
+                       nome_arquivo=None, mencionar_todos=False):
         self._talvez_falhar()
         self.enviadas.append(("arquivo", chat_id, url, legenda))
         self.mencoes.append(("arquivo", bool(mencionar_todos)))
+        self.metadados.append(("arquivo", nome_arquivo, mimetype))
         return {"ok": True}
 
     def renomear_grupo(self, jid, nome):
@@ -1073,3 +1083,52 @@ def test_agendar_nao_avisa_de_teto_quando_cabe(db):
     execucao, avisos = servico.agendar(roteiro)
     assert execucao is not None
     assert not any("teto diário" in a for a in avisos), avisos
+
+
+def test_arquivo_chega_com_o_nome_e_o_tipo_certos(db):
+    """🔴 19/09: o PDF chegou no grupo como "arquivo", sem extensão, e não abria.
+
+    O dispatch não passava `nome_arquivo` nem `mimetype`, então o cliente usava
+    os defaults — `"arquivo"` e `application/octet-stream`. Num documento, o
+    nome e o tipo SÃO o conteúdo que a pessoa vê: sem eles o celular recebe um
+    binário anônimo e não sabe o que fazer com ele.
+
+    O sufixo de 8 hex que o upload acrescenta também sai: ela subiu
+    `sermao-ep1.pdf`, o grupo tem de receber `sermao-ep1.pdf`.
+    """
+    servico = RoteiroService(db)
+    user, roteiro, (grupo,) = _base(db)
+    servico.definir_passos(roteiro, [_passo_in(1, blocos=(
+        ("arquivo", "https://cdn/x/captures/9/sermao-ep1_d972a14a.pdf", "o sermão"),
+        ("imagem",  "https://cdn/x/captures/9/capa_6695ee70.png"),
+        ("video",   "https://cdn/x/captures/9/aula_c1c41a35.mp4"),
+        ("audio",   "https://cdn/x/captures/9/recado_d740bc77.mp3"),
+    ))])
+    execucao, _ = servico.agendar(roteiro)
+    _adiantar(db, execucao)
+
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(execucao.id)
+
+    assert cliente.metadados == [
+        ("arquivo", "sermao-ep1.pdf", "application/pdf"),
+        ("imagem", "capa.png", "image/png"),
+        ("video", "aula.mp4", "video/mp4"),
+        # O áudio vai com o mimetype REAL (mp3), não com "já é opus": é ele que
+        # diz ao WAHA de onde converter. Mentir faria a conversão ser pulada e
+        # o áudio virar anexo — o oposto do que o bloco promete.
+        ("audio", "recado.mp3", "audio/mpeg"),
+    ]
+
+
+def test_url_sem_extensao_nao_derruba_o_envio(db):
+    """Mídia que veio de outra origem (sem extensão na URL) cai no genérico em
+    vez de explodir — o envio continua, só sem o tipo refinado."""
+    from app.services.waha_client import nome_e_tipo
+
+    assert nome_e_tipo("https://cdn/x/sem-extensao") == (
+        "sem-extensao", "application/octet-stream")
+    assert nome_e_tipo("") == ("arquivo", "application/octet-stream")
+    # Nome com espaço e acento, percent-encoded pelo storage.
+    assert nome_e_tipo("https://cdn/x/Rela%C3%A7%C3%A3o%20final_a1b2c3d4.pdf") == (
+        "Relação final.pdf", "application/pdf")

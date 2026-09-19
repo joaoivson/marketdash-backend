@@ -19,6 +19,7 @@ derruba a sessão do outro.
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
 
 import httpx
 
@@ -114,6 +115,61 @@ def mascarar(numero: str) -> str:
 def chat_id_de_numero(numero: str) -> str:
     """E.164 sem '+' → chatId de conversa individual no WAHA."""
     return f"{numero}@c.us"
+
+
+# Extensão → mimetype. Curto de propósito: cobre o que o bloco de mídia aceita
+# e cai no genérico para o resto.
+_MIMETYPES = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "gif": "image/gif", "webp": "image/webp",
+    "mp4": "video/mp4", "mov": "video/quicktime", "webm": "video/webm",
+    "mp3": "audio/mpeg", "ogg": "audio/ogg", "opus": "audio/ogg; codecs=opus",
+    "m4a": "audio/mp4", "wav": "audio/wav", "aac": "audio/aac",
+    "pdf": "application/pdf", "csv": "text/csv", "txt": "text/plain",
+    "zip": "application/zip",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+# Sufixo que o upload acrescenta: `{nome}_{8 hex}.{ext}`. Tirar isso devolve o
+# nome que ela escolheu.
+_SUFIXO_DO_UPLOAD = re.compile(r"_[0-9a-f]{8}$")
+
+
+def nome_e_tipo(url: str, padrao_nome: str = "arquivo",
+                padrao_tipo: str = "application/octet-stream") -> Tuple[str, str]:
+    """`(nome do arquivo, mimetype)` a partir da URL.
+
+    **Isto não é cosmético para o bloco `arquivo`.** O nome e o tipo SÃO o
+    conteúdo que a pessoa no grupo vê: sem eles o WhatsApp entrega um documento
+    chamado "arquivo", sem extensão e com `application/octet-stream`, que o
+    celular não sabe abrir. Foi exatamente o que aconteceu em 19/09 — o PDF
+    chegou como "arquivo" e não abria.
+
+    O sufixo de 8 hex que o upload acrescenta sai do nome: ela subiu
+    `sermao-ep1.pdf`, o grupo precisa receber `sermao-ep1.pdf`, não
+    `sermao-ep1_d972a14a.pdf`.
+    """
+    try:
+        caminho = urlparse(url).path
+    except Exception:
+        caminho = url or ""
+    bruto = unquote((caminho or "").rsplit("/", 1)[-1]).strip()
+    if not bruto:
+        return padrao_nome, padrao_tipo
+
+    base, _, ext = bruto.rpartition(".")
+    if not base:            # sem extensão
+        base, ext = bruto, ""
+    base = _SUFIXO_DO_UPLOAD.sub("", base) or padrao_nome
+    ext = ext.lower()
+
+    nome = f"{base}.{ext}" if ext else base
+    return nome, _MIMETYPES.get(ext, padrao_tipo)
 
 
 def _mencoes(mencionar_todos: bool, destino_grupo: bool) -> Dict[str, Any]:

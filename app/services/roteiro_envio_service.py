@@ -48,7 +48,7 @@ from app.services.janela_envio_service import (
 from app.services.roteiro_service import RoteiroService
 from app.services.template_mensagem_service import montar_texto, sortear_variacao
 from app.services.whatsapp_grupo_service import garantir_atribuicao
-from app.services.waha_client import ErroWhatsapp
+from app.services.waha_client import ErroWhatsapp, nome_e_tipo
 from app.services.whatsapp_instancia_service import cliente_da_sessao
 
 logger = logging.getLogger(__name__)
@@ -272,23 +272,39 @@ class RoteiroEnvioService:
             mencionar = bool(bloco.get("mencionar"))
             if tipo in BLOCOS_DE_MIDIA and not bloco["url"]:
                 raise ErroWhatsapp("acao", f"bloco {i} sem {tipo}")
+            # Nome e mimetype SEMPRE derivados da URL. Os defaults do cliente
+            # ("arquivo", `application/octet-stream`) entregavam no grupo um
+            # documento sem extensão que o celular não abria — medido em
+            # 19/09, com um PDF chegando como "arquivo" e sem conteúdo.
             if tipo == BLOCO_IMAGEM:
+                nome, mime = nome_e_tipo(bloco["url"], "imagem.jpeg", "image/jpeg")
                 cliente.enviar_imagem(grupo.jid, bloco["url"],
                                       legenda=bloco["texto"] or "",
+                                      mimetype=mime, nome_arquivo=nome,
                                       mencionar_todos=mencionar)
             elif tipo == BLOCO_TEXTO:
                 cliente.enviar_texto(grupo.jid, bloco["texto"] or "",
                                      mencionar_todos=mencionar)
             elif tipo == BLOCO_VIDEO:
+                nome, mime = nome_e_tipo(bloco["url"], "video.mp4", "video/mp4")
                 cliente.enviar_video(grupo.jid, bloco["url"],
                                      legenda=bloco["texto"] or "",
+                                     mimetype=mime, nome_arquivo=nome,
                                      mencionar_todos=mencionar)
             elif tipo == BLOCO_AUDIO:
                 # Sem legenda e sem menção: nota de voz não carrega texto.
-                cliente.enviar_voz(grupo.jid, bloco["url"])
+                # O mimetype vai o REAL do arquivo (mp3, m4a, webm…) — é ele
+                # que diz ao WAHA de onde converter; mentir "já é opus" faria a
+                # conversão ser pulada e o áudio virar anexo.
+                nome, mime = nome_e_tipo(bloco["url"], "audio.ogg",
+                                         "audio/ogg; codecs=opus")
+                cliente.enviar_voz(grupo.jid, bloco["url"],
+                                   mimetype=mime, nome_arquivo=nome)
             elif tipo == BLOCO_ARQUIVO:
+                nome, mime = nome_e_tipo(bloco["url"])
                 cliente.enviar_arquivo(grupo.jid, bloco["url"],
                                        legenda=bloco["texto"] or "",
+                                       mimetype=mime, nome_arquivo=nome,
                                        mencionar_todos=mencionar)
             else:
                 # `oferta` continua reservado para quando a fila de ofertas for
