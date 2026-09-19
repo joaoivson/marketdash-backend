@@ -1814,7 +1814,7 @@ preparada no runbook. Migration **088** aplicada em hml. Quadro em
 
 ### O item mais delicado: "nunca envia atrasado" quase quebrou a operação
 
-A tolerância de 3 min aplicada a **cada mensagem** teria falhado lotes normais.
+A tolerância aplicada a **cada mensagem** teria falhado lotes normais.
 As N mensagens de um passo nascem com o MESMO `agendado_para`, e o lote é serial
 por desenho: pausa de 2-5 s entre blocos, fatia com orçamento de 15 min. Um
 passo para 60 grupos leva minutos só para drenar — os últimos 40 falhariam
@@ -1882,3 +1882,37 @@ usuária. O isolamento por `user_id` funcionando.
 Menção real no GOWS, legenda de imagem aceitar menção, `sendVoice` virar bolha
 de áudio, e a chave da descrição no payload do GOWS. Detalhe no STATUS.
 
+## 2026-09-19 — Tolerância de atraso: 3 min → 60 s
+
+Decisão do João: "ao invés de 3 minutos, vamos colocar 1min no máximo".
+`ROTEIRO_ATRASO_MAX_S = 60`. No ar em hml.
+
+### 38 testes quebraram, e isso foi informação
+
+As fixtures do motor colocavam a mensagem a **exatos -60 s** (`_cenario`
+default e `_adiantar`), que virou a **borda** da expiração. Borda não testa
+nada: o tempo que passa entre montar o cenário e rodar a fatia já a atravessa,
+e o resultado depende do relógio. Fixtures foram para `-10 s`; o teste de
+contraste ("atraso dentro da tolerância sai") foi de `-60` para `-30`.
+
+O estrago sendo tão grande é o próprio sintoma de quanto 60 s é apertado — com
+180 s nenhuma fixture encostava na borda.
+
+### O risco que sobra, e é estreito
+
+A tolerância virou do **mesmo tamanho** do tick (1 min, migration 088). A folga
+real depende de onde o horário resolvido do passo cai **dentro do minuto**:
+
+| Tipo de passo | Folga |
+|---|---|
+| hora fixa (`HH:MM`) | ~60 s — o tick vê no mesmo segundo |
+| relativo em minutos / horas | ~60 s — herda o `:00` da âncora |
+| relativo em **segundos** não múltiplo de 60 | **1 a 59 s** ⚠️ |
+
+Só a última aperta: um passo que resolve para `21:24:01` só é visto pelo tick
+das `21:25:00`, com 59 s já gastos. Se aparecer `falhou` com "passou do
+horário" em passo relativo e o número estava conectado, é este caso — o
+contorno é offset em MINUTOS, não em segundos.
+
+`test_a_tolerancia_e_de_um_minuto_exato` trava o número (61 s falha, 45 s sai)
+para ninguém afrouxar o valor "para o teste parar de piscar".

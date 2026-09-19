@@ -33,7 +33,9 @@ Legenda — **Código**: ⬜ não começou · 🔄 em andamento · ✅ escrito c
 
 ## Decisões desta rodada (confirmadas com o João em 18/09)
 
-1. **Tick de 1 min, tolerância de atraso de 3 min.**
+1. **Tick de 1 min, tolerância de atraso de 60 s** (era 3 min; João apertou em
+   19/09). A tolerância passou a ser do MESMO tamanho do tick — ver o risco de
+   offset em segundos em `config.ROTEIRO_ATRASO_MAX_S` e no runbook.
 2. **A trava de atraso vale para todo caminho de adiamento** — janela, teto
    diário e campanha pausada falham em vez de adiar, com o motivo real. Em
    troca, o Agendar ganha 2 avisos prévios.

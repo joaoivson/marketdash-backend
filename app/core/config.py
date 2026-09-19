@@ -135,11 +135,21 @@ class Settings(BaseSettings):
     # o passo ter COMEÇADO, a linha vira `falhou` com o motivo, e não é
     # retentada.
     #
-    # ⚠️ Precisa ser MAIOR que o período do tick do pg_cron, senão a própria
-    # cadência gasta a tolerância e nada sai. O tick é de 1 minuto desde a
-    # migration 088 — foi ela que tornou 3 minutos viável (com o tick de 5 min
-    # da 061, o mínimo utilizável seria ~10).
-    ROTEIRO_ATRASO_MAX_S: int = 180
+    # ⚠️ É do MESMO tamanho do tick do pg_cron (1 minuto, migration 088), e isso
+    # é apertado de propósito — decisão do João em 19/09. A folga real depende
+    # de onde o horário do passo cai dentro do minuto:
+    #
+    #   | Tipo de passo                        | Folga real          |
+    #   |--------------------------------------|---------------------|
+    #   | hora fixa (`HH:MM`)                  | ~60 s (o tick vê na hora) |
+    #   | relativo em minutos / horas          | ~60 s (herda o :00 da âncora) |
+    #   | relativo em SEGUNDOS não múltiplo de 60 | 1 a 59 s ⚠️      |
+    #
+    # A última linha é o único caso arriscado: um passo que resolve para
+    # `21:24:01` só é visto pelo tick das `21:25:00`, já com 59 s gastos na
+    # espera do tick. Se aparecer falha "passou do horário" em passo relativo,
+    # é este caso — e o contorno é usar offset em MINUTOS.
+    ROTEIRO_ATRASO_MAX_S: int = 60
     # Teto de upload por tipo de bloco, em MB. Definidos ANTES de o botão
     # existir na tela: sem limite declarado, o upload trava sem mensagem e ela
     # não sabe se o arquivo é grande demais ou se o sistema quebrou.

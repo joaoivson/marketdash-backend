@@ -445,7 +445,7 @@ da Meta.
     Logo em seguida, **a `088` no mesmo passo** — ela reagenda o tick de roteiros
     para 1 minuto e só funciona depois da `061`, que é quem cria a função
     `trigger_roteiros_tick`. Subir o código da rodada 2 sem a `088` desliga o
-    envio na prática (a tolerância de 3 min não cabe num tick de 5).
+    envio na prática (a tolerância é de 60 s e não cabe num tick de 5 min).
 11. Observar 48h (seção 6)
 
 > **CI verde ≠ deployado** — mas só para app ainda **não** migrada para Docker
@@ -607,14 +607,27 @@ homologação.
 >   exatamente porque produção **não tem** o `roteiros-tick-5min`: sem o guard,
 >   a migration abortaria lá.
 > - **Por que 1 minuto.** A rodada 2 estabelece que roteiro NUNCA envia
->   atrasado: passou de `ROTEIRO_ATRASO_MAX_S` (180 s) sem o passo ter começado,
->   a mensagem vira `falhou`. Com tick de 5 minutos a própria cadência gastaria
->   a tolerância inteira e **nada sairia**. Os dois andam juntos: subir o código
->   da rodada 2 sem a `088` desliga o envio na prática.
+>   atrasado: passou de `ROTEIRO_ATRASO_MAX_S` (**60 s** desde 19/09) sem o
+>   passo ter começado, a mensagem vira `falhou`. A tolerância é do MESMO
+>   tamanho do tick, então com o tick de 5 min da `061` **nada sairia**. Os dois
+>   andam juntos: subir o código da rodada 2 sem a `088` desliga o envio.
 > - O tick continua barato: um UPDATE sobre índice parcial que normalmente
 >   devolve zero linhas. Nada a ver com o sync horário que derrubou o banco
 >   compartilhado em 20/07.
 >
+> ⚠️ **A folga real depende de onde o horário do passo cai dentro do minuto**,
+> porque o tick também é de 1 minuto:
+>
+> | Tipo de passo | Folga real |
+> |---|---|
+> | hora fixa (`HH:MM`) | ~60 s — o tick vê no mesmo segundo |
+> | relativo em minutos / horas | ~60 s — herda o `:00` da âncora |
+> | relativo em **segundos** não múltiplo de 60 | **1 a 59 s** ⚠️ |
+>
+> Só a última linha é arriscada: um passo que resolve para `21:24:01` só é
+> visto pelo tick das `21:25:00`, já com 59 s gastos. Falha "passou do horário"
+> em passo relativo é este caso, e o contorno é usar offset em MINUTOS.
+
 > ⚠️ **E o `roteiros-tick-5min` NÃO EXISTE em produção** (medido em 06/09: hml
 > tem o jobid 102 ativo, produção não tem o job). Sem ele nenhum roteiro
 > dispara em produção, e o sintoma é exatamente "agendei e não saiu". O

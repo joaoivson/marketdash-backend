@@ -28,8 +28,14 @@ motivo, e não tenta de novo. Antes não havia limite nenhum: o motor pegava
 
 A trava mede **o passo ter começado**, não cada mensagem ter saído — as N
 mensagens de um passo nascem com o mesmo horário e o lote é serial por desenho.
-Se o passo começou dentro dos 3 minutos, o lote drena até o fim; metade do
-grupo com a oferta e metade sem é o corte que a regra existe para evitar.
+Se o passo começou dentro do minuto, o lote drena até o fim; metade do grupo
+com a oferta e metade sem é o corte que a regra existe para evitar.
+
+A tolerância é de **60 segundos** — do mesmo tamanho do tick, apertado de
+propósito. Passo de hora fixa e passo relativo em minutos caem em `HH:MM:00` e
+têm o minuto inteiro de folga. Offset em **segundos** não múltiplo de 60 é o
+único caso arriscado: um passo que resolve para `21:24:01` só é visto pelo tick
+das `21:25:00`, já com 59 s gastos na espera. Nesse caso, use offset em minutos.
 
 Janela fechada, teto diário e campanha pausada deixam de adiar em bloco:
 expiram o que venceu **com o motivo real** e reagendam só o que sobrou. Antes a

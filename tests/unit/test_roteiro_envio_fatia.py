@@ -151,7 +151,7 @@ JANELA_24H = {"ativo": True, "dias": {str(i): {"ativo": True,
 
 
 def _cenario(db, n_grupos=3, n_instancias=1, teto_instancia=None,
-             janela_config=JANELA_24H, agendado_delta_s=-60,
+             janela_config=JANELA_24H, agendado_delta_s=-10,
              instancias_pausadas=()):
     """Janela 24h por padrão: o teste roda a qualquer hora do dia — a regra
     de janela tem teste próprio com config explícita."""
@@ -573,9 +573,11 @@ def _cenario_acao(db, acao, parametro=None, sou_admin=True, com_campanha=True):
                                data_ancora=datetime.now(timezone.utc).date(),
                                status=EXEC_ENVIANDO)
     db.add(execucao); db.flush()
+    # `-10 s`: com `ROTEIRO_ATRASO_MAX_S = 60` (19/09), 60 s é a borda exata e a
+    # linha expiraria antes de a ação rodar.
     db.add(RoteiroMensagem(execucao_id=execucao.id, passo_id=passo.id,
                            grupo_id=g.id, user_id=user.id,
-                           agendado_para=datetime.now(timezone.utc) - timedelta(seconds=60)))
+                           agendado_para=datetime.now(timezone.utc) - timedelta(seconds=10)))
     db.commit()
     return user, g, execucao, campanha_id
 
@@ -998,13 +1000,16 @@ def test_passo_que_nao_comecou_alem_da_tolerancia_falha_sem_enviar(db):
 
 
 def test_atraso_dentro_da_tolerancia_sai_normalmente(db):
-    """O contraste do teste acima: 60 s de atraso é a operação normal.
+    """O contraste do teste acima: meio minuto de atraso é operação normal.
 
-    Com tick de 1 minuto, qualquer mensagem passa por aqui antes de vencer a
-    tolerância. Se este teste cair junto com o de cima, a tolerância ficou
-    curta demais e o motor para de enviar.
+    `-30`, não `-60`: com `ROTEIRO_ATRASO_MAX_S = 60` (19/09), 60 s é a BORDA
+    exata, e borda não testa nada — o tempo que passa entre montar o cenário e
+    rodar a fatia já a atravessa, e o teste passaria a falhar por relógio.
+
+    Se ESTE teste cair junto com o de cima, a tolerância ficou curta demais e o
+    motor parou de enviar.
     """
-    user, _, grupos, execucao = _cenario(db, n_grupos=2, agendado_delta_s=-60)
+    user, _, grupos, execucao = _cenario(db, n_grupos=2, agendado_delta_s=-30)
 
     cliente = _FakeWaha()
     _servico(db, cliente).processar_fatia(execucao.id)
@@ -1102,3 +1107,37 @@ def test_execucao_com_enviados_e_falhas_fica_concluida_nao_falhou(db):
     db.expire_all()
     assert execucao.enviados == 1 and execucao.erros == 1
     assert execucao.status == EXEC_CONCLUIDA
+
+
+def test_a_tolerancia_e_de_um_minuto_exato(db):
+    """Trava o número, não só o comportamento.
+
+    A tolerância é decisão de produto (João, 19/09), não detalhe de
+    implementação: 61 s de atraso é falha, 45 s ainda sai. Se alguém afrouxar o
+    valor "para os testes pararem de piscar", este teste é quem avisa.
+
+    ⚠️ O tick do pg_cron também é de 1 minuto (migration 088), então a folga
+    REAL depende de onde o horário do passo cai dentro do minuto. Passo de hora
+    fixa (`HH:MM`) e relativo em minutos caem em `:00` e têm os 60 s inteiros;
+    offset em SEGUNDOS não múltiplo de 60 pode gastar até 59 s só esperando o
+    tick. Ver o comentário em `config.ROTEIRO_ATRASO_MAX_S`.
+    """
+    assert settings.ROTEIRO_ATRASO_MAX_S == 60
+
+    # 61 s: passou.
+    _, _, _, expirada = _cenario(db, n_grupos=1, agendado_delta_s=-61)
+    cliente = _FakeWaha()
+    _servico(db, cliente).processar_fatia(expirada.id)
+    db.expire_all()
+    linha = (db.query(RoteiroMensagem)
+             .filter(RoteiroMensagem.execucao_id == expirada.id).one())
+    assert linha.status == MSG_FALHOU
+    assert linha.erro_motivo == "passou do horário"
+    assert cliente.enviadas == []
+
+    # 45 s: ainda dentro.
+    _, _, grupos, viva = _cenario(db, n_grupos=1, agendado_delta_s=-45)
+    cliente2 = _FakeWaha()
+    _servico(db, cliente2).processar_fatia(viva.id)
+    db.expire_all()
+    assert [c for c, _ in cliente2.enviadas] == [grupos[0].jid]

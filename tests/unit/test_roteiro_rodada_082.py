@@ -623,11 +623,16 @@ def test_offset_em_horas_e_segundos_vai_e_volta_na_unidade_digitada(db):
 
 def _adiantar(db, execucao):
     """Traz a execução para AGORA e a coloca em `enviando` — os testes de motor
-    não esperam o tick de 5 minutos."""
+    não esperam o tick.
+
+    `-10 s`, não `-60`: desde 19/09 a tolerância de atraso é de 60 s, então 60
+    é a própria borda e a mensagem expiraria antes de sair. Dez segundos deixam
+    a fatia rodar com folga sem deixar de ser "já venceu".
+    """
     db.query(RoteiroMensagem).filter(
         RoteiroMensagem.execucao_id == execucao.id,
         RoteiroMensagem.status == MSG_PENDENTE,
-    ).update({"agendado_para": datetime.now(timezone.utc) - timedelta(seconds=60)},
+    ).update({"agendado_para": datetime.now(timezone.utc) - timedelta(seconds=10)},
              synchronize_session=False)
     e = db.query(RoteiroExecucao).get(execucao.id)
     e.status = EXEC_ENVIANDO

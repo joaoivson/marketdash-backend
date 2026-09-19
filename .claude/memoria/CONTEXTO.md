@@ -136,13 +136,19 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
 
   ⚠️ **A 088 e a 061 andam juntas em produção.** A 088 só reagenda; quem cria
   `trigger_roteiros_tick` é a 061, que **nunca rodou lá**. E o código da rodada
-  2 sem a 088 **desliga o envio na prática**: a tolerância de atraso é de 3
-  minutos (`ROTEIRO_ATRASO_MAX_S`) e não cabe num tick de 5.
+  2 sem a 088 **desliga o envio na prática**: a tolerância de atraso é de **60
+  segundos** (`ROTEIRO_ATRASO_MAX_S`, decisão do João em 19/09) — do mesmo
+  tamanho do tick, e não cabe num tick de 5 minutos.
 
-  **O motor mudou de contrato:** roteiro NUNCA envia atrasado. Passou de 3 min
+  **O motor mudou de contrato:** roteiro NUNCA envia atrasado. Passou de 60 s
   sem o passo ter COMEÇADO, a mensagem vira `falhou` — e janela fechada, teto
   diário e campanha pausada deixam de adiar. A trava mede o **passo**, não cada
   mensagem: lote que começou no horário drena até o fim.
+
+  ⚠️ **A folga real varia dentro do minuto.** Hora fixa e offset em minutos
+  caem em `HH:MM:00` e têm os 60 s inteiros. **Offset em SEGUNDOS não múltiplo
+  de 60** pode gastar até 59 s só esperando o tick — é o único caso em que a
+  tolerância aperta de verdade, e o contorno é usar minutos.
 
   **Dívida da rodada 1 quitada:** `marcar_todos` agora vira `mentions: ["all"]`
   (palavra-chave do WAHA, suportada no GOWS, **escondida do OpenAPI**), e os
