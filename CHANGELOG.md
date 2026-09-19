@@ -110,13 +110,22 @@ com cadeado) — e roteiro encerrado sai desse jogo por completo.
 - Passo já enviado agora aparece **travado de verdade** (sem setas e sem ✕) —
   a trava olhava só a execução ativa, e roteiro concluído não tem nenhuma.
 
-### Pendente de número conectado em hml
+### Provado contra o WhatsApp real (19/09)
 
-Quatro coisas estão provadas por teste unitário e **não** contra o WAHA real,
-porque não há número pareado em homologação: a menção chegar como menção no
-GOWS, a legenda de imagem aceitar menção, `sendVoice` com `convert:true` virar
-bolha de áudio (e não arquivo anexado), e qual chave o GOWS usa para a descrição
-do grupo.
+Com o número pareado em homologação, dois roteiros num grupo de teste de 3
+participantes fecharam o que faltava:
+
+- **O MP3 chegou como nota de voz**, com a onda sonora — `convert: true` faz a
+  conversão para OGG/Opus do lado do WAHA. Confirma que **não precisamos de
+  ffmpeg na nossa imagem**.
+- **`mentions: ["all"]` vira menção de verdade no GOWS**, e em UM bloco só: o
+  bloco de texto marcou os 3 e a legenda da imagem seguinte não marcou ninguém.
+- **Legenda de imagem também serve de âncora** — num passo que abre com imagem,
+  a menção foi pela legenda. Responde o ❓ do documento: o toggle continua
+  valendo para qualquer bloco com texto, sem precisar restringir a texto puro.
+- **A descrição do grupo veio no sync**, com o texto real de 6 grupos.
+- **Ritmo medido**: o tick pegou a execução 32 ms depois do minuto agendado e os
+  5 blocos drenaram em 22 s — bem dentro da tolerância de 60 s.
 
 ## [Não versionado] - 2026-09-18 (Hotfix — login fora do ar pela 2ª vez em 24h)
 

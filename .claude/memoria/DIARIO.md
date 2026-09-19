@@ -1916,3 +1916,73 @@ contorno é offset em MINUTOS, não em segundos.
 
 `test_a_tolerancia_e_de_um_minuto_exato` trava o número (61 s falha, 45 s sai)
 para ninguém afrouxar o valor "para o teste parar de piscar".
+
+## 2026-09-19b — O teste contra o WhatsApp real fechou as 4 pendências
+
+João pareou um número em hml na conta do Luiz Fernando (user 9) e pediu o teste.
+Dois roteiros no grupo **"Teste"** (3 participantes) da campanha 16.
+
+⚠️ **Escolha do alvo importou:** a mesma conta tem 4 grupos "Promos da Beatriz"
+com **800+ participantes reais** cada. O passo foi `grupos_alvo="selecao"` com
+um id só. Num teste de disparo em massa, errar o grupo não é um bug — é uma
+mensagem na vida de 800 pessoas.
+
+### O item C se respondeu sozinho, sem teste
+
+Antes de mandar qualquer coisa, a consulta de reconhecimento mostrou
+`whatsapp_grupos.descricao` **já preenchida** com os textos reais de 6 dos 7
+grupos. O sync rodou depois do deploy e `_descricao_do_payload` leu a chave
+certa do GOWS — a pendência mais arriscada morreu numa query de leitura.
+
+O grupo "Teste" veio com `descricao = ""`, não `None`. A distinção que o código
+faz de propósito (vazio = ela apagou; `None` = não veio) apareceu em dado real
+logo no primeiro contato.
+
+### Como o teste foi montado, e por quê
+
+`WAHA_URL` é hostname interno do Coolify: **o container local não alcança**.
+Então o envio tinha de sair de hml. Em vez de forjar SQL, criei o roteiro com o
+**service real** (`definir_passos` + `agendar`) apontando para o banco de hml —
+materialização, checagem de admin e horário resolvido passaram pelo código de
+produção — e deixei o **tick de 1 minuto de hml** fazer o envio.
+
+Mídia subiu pelo `_subir` do endpoint novo (`/uploads/midia`), com a service
+key: png, **mp3** (de propósito, não ogg), mp4 e pdf. As 4 URLs voltaram
+públicas com o mimetype certo, que é o que o WAHA precisa para baixar.
+
+⚠️ O bucket `capturas` falhou nos 4 e caiu no `images` — o laço de buckets do
+upload existe justamente por isso, e funcionou.
+
+### O que a medição deu
+
+| Fato | Valor |
+|---|---|
+| tick pegou a execução | **32 ms** depois do minuto agendado |
+| 5 blocos drenaram em | **22 s** (com as pausas de 2-5 s entre blocos) |
+| folga na tolerância de 60 s | ~38 s |
+
+Os 32 ms confirmam o que o `config.py` afirma: passo de **hora fixa** cai em
+`HH:MM:00` e o tick vê no mesmo segundo. O caso arriscado continua sendo só o
+offset em segundos não múltiplo de 60 — não exercitado aqui.
+
+### Os dois olhares que só o João podia dar
+
+O banco diz "enviado"; quem decide o desfecho visual é o WhatsApp, e não existe
+rota nossa que leia de volta do WAHA. Confirmado por ele:
+
+- **MP3 chegou como bolha de voz** → `convert: true` converte no WAHA. Isso
+  ratifica a decisão de **não** pôr ffmpeg na nossa imagem (~100 MB a mais).
+- **Só o bloco 1 marcou os 3** → duas coisas de uma vez: `mentions:["all"]`
+  funciona no GOWS (o campo escondido do OpenAPI é real), e
+  `_marcar_quem_menciona` limita a um bloco — sem isso seriam N notificações
+  pelo mesmo passo.
+
+### O ❓ do documento precisou de um segundo roteiro
+
+O primeiro teste **não** exercitou a legenda: o bloco de texto vinha antes e
+consumia a menção. Roteiro 19 abriu com imagem, sem texto antes, deixando a
+legenda como única âncora — **e a legenda marcou**.
+
+Então o plano B do documento ("se a legenda não aceitar, restringir o toggle a
+bloco de texto") **não é necessário**. A ressalva vinha do Baileys; o GOWS é
+whatsmeow.

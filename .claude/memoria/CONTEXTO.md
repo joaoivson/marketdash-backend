@@ -155,10 +155,13 @@ O `pytest tests/ -v` do `CLAUDE.md` **não funciona** com o venv default.
   blocos `audio`/`video`/`arquivo` saem de verdade — áudio sempre como nota de
   voz, via `sendVoice` com `convert: true`, sem ffmpeg do nosso lado.
 
-  ⚠️ **Falta número conectado em hml** para provar 4 coisas contra o WAHA real:
-  menção chegando como menção, legenda de imagem aceitando menção, `sendVoice`
-  virando bolha de áudio, e a chave da descrição no payload do GOWS. Detalhe em
-  `.claude/memoria/STATUS-roteiros-rodada2.md`.
+  ✅ **Provado contra o WhatsApp real em 19/09** (número pareado por João em
+  hml, grupo de teste de 3 pessoas): MP3 chega como **nota de voz**
+  (`convert:true` converte no WAHA — sem ffmpeg nosso); `mentions:["all"]` vira
+  menção no GOWS e em **um bloco só**; **legenda de imagem também ancora** a
+  menção (responde o ❓ do documento — não precisa restringir a texto puro); e a
+  descrição do grupo veio no sync. Tick pegou em 32 ms, 5 blocos em 22 s.
+  Detalhe em `.claude/memoria/STATUS-roteiros-rodada2.md`.
 
 - **Roteiros: rodada de 06/09 EM HOMOLOGAÇÃO.** Migration **082** aplicada em
   hml (`passo_blocos`, `offset_segundos`/`offset_unidade`,

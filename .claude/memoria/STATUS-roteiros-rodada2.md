@@ -74,3 +74,103 @@ Roteiro **17 "teste (cópia)"** na campanha 12 (conta de teste), em rascunho —
 sobrou da validação do ciclo duplicar → agendar → cancelar. Inofensivo; não
 apaguei porque não existe endpoint de exclusão e não quis rodar DELETE em
 ambiente compartilhado sem necessidade.
+
+---
+
+## Teste contra o WAHA real — 19/09, grupo "Teste" (3 participantes)
+
+Número pareado pelo João na conta de **Luiz Fernando** (user 9). Roteiro **18**
+("Rodada 2 — teste de mídia"), execução **12**, campanha 16, grupo **515**
+(`120363412181024960@g.us`). Um passo, **5 blocos**, `marcar_todos="sempre"`.
+
+⚠️ Alvo escolhido a dedo: os outros grupos dessa conta têm **800+ participantes
+reais** (Promos da Beatriz #1-#4). O passo foi `grupos_alvo="selecao"` com um
+id só.
+
+### Medido
+
+| Fato | Valor |
+|---|---|
+| Tick pegou a execução | `iniciado_em = 14:18:00.032` — **32 ms** depois do minuto agendado |
+| Drenagem dos 5 blocos | `enviado_em = 14:18:21.9` → **22 s** no total |
+| Folga na tolerância de 60 s | sobraram ~38 s |
+| Resultado | execução `concluida`, `enviados=1`, `erros=0`, `pulados=0`, `blocos_enviados=5` |
+
+### O que isso prova
+
+- ✅ **Tick de 1 minuto (088) funciona em hml** — e alinhado ao segundo, que é o
+  caso do passo de hora fixa (`HH:MM:00`).
+- ✅ **A tolerância de 60 s cabe no caminho normal**: 22 s para 5 blocos, com as
+  pausas anti-robô de 2-5 s entre eles.
+- ✅ **Os 5 tipos de bloco despacham sem erro**: `sendText`, `sendImage`,
+  `sendVideo`, `sendVoice` (com `convert: true`) e `sendFile`. Qualquer 4xx/5xx
+  do WAHA teria virado `falhou` — `_classificar_erro_envio` levanta em >= 400.
+- ✅ **O commit por bloco funciona**: `blocos_enviados` foi observado em 4 e
+  depois 5, que é a retomada da rodada 1 continuando de pé.
+- ✅ **`POST /uploads/midia`** subiu os 4 arquivos (png/mp3/mp4/pdf) e as URLs
+  voltaram públicas, com o mimetype certo — é delas que o WAHA baixa.
+
+### ✅ Item C resolvido por dado real, sem precisar de teste
+
+A coluna `whatsapp_grupos.descricao` **veio preenchida** com os textos reais de
+6 dos 7 grupos depois do primeiro sync pós-deploy. Ou seja: `_descricao_do_payload`
+leu a chave certa do payload do GOWS. Era a pendência "qual chave o GOWS usa".
+
+O grupo "Teste" veio com `descricao = ""` (string vazia, não `None`) — e o
+código distingue os dois de propósito: vazio é ela ter apagado a descrição,
+`None` é o campo não ter vindo.
+
+### ✅ Confirmado no olho, pelo João (19/09)
+
+O banco não responde essas duas — o WAHA aceita a chamada, mas quem decide o
+desfecho visual é o WhatsApp, e não existe rota nossa que leia de volta
+(`WAHA_URL` é hostname interno do Coolify).
+
+1. **O áudio chegou como BOLHA DE VOZ**, com a onda sonora. Foi enviado um
+   **MP3** de propósito (62 KB, 22 kHz mono): o `convert: true` converteu para
+   OGG/Opus do lado do WAHA. **Confirma que não precisamos de ffmpeg na nossa
+   imagem** — era a alternativa, e custaria ~100 MB na imagem que o VPS puxa.
+2. **Só o bloco 1 marcou os 3 participantes**; a legenda da imagem não marcou
+   ninguém. Duas coisas de uma vez: `mentions: ["all"]` **funciona no GOWS**
+   (o campo escondido do OpenAPI é real), e `_marcar_quem_menciona` limita a
+   UM bloco — sem isso o grupo levaria N notificações pelo mesmo passo.
+
+### ✅ O ❓ do documento, respondido: legenda de imagem ACEITA menção
+
+> *"Menção em legenda de imagem varia por versão do Baileys. Corrigir primeiro o
+> caso de texto puro; se a legenda não aceitar, restringir o toggle a bloco de
+> texto."*
+
+O primeiro teste **não** exercitou isso: o bloco de texto vinha antes e consumia
+a menção. Roteiro **19** / execução **14** cobriu o caso de verdade — passo que
+**abre com imagem**, sem bloco de texto antes, deixando a legenda como única
+âncora possível.
+
+Resultado: **a legenda marcou os 3 participantes**, e o bloco de texto seguinte
+não marcou ninguém.
+
+**O plano B não é necessário.** O toggle continua valendo para qualquer bloco
+com texto (bloco de texto OU legenda de mídia), como está implementado. E o
+GOWS não é Baileys — a ressalva do documento vinha da engine antiga.
+
+## Resumo: as 4 pendências estão fechadas
+
+| # | Pendência | Como fechou |
+|---|---|---|
+| C | qual chave o GOWS usa para a descrição | **dado real**: 6 grupos vieram com a descrição preenchida no primeiro sync pós-deploy |
+| F | `mentions: ["all"]` vira menção no GOWS | **olho**: bloco 1 marcou os 3; só ele |
+| F❓ | legenda de imagem aceita menção | **olho**: passo que abre com imagem marcou pela legenda |
+| E | `sendVoice` + `convert:true` vira bolha de áudio | **olho**: MP3 chegou como nota de voz com onda sonora |
+| H | a tolerância de 60 s cabe | **medido**: tick em 32 ms, 5 blocos em 22 s |
+
+### Resíduo de teste em hml
+
+| Roteiro | Conta | O que é |
+|---|---|---|
+| 17 "teste (cópia)" | relacionamento@ (user 1), campanha 12 | rascunho, do ciclo duplicar→agendar→cancelar |
+| 18 "Rodada 2 — teste de mídia" | Luiz Fernando (user 9), campanha 16 | concluído, 5 blocos no grupo "Teste" |
+| 19 "Rodada 2 — menção em legenda" | Luiz Fernando (user 9), campanha 16 | concluído, 2 blocos no grupo "Teste" |
+
+Os 18 e 19 ficam de propósito: são o **registro da execução** que comprova o
+teste. Os arquivos de mídia seguem no bucket `images` em
+`captures/9/teste-*`.
