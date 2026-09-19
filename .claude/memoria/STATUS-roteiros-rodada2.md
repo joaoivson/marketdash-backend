@@ -174,3 +174,56 @@ GOWS não é Baileys — a ressalva do documento vinha da engine antiga.
 Os 18 e 19 ficam de propósito: são o **registro da execução** que comprova o
 teste. Os arquivos de mídia seguem no bucket `images` em
 `captures/9/teste-*`.
+
+---
+
+## Dois bugs achados pelo João no teste real (19/09)
+
+### 🔴 O arquivo chegava sem nome e sem tipo
+
+O PDF chegou no grupo como **"arquivo"**, sem extensão, e não abria — no
+Finder, ícone de "?".
+
+**Causa:** o dispatch nunca passava `nome_arquivo` nem `mimetype`, então o
+cliente usava os defaults (`"arquivo"`, `application/octet-stream`). Num
+documento o nome e o tipo **são** o conteúdo que a pessoa vê: sem eles o
+WhatsApp entrega um binário anônimo.
+
+Imagem e vídeo escapavam **por acaso** — os defaults (`image/jpeg`,
+`video/mp4`) batiam com o caso comum, e o WhatsApp sniffa imagem. Iam com o
+nome errado do mesmo jeito.
+
+**Correção:** `nome_e_tipo(url)` em `waha_client.py`, usado pelos quatro tipos
+de mídia. O sufixo de 8 hex do upload sai do nome (`sermao-ep1_d972a14a.pdf`
+→ `sermao-ep1.pdf`).
+
+⚠️ **O áudio vai com o mimetype REAL** (mp3/m4a/webm), não com "já é opus": é
+ele que diz ao WAHA de onde converter. Mentir faria a conversão ser pulada e o
+áudio virar anexo.
+
+### 🔴 O editor de passo engolia o menu
+
+`PassoEditor` e `AjusteDeDatas` eram overlays `fixed inset-0 z-50` — cobriam a
+barra lateral e a navegação do rodapé.
+
+**Não bastava deslocar o overlay:** a sidebar recolhe (`w-72` ↔ `w-20`) e esse
+estado é `useState` LOCAL do `DashboardSidebar`, invisível de fora. Os dois
+passaram a viver **dentro** do layout.
+
+**Três achados de medição no caminho:**
+
+1. **`sticky` não segura nada no celular.** O `DashboardLayout` tem ancestral
+   com `overflow-hidden` e lá quem rola é o documento, não o `main`. Medido: a
+   barra grudada ia para `top: -514` depois de rolar 585 px. No celular a ação
+   principal tem de ser `fixed` — é o padrão que o resto do produto já usa.
+2. **Faixa de configuração só gruda no desktop**: no celular ela mede 386 px,
+   quase metade de uma tela de 844.
+3. **No celular, blocos antes da prévia.** O `order-first` da prévia nasceu
+   quando a configuração era uma pilha de ~400 px; com a faixa compacta ele
+   passou a empurrar para baixo o que ela veio editar.
+
+⚠️ **Armadilha de ferramenta:** o Vite serviu módulo velho por várias medições
+seguidas mesmo com HMR — a prévia "não mudava de ordem" no navegador enquanto o
+arquivo já estava certo. Só `pkill -9 vite` + `rm -rf node_modules/.vite`
+resolveu. **Medição que contradiz o código merece desconfiar do servidor de
+dev antes de reescrever o código.**
